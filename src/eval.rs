@@ -1,13 +1,23 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::{MathError, Result};
 use crate::expr::Expr;
 
 /// A binding of variables and functions used during evaluation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Context {
     pub vars: HashMap<String, f64>,
-    pub funcs: HashMap<String, Func>,
+    pub funcs: Arc<HashMap<String, Func>>,
+}
+
+impl Clone for Context {
+    fn clone(&self) -> Self {
+        Self {
+            vars: self.vars.clone(),
+            funcs: Arc::clone(&self.funcs),
+        }
+    }
 }
 
 /// A built-in or user-defined single- or multi-argument math function.
@@ -26,14 +36,16 @@ impl Context {
     /// Standard math context: constants `pi`, `e`, `tau`, `inf`, and the full
     /// set of elementary functions (`sin`, `cos`, `tan`, `exp`, `log`, ...).
     pub fn standard() -> Self {
-        let mut ctx = Self::new();
-        ctx.vars.insert("pi".into(), std::f64::consts::PI);
-        ctx.vars.insert("e".into(), std::f64::consts::E);
-        ctx.vars.insert("tau".into(), std::f64::consts::TAU);
+        let mut funcs = HashMap::new();
+        funcs.insert("pi".into(), Func::Builtin(|_| Ok(std::f64::consts::PI)));
         for (name, f) in builtins() {
-            ctx.funcs.insert(name.into(), Func::Builtin(f));
+            funcs.insert(name.into(), Func::Builtin(f));
         }
-        ctx
+        let mut vars = HashMap::new();
+        vars.insert("pi".into(), std::f64::consts::PI);
+        vars.insert("e".into(), std::f64::consts::E);
+        vars.insert("tau".into(), std::f64::consts::TAU);
+        Self { vars, funcs: Arc::new(funcs) }
     }
 
     pub fn set<S: Into<String>>(&mut self, name: S, value: f64) {
@@ -46,7 +58,16 @@ impl Context {
     }
 
     pub fn define<S: Into<String>>(&mut self, name: S, expr: Expr, params: Vec<String>) {
-        self.funcs.insert(name.into(), Func::User(expr, params));
+        let mut new_funcs = (*self.funcs).clone();
+        new_funcs.insert(name.into(), Func::User(expr, params));
+        self.funcs = Arc::new(new_funcs);
+    }
+
+    /// Insert a builtin function. Clones the funcs map if shared.
+    pub fn insert_builtin<S: Into<String>>(&mut self, name: S, f: fn(&[f64]) -> Result<f64>) {
+        let mut new_funcs = (*self.funcs).clone();
+        new_funcs.insert(name.into(), Func::Builtin(f));
+        self.funcs = Arc::new(new_funcs);
     }
 }
 
@@ -99,12 +120,12 @@ pub fn eval(expr: &Expr, ctx: &Context) -> Result<f64> {
                             values.len()
                         )));
                     }
-                    // Build a child context that shares funcs but has its own vars
+                    // Build a child context that shares funcs (Rc, cheap) but has its own vars
                     let mut inner_vars = ctx.vars.clone();
                     for (p, v) in params.iter().zip(values.iter()) {
                         inner_vars.insert(p.clone(), *v);
                     }
-                    let inner = Context { vars: inner_vars, funcs: ctx.funcs.clone() };
+                    let inner = Context { vars: inner_vars, funcs: Arc::clone(&ctx.funcs) };
                     eval(body, &inner)
                 }
             }

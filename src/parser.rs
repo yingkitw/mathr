@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::error::{MathError, Result};
 use crate::expr::Expr;
 
@@ -548,25 +550,26 @@ impl<'a> Parser<'a> {
 
 /// Strip Markdown/LaTeX math delimiters from a string.
 /// Handles: `$$...$$`, `$...$`, `\[...\]`, `\(...\)`.
-fn strip_math_delimiters(src: &str) -> String {
+/// Returns a borrowed slice when no delimiters are present (avoids allocation).
+fn strip_math_delimiters(src: &str) -> Cow<'_, str> {
     let trimmed = src.trim();
     // $$...$$ (display math)
     if trimmed.starts_with("$$") && trimmed.ends_with("$$") && trimmed.len() > 4 {
-        return trimmed[2..trimmed.len() - 2].trim().to_string();
+        return Cow::Owned(trimmed[2..trimmed.len() - 2].trim().to_string());
     }
     // \[...\] (display math)
     if trimmed.starts_with("\\[") && trimmed.ends_with("\\]") && trimmed.len() > 4 {
-        return trimmed[2..trimmed.len() - 2].trim().to_string();
+        return Cow::Owned(trimmed[2..trimmed.len() - 2].trim().to_string());
     }
     // \(...\) (inline math)
     if trimmed.starts_with("\\(") && trimmed.ends_with("\\)") && trimmed.len() > 4 {
-        return trimmed[2..trimmed.len() - 2].trim().to_string();
+        return Cow::Owned(trimmed[2..trimmed.len() - 2].trim().to_string());
     }
     // $...$ (inline math) — single $ on each side, not $$
     if trimmed.starts_with('$') && trimmed.ends_with('$') && trimmed.len() > 2 {
-        return trimmed[1..trimmed.len() - 1].trim().to_string();
+        return Cow::Owned(trimmed[1..trimmed.len() - 1].trim().to_string());
     }
-    src.to_string()
+    Cow::Borrowed(src)
 }
 
 fn constant_or_var(name: &str) -> Expr {

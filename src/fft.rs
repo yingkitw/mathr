@@ -82,7 +82,6 @@ pub fn fft_in_place(buf: &mut [Complex<f64>], inverse: bool) {
     debug_assert!(n > 0 && (n & (n - 1)) == 0, "FFT size must be a power of 2");
 
     // ---- 1. Bit-reversal permutation -------------------------------
-    // Each index i is rewritten as reverse_bits(i, log2(n)).
     let bits = n.trailing_zeros() as usize;
     for i in 0..n {
         let j = reverse_bits(i, bits);
@@ -91,23 +90,26 @@ pub fn fft_in_place(buf: &mut [Complex<f64>], inverse: bool) {
         }
     }
 
-    // ---- 2. Cooley–Tukey butterfly -------------------------------
+    // ---- 2. Cooley–Tukey butterfly with precomputed twiddles --------
     let sign = if inverse { 1.0 } else { -1.0 };
     let mut size = 2;
     while size <= n {
         let half = size / 2;
-        // principal nth root of unity for this stage
+        // Precompute twiddle factors for this stage (half factors)
         let theta = sign * 2.0 * std::f64::consts::PI / size as f64;
-        let w_step = Complex::new(theta.cos(), theta.sin());
+        let twiddles: Vec<Complex<f64>> = (0..half)
+            .map(|k| {
+                let angle = theta * k as f64;
+                Complex::new(angle.cos(), angle.sin())
+            })
+            .collect();
         let mut start = 0;
         while start < n {
-            let mut w = Complex::new(1.0, 0.0);
             for k in 0..half {
-                let t = w * buf[start + k + half];
+                let t = twiddles[k] * buf[start + k + half];
                 let u = buf[start + k];
                 buf[start + k] = u + t;
                 buf[start + k + half] = u - t;
-                w = w * w_step;
             }
             start += size;
         }
@@ -115,13 +117,39 @@ pub fn fft_in_place(buf: &mut [Complex<f64>], inverse: bool) {
     }
 }
 
-fn reverse_bits(mut x: usize, bits: usize) -> usize {
-    let mut y = 0usize;
-    for _ in 0..bits {
-        y = (y << 1) | (x & 1);
-        x >>= 1;
-    }
-    y
+/// Reverse the low `bits` bits of `x`.
+fn reverse_bits(x: usize, bits: usize) -> usize {
+    // Byte-level reversal via lookup table, then shift to keep only `bits` bits.
+    const REV_BYTE: [u8; 256] = {
+        let mut table = [0u8; 256];
+        let mut i = 0;
+        while i < 256 {
+            let mut val = i as u8;
+            let mut rev = 0u8;
+            let mut j = 0;
+            while j < 8 {
+                rev = (rev << 1) | (val & 1);
+                val >>= 1;
+                j += 1;
+            }
+            table[i] = rev;
+            i += 1;
+        }
+        table
+    };
+
+    let b0 = REV_BYTE[(x & 0xFF) as usize] as usize;
+    let b1 = REV_BYTE[((x >> 8) & 0xFF) as usize] as usize;
+    let b2 = REV_BYTE[((x >> 16) & 0xFF) as usize] as usize;
+    let b3 = REV_BYTE[((x >> 24) & 0xFF) as usize] as usize;
+    let b4 = REV_BYTE[((x >> 32) & 0xFF) as usize] as usize;
+    let b5 = REV_BYTE[((x >> 40) & 0xFF) as usize] as usize;
+    let b6 = REV_BYTE[((x >> 48) & 0xFF) as usize] as usize;
+    let b7 = REV_BYTE[((x >> 56) & 0xFF) as usize] as usize;
+
+    let reversed = (b0 << 56) | (b1 << 48) | (b2 << 40) | (b3 << 32)
+                 | (b4 << 24) | (b5 << 16) | (b6 << 8)  |  b7;
+    reversed >> (64 - bits)
 }
 
 /// Two-dimensional FFT, useful for image-processing style workloads.

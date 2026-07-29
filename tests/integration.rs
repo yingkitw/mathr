@@ -42,7 +42,7 @@ fn square(args: &[f64]) -> mathr::error::Result<f64> {
 #[test]
 fn parse_eval_with_user_function() {
     let mut ctx = Context::standard();
-    ctx.funcs.insert("square".into(), mathr::eval::Func::Builtin(square));
+    ctx.insert_builtin("square", square);
     let expr = Parser::parse("square(3) + square(4)").unwrap();
     let val = eval(&expr, &ctx).unwrap();
     assert!(close(val, 25.0, 1e-10));
