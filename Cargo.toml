@@ -9,7 +9,7 @@ documentation = "https://docs.rs/mathr"
 homepage = "https://github.com/yingkitw/mathr"
 authors = ["Ying Kit WONG"]
 readme = "README.md"
-keywords = ["math", "fft", "calculus", "symbolic", "numerical", "matrix", "statistics", "number-theory", "ode", "latex"]
+keywords = ["math", "fft", "calculus", "symbolic", "numerical"]
 categories = ["mathematics", "science", "command-line-utilities"]
 
 [lib]
