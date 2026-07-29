@@ -11,6 +11,7 @@
 
 use crate::complex::Complex;
 use crate::error::{MathError, Result};
+use std::f64::consts::PI;
 
 /// Verify that `n` is a power of two. The radix-2 algorithm only accepts
 /// such lengths.
@@ -157,11 +158,93 @@ pub fn next_pow2(n: usize) -> usize {
     if n <= 1 {
         return 1;
     }
-    let mut p = 1;
-    while p < n {
-        p <<= 1;
+    1 << (usize::BITS - (n - 1).leading_zeros())
+}
+
+// --- Window functions -------------------------------------------------------
+
+/// Hamming window coefficients: w[i] = a0 - a1*cos(2πi/(N-1))
+const HAMMING_A0: f64 = 0.54;
+const HAMMING_A1: f64 = 0.46;
+
+/// Blackman window coefficients: w[i] = a0 - a1*cos(2πi/(N-1)) + a2*cos(4πi/(N-1))
+const BLACKMAN_A0: f64 = 0.42;
+const BLACKMAN_A1: f64 = 0.5;
+const BLACKMAN_A2: f64 = 0.08;
+
+/// Apply a window function to a slice of samples. Returns a new Vec.
+pub fn apply_window(samples: &[f64], window: Window) -> Vec<f64> {
+    let n = samples.len();
+    if n <= 1 {
+        return samples.to_vec();
     }
-    p
+    let denom = (n - 1) as f64;
+    match window {
+        Window::Rectangular => samples.to_vec(),
+        Window::Hann => samples
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| x * 0.5 * (1.0 - (2.0 * PI * i as f64 / denom).cos()))
+            .collect(),
+        Window::Hamming => samples
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| x * (HAMMING_A0 - HAMMING_A1 * (2.0 * PI * i as f64 / denom).cos()))
+            .collect(),
+        Window::Blackman => samples
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| {
+                let t = 2.0 * PI * i as f64 / denom;
+                x * (BLACKMAN_A0 - BLACKMAN_A1 * t.cos() + BLACKMAN_A2 * (2.0 * t).cos())
+            })
+            .collect(),
+    }
+}
+
+/// Window function types for spectral analysis.
+#[derive(Debug, Clone, Copy)]
+pub enum Window {
+    Rectangular,
+    Hann,
+    Hamming,
+    Blackman,
+}
+
+// --- Convolution & cross-correlation via FFT --------------------------------
+
+/// Fast convolution of two real signals via FFT. Returns `len = a.len() + b.len() - 1`.
+pub fn convolve(a: &[f64], b: &[f64]) -> Result<Vec<f64>> {
+    if a.is_empty() || b.is_empty() {
+        return Err(MathError::InvalidArgument("convolve: empty input".into()));
+    }
+    let result_len = a.len() + b.len() - 1;
+    let n = next_pow2(result_len);
+
+    let mut fa: Vec<Complex<f64>> = a.iter().map(|&x| Complex::new(x, 0.0)).collect();
+    let mut fb: Vec<Complex<f64>> = b.iter().map(|&x| Complex::new(x, 0.0)).collect();
+    fa.resize(n, Complex::ZERO);
+    fb.resize(n, Complex::ZERO);
+
+    fft_in_place(&mut fa, false);
+    fft_in_place(&mut fb, false);
+
+    for i in 0..n {
+        fa[i] = fa[i] * fb[i];
+    }
+
+    fft_in_place(&mut fa, true);
+    let scale = 1.0 / n as f64;
+    Ok(fa[..result_len].iter().map(|c| c.re * scale).collect())
+}
+
+/// Cross-correlation of two real signals via FFT. Returns `len = a.len() + b.len() - 1`.
+pub fn cross_correlate(a: &[f64], b: &[f64]) -> Result<Vec<f64>> {
+    if a.is_empty() || b.is_empty() {
+        return Err(MathError::InvalidArgument("cross_correlate: empty input".into()));
+    }
+    let b_rev: Vec<f64> = b.iter().rev().copied().collect();
+    convolve(a, &b_rev)
 }
 
 #[cfg(test)]
@@ -260,5 +343,89 @@ mod tests {
         let transformed = fft2(&data).unwrap();
         assert_eq!(transformed.len(), n);
         assert_eq!(transformed[0].len(), n);
+    }
+
+    #[test]
+    fn convolve_impulse() {
+        // Convolving with [1, 0, 0, ...] should return the original signal
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let b = vec![1.0];
+        let c = convolve(&a, &b).unwrap();
+        assert_eq!(c.len(), 4);
+        for i in 0..4 {
+            assert!(close(c[i], a[i], 1e-9));
+        }
+    }
+
+    #[test]
+    fn convolve_known() {
+        // [1, 2, 3] * [1, 1] = [1, 3, 5, 3]
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 1.0];
+        let c = convolve(&a, &b).unwrap();
+        assert_eq!(c.len(), 4);
+        assert!(close(c[0], 1.0, 1e-9));
+        assert!(close(c[1], 3.0, 1e-9));
+        assert!(close(c[2], 5.0, 1e-9));
+        assert!(close(c[3], 3.0, 1e-9));
+    }
+
+    #[test]
+    fn cross_correlate_self() {
+        // Auto-correlation of [1, 2, 3, 4] should peak at the center
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let c = cross_correlate(&a, &a).unwrap();
+        assert_eq!(c.len(), 7);
+        // The peak should be at index 3 (full overlap)
+        let peak_idx = c
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+        assert_eq!(peak_idx, 3);
+        // Peak value = sum of squares = 1+4+9+16 = 30
+        assert!(close(c[3], 30.0, 1e-8));
+    }
+
+    #[test]
+    fn window_hann_endpoints() {
+        let n = 8;
+        let samples = vec![1.0; n];
+        let w = apply_window(&samples, Window::Hann);
+        // Symmetric Hann window: zero at endpoints
+        assert!(close(w[0], 0.0, 1e-10));
+        assert!(close(w[n - 1], 0.0, 1e-10));
+        // Near the center, value should be close to 1 (not exact for even N)
+        assert!(w[n / 2] > 0.9 && w[n / 2] < 1.01);
+    }
+
+    #[test]
+    fn window_hamming_endpoints() {
+        let n = 8;
+        let samples = vec![1.0; n];
+        let w = apply_window(&samples, Window::Hamming);
+        // Symmetric Hamming: endpoints = 0.54 - 0.46*cos(0) = 0.08
+        assert!(close(w[0], 0.08, 1e-10));
+        assert!(close(w[n - 1], 0.08, 1e-10));
+        // Near center, close to 1.0
+        assert!(w[n / 2] > 0.9 && w[n / 2] < 1.01);
+    }
+
+    #[test]
+    fn window_blackman_endpoints() {
+        let n = 8;
+        let samples = vec![1.0; n];
+        let w = apply_window(&samples, Window::Blackman);
+        // Blackman window is zero at endpoints
+        assert!(close(w[0], 0.0, 1e-10));
+        assert!(close(w[n - 1], 0.0, 1e-10));
+    }
+
+    #[test]
+    fn window_rectangular_identity() {
+        let samples = vec![1.0, 2.0, 3.0, 4.0];
+        let w = apply_window(&samples, Window::Rectangular);
+        assert_eq!(w, samples);
     }
 }

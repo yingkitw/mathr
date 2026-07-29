@@ -53,17 +53,17 @@ pub fn run() -> Result<()> {
     let helper = ReplHelper::default();
     let mut rl = Editor::new().map_err(|e| crate::error::MathError::Other(format!("repl: {}", e)))?;
     rl.set_helper(Some(helper));
-    let _ = rl.load_history(".maths_history");
-    println!("maths {} — type `help` for a list of commands.", env!("CARGO_PKG_VERSION"));
+    let _ = rl.load_history(".mathr_history");
+    println!("mathr {} — type `help` for a list of commands.", env!("CARGO_PKG_VERSION"));
 
     let mut ctx = Context::standard();
     let mut stdout = std::io::stdout();
 
     loop {
         let prompt = if ctx.vars.is_empty() {
-            "\nmaths> "
+            "\nmathr> "
         } else {
-            "\nmaths* "
+            "\nmathr* "
         };
         let line = match rl.readline(prompt) {
             Ok(line) => line,
@@ -89,11 +89,21 @@ pub fn run() -> Result<()> {
             Err(e) => eprintln!("error: {}", e),
         }
     }
-    let _ = rl.save_history(".maths_history");
+    let _ = rl.save_history(".mathr_history");
     Ok(())
 }
 
 fn dispatch(line: &str, ctx: &mut Context) -> Result<Option<String>> {
+    dispatch_inner(line, ctx)
+}
+
+/// Dispatch a single input string against a context.
+/// Public so the CLI binary can reuse the same smart-dispatch logic.
+pub fn dispatch_str(line: &str, mut ctx: Context) -> Result<Option<String>> {
+    dispatch_inner(line, &mut ctx)
+}
+
+fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     let line = line.trim();
     if line == "quit" || line == "exit" {
         std::process::exit(0);
@@ -136,6 +146,42 @@ fn dispatch(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("fft ") {
         return do_fft(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("taylor ") {
+        return do_taylor(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("gcd ") {
+        return do_numtheory(rest.trim(), "gcd");
+    }
+    if let Some(rest) = line.strip_prefix("lcm ") {
+        return do_numtheory(rest.trim(), "lcm");
+    }
+    if let Some(rest) = line.strip_prefix("is-prime ") {
+        return do_numtheory(rest.trim(), "is-prime");
+    }
+    if let Some(rest) = line.strip_prefix("factor ") {
+        return do_numtheory(rest.trim(), "factor");
+    }
+    if let Some(rest) = line.strip_prefix("fib ") {
+        return do_numtheory(rest.trim(), "fib");
+    }
+    if let Some(rest) = line.strip_prefix("binom ") {
+        return do_numtheory(rest.trim(), "binom");
+    }
+    if let Some(rest) = line.strip_prefix("fact ") {
+        return do_numtheory(rest.trim(), "fact");
+    }
+    if let Some(rest) = line.strip_prefix("mr-prime ") {
+        return do_numtheory(rest.trim(), "mr-prime");
+    }
+    if let Some(rest) = line.strip_prefix("conv ") {
+        return do_conv(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("stats ") {
+        return do_stats(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("poly-roots ") {
+        return do_poly_roots(rest.trim());
     }
 
     // Default: evaluate the expression and print the value
@@ -180,91 +226,166 @@ fn define_fn(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
 }
 
 fn do_diff(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
-    let mut parts = rest.split_whitespace();
-    let expr_src = parts.next().ok_or_else(|| crate::error::MathError::Eval("`diff` needs an expression".into()))?;
-    let wrt = parts.next().unwrap_or("x");
-    let e = Parser::parse(expr_src)?;
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("`diff` needs an expression".into()));
+    }
+    // Parse from the right: optional var (single alpha), rest is expr
+    let mut wrt = "x".to_string();
+    let mut expr_end = tokens.len();
+    if expr_end > 1 {
+        let candidate = tokens[expr_end - 1];
+        if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+            wrt = candidate.to_string();
+            expr_end -= 1;
+        }
+    }
+    let expr_src = tokens[..expr_end].join(" ");
+    let e = Parser::parse(&expr_src)?;
     // Substitute any user-bound variables so we don't print unwieldy
     // intermediate forms. Variables still appear if no binding exists.
     let bound: Vec<(String, Expr)> = ctx
         .vars
         .iter()
-        .filter(|(k, _)| *k != wrt && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+        .filter(|(k, _)| **k != wrt && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), Expr::num(*v)))
         .collect();
     let mut e = e;
     for (k, v) in &bound {
         e = e.substitute(k, v);
     }
-    let d = differentiate(&e, wrt)?;
+    let d = differentiate(&e, &wrt)?;
     let s = simplify(&d);
     Ok(Some(s.to_string()))
 }
 
 fn do_integrate(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
-    let mut parts = rest.split_whitespace();
-    let expr_src = parts.next().ok_or_else(|| crate::error::MathError::Eval("`int` needs an expression".into()))?;
-    let a: f64 = parts
-        .next()
-        .ok_or_else(|| crate::error::MathError::Eval("`int` needs bounds `a b`".into()))?
-        .parse()
-        .map_err(|_| crate::error::MathError::Eval("could not parse a".into()))?;
-    let b: f64 = parts
-        .next()
-        .ok_or_else(|| crate::error::MathError::Eval("`int` needs bounds `a b`".into()))?
-        .parse()
-        .map_err(|_| crate::error::MathError::Eval("could not parse b".into()))?;
-
-    let e = Parser::parse(expr_src)?;
-    let bound: Vec<(String, Expr)> = ctx
-        .vars
-        .iter()
-        .filter(|(k, _)| !["pi", "e", "tau", "inf"].contains(&k.as_str()))
-        .map(|(k, v)| (k.clone(), Expr::num(*v)))
-        .collect();
-    let mut e = e;
-    for (k, v) in &bound {
-        e = e.substitute(k, v);
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return Err(crate::error::MathError::Eval("`int` needs: <expr> <a> <b>".into()));
     }
-    let ctx2 = ctx.clone();
-    let f = move |x: f64| {
-        let mut cx = ctx2.clone();
-        cx.set("x", x);
-        crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
-    };
-    let v = crate::calculus::integrate_adaptive(f, a, b, 1e-9, 30)?;
-    Ok(Some(format!("∫ = {}", format_value(v))))
+    // The last two tokens are bounds a, b (can be expressions like "pi").
+    // The rest is the expression to integrate.
+    // Try different split points in case the expression has trailing numbers.
+    for split in [2usize, 3, 4] {
+        if tokens.len() <= split {
+            continue;
+        }
+        let b_src = tokens[tokens.len() - 1];
+        let a_src = tokens[tokens.len() - 2];
+        let expr_src = tokens[..tokens.len() - split].join(" ");
+        let e = match Parser::parse(&expr_src) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        // Evaluate bounds (support constants like pi, e)
+        let a_e = match Parser::parse(a_src) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let b_e = match Parser::parse(b_src) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let a = crate::eval::eval(&a_e, ctx)?;
+        let b = crate::eval::eval(&b_e, ctx)?;
+
+        let bound: Vec<(String, Expr)> = ctx
+            .vars
+            .iter()
+            .filter(|(k, _)| !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), Expr::num(*v)))
+            .collect();
+        let mut e = e;
+        for (k, v) in &bound {
+            e = e.substitute(k, v);
+        }
+        let ctx2 = ctx.clone();
+        let f = move |x: f64| {
+            let mut cx = ctx2.clone();
+            cx.set("x", x);
+            crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
+        };
+        let v = crate::calculus::integrate_adaptive(f, a, b, 1e-9, 30)?;
+        return Ok(Some(format!("∫ = {}", format_value(v))));
+    }
+    Err(crate::error::MathError::Eval(format!("could not parse: {}", rest)))
 }
 
 fn do_solve(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
-    let mut parts = rest.split_whitespace();
-    let expr_src = parts.next().ok_or_else(|| crate::error::MathError::Eval("`solve` needs an expression".into()))?;
-    let wrt = parts.next().unwrap_or("x");
-    let guess: f64 = parts
-        .next()
-        .map(|s| s.parse().unwrap_or(0.0))
-        .unwrap_or(0.0);
-    let e = Parser::parse(expr_src)?;
-    let ctx2 = ctx.clone();
-    let f = move |x: f64| {
-        let mut cx = ctx2.clone();
-        cx.set(wrt, x);
-        crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
-    };
-    let (root, fval) = crate::solver::newton_central(f, guess, crate::solver::SolveOptions::default())?;
-    Ok(Some(format!("root ≈ {} (f = {})", format_value(root), format_value(fval))))
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("`solve` needs an expression".into()));
+    }
+    // Try parsing from the right: optional guess (number), optional var (single alpha).
+    // If the expression fails to parse with trailing tokens consumed, retry with fewer consumed.
+    for consume in [2usize, 1, 0] {
+        if tokens.len() <= consume {
+            continue;
+        }
+        let mut guess = 1.0;
+        let mut wrt = "x".to_string();
+        let mut expr_end = tokens.len();
+
+        if consume >= 1 {
+            if let Ok(g) = tokens[expr_end - 1].parse::<f64>() {
+                guess = g;
+                expr_end -= 1;
+            } else {
+                continue;
+            }
+        }
+        if consume >= 2 {
+            let candidate = tokens[expr_end - 1];
+            if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+                wrt = candidate.to_string();
+                expr_end -= 1;
+            } else {
+                continue;
+            }
+        }
+        let expr_src = tokens[..expr_end].join(" ");
+        let e = match Parser::parse(&expr_src) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let ctx2 = ctx.clone();
+        let f = move |x: f64| {
+            let mut cx = ctx2.clone();
+            cx.set(&wrt, x);
+            crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
+        };
+        let (root, fval) = crate::solver::newton_central(f, guess, crate::solver::SolveOptions::default())?;
+        return Ok(Some(format!("root ≈ {} (f = {})", format_value(root), format_value(fval))));
+    }
+    Err(crate::error::MathError::Eval(format!("could not parse: {}", rest)))
 }
 
 fn do_plot(rest: &str, _ctx: &mut Context) -> Result<Option<String>> {
-    let mut parts = rest.split_whitespace();
-    let expr_src = parts.next().ok_or_else(|| crate::error::MathError::Eval("`plot` needs an expression".into()))?;
-    let a: f64 = parts.next().unwrap_or("-6.28".into()).parse().map_err(|_| crate::error::MathError::Eval("could not parse a".into()))?;
-    let b: f64 = parts.next().unwrap_or("6.28".into()).parse().map_err(|_| crate::error::MathError::Eval("could not parse b".into()))?;
-    let file = parts.next().unwrap_or("plot.png");
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("`plot` needs an expression".into()));
+    }
+    // Parse from the right: optional filename, b (number), a (number), rest is expr
+    let mut expr_end = tokens.len();
+    let file = if expr_end > 3 && tokens[expr_end - 1].ends_with(".png") {
+        expr_end -= 1;
+        tokens[expr_end].to_string()
+    } else {
+        "plot.png".to_string()
+    };
+    if expr_end < 3 {
+        return Err(crate::error::MathError::Eval("`plot` needs: <expr> <a> <b> [out.png]".into()));
+    }
+    let b: f64 = tokens[expr_end - 1].parse()
+        .map_err(|_| crate::error::MathError::Eval("could not parse b".into()))?;
+    let a: f64 = tokens[expr_end - 2].parse()
+        .map_err(|_| crate::error::MathError::Eval("could not parse a".into()))?;
+    let expr_src = tokens[..expr_end - 2].join(" ");
 
-    let wrt = guess_var(expr_src);
-    let e = Parser::parse(expr_src)?;
-    crate::plot::plot_function(file, &e, &wrt, a, b, 800, &format!("y = {}", expr_src))?;
+    let wrt = guess_var(&expr_src);
+    let e = Parser::parse(&expr_src)?;
+    crate::plot::plot_function(&file, &e, &wrt, a, b, 800, &format!("y = {}", expr_src))?;
     Ok(Some(format!("wrote {}", file)))
 }
 
@@ -286,6 +407,152 @@ fn do_fft(rest: &str) -> Result<Option<String>> {
         out.push_str(&format!("X[{}] = {:.4}\n", k, m));
     }
     Ok(Some(out))
+}
+
+fn do_taylor(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("`taylor` needs an expression".into()));
+    }
+    // Parse from the right: optional order (int), optional around (float), rest is expr
+    let mut around = 0.0;
+    let mut order = 5usize;
+    let mut expr_end = tokens.len();
+    if expr_end > 1 {
+        if let Ok(o) = tokens[expr_end - 1].parse::<usize>() {
+            order = o;
+            expr_end -= 1;
+        }
+    }
+    if expr_end > 1 {
+        if let Ok(a) = tokens[expr_end - 1].parse::<f64>() {
+            around = a;
+            expr_end -= 1;
+        }
+    }
+    let expr_src = tokens[..expr_end].join(" ");
+    let series = crate::taylor::taylor_series_str(&expr_src, "x", around, order)?;
+    Ok(Some(series.to_string()))
+}
+
+fn do_numtheory(rest: &str, op: &str) -> Result<Option<String>> {
+    use crate::numtheory;
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    match op {
+        "gcd" => {
+            let nums = parse_u64_list(&tokens)?;
+            if nums.len() < 2 { return Err(crate::error::MathError::Eval("gcd needs ≥2 numbers".into())); }
+            let g = nums.iter().copied().reduce(numtheory::gcd).unwrap();
+            Ok(Some(g.to_string()))
+        }
+        "lcm" => {
+            let nums = parse_u64_list(&tokens)?;
+            if nums.len() < 2 { return Err(crate::error::MathError::Eval("lcm needs ≥2 numbers".into())); }
+            let l = nums.iter().copied().reduce(numtheory::lcm).unwrap();
+            Ok(Some(l.to_string()))
+        }
+        "is-prime" => {
+            let n = parse_u64_single(&tokens)?;
+            Ok(Some(numtheory::is_prime(n).to_string()))
+        }
+        "factor" => {
+            let n = parse_u64_single(&tokens)?;
+            let factors = numtheory::prime_factors(n);
+            if factors.is_empty() {
+                Ok(Some("1".into()))
+            } else {
+                let strs: Vec<String> = factors.iter().map(|f| f.to_string()).collect();
+                Ok(Some(strs.join(" * ")))
+            }
+        }
+        "fib" => {
+            let n = parse_u64_single(&tokens)?;
+            Ok(Some(numtheory::fibonacci(n).to_string()))
+        }
+        "binom" => {
+            if tokens.len() < 2 { return Err(crate::error::MathError::Eval("binom needs n k".into())); }
+            let n: u64 = tokens[0].parse().map_err(|_| crate::error::MathError::Eval("bad n".into()))?;
+            let k: u64 = tokens[1].parse().map_err(|_| crate::error::MathError::Eval("bad k".into()))?;
+            let r = numtheory::binomial(n, k)?;
+            Ok(Some(r.to_string()))
+        }
+        "fact" => {
+            let n = parse_u64_single(&tokens)?;
+            let r = numtheory::factorial(n)?;
+            Ok(Some(r.to_string()))
+        }
+        "mr-prime" => {
+            let n = parse_u64_single(&tokens)?;
+            let rounds: usize = tokens.get(1).and_then(|s| s.parse().ok()).unwrap_or(20);
+            Ok(Some(numtheory::is_prime_miller_rabin(n, rounds).to_string()))
+        }
+        _ => Err(crate::error::MathError::Eval(format!("unknown op: {}", op))),
+    }
+}
+
+fn parse_u64_single(tokens: &[&str]) -> Result<u64> {
+    tokens.first()
+        .ok_or_else(|| crate::error::MathError::Eval("missing number".into()))?
+        .parse::<u64>()
+        .map_err(|_| crate::error::MathError::Eval("could not parse as integer".into()))
+}
+
+fn parse_u64_list(tokens: &[&str]) -> Result<Vec<u64>> {
+    tokens.iter()
+        .map(|s| s.parse::<u64>().map_err(|_| crate::error::MathError::Eval(format!("not an integer: {}", s))))
+        .collect()
+}
+
+fn do_conv(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let split_pos = tokens.iter().position(|t| *t == "x" || *t == "X")
+        .ok_or_else(|| crate::error::MathError::Eval("conv needs 'x' separator: conv 1 2 3 x 1 1".into()))?;
+    let a: Vec<f64> = tokens[..split_pos].iter()
+        .map(|s| s.parse::<f64>().map_err(|_| crate::error::MathError::Eval(format!("not a number: {}", s))))
+        .collect::<Result<_>>()?;
+    let b: Vec<f64> = tokens[split_pos + 1..].iter()
+        .map(|s| s.parse::<f64>().map_err(|_| crate::error::MathError::Eval(format!("not a number: {}", s))))
+        .collect::<Result<_>>()?;
+    let c = crate::fft::convolve(&a, &b)?;
+    let strs: Vec<String> = c.iter().map(|v| format!("{:.6}", v)).collect();
+    Ok(Some(strs.join("  ")))
+}
+
+fn do_stats(rest: &str) -> Result<Option<String>> {
+    let nums = parse_f64_list(rest)?;
+    if nums.is_empty() { return Err(crate::error::MathError::Eval("stats needs numbers".into())); }
+    let s = crate::stats::summary(&nums)?;
+    let mut out = format!(
+        "count={}\nmean={}\nmedian={}\nstddev={}\nmin={}\nmax={}\nrange={}",
+        s.count, format_value(s.mean), format_value(s.median),
+        format_value(s.stddev), format_value(s.min), format_value(s.max), format_value(s.range)
+    );
+    if let Ok(v) = crate::stats::variance_sample(&nums) {
+        out.push_str(&format!("\nvar(s)={}", format_value(v)));
+    }
+    if let Ok((q1, q2, q3)) = crate::stats::quartiles(&nums) {
+        out.push_str(&format!("\nQ1={}\nQ2={}\nQ3={}\nIQR={}", format_value(q1), format_value(q2), format_value(q3), format_value(q3 - q1)));
+    }
+    Ok(Some(out))
+}
+
+fn do_poly_roots(rest: &str) -> Result<Option<String>> {
+    let coeffs = parse_f64_list(rest)?;
+    if coeffs.is_empty() { return Err(crate::error::MathError::Eval("poly-roots needs coefficients".into())); }
+    let r = crate::solver::polynomial_roots(&coeffs)?;
+    if r.is_empty() {
+        Ok(Some("(no real roots found)".into()))
+    } else {
+        let lines: Vec<String> = r.iter().map(|(x, fx)| format!("x = {}  (f = {})", format_value(*x), format_value(*fx))).collect();
+        Ok(Some(lines.join("\n")))
+    }
+}
+
+fn parse_f64_list(rest: &str) -> Result<Vec<f64>> {
+    rest.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| t.trim().parse::<f64>().map_err(|_| crate::error::MathError::Eval(format!("not a number: {}", t))))
+        .collect()
 }
 
 fn guess_var(expr: &str) -> String {
@@ -363,7 +630,7 @@ fn format_value(v: f64) -> String {
 
 const HELP: &str = "\
 commands:
-  <expr>              evaluate
+  <expr>              evaluate (e.g. sin(pi/4), gamma(0.5), erf(1.0))
   let x = <expr>      bind a variable
   fn f(x) = <expr>    define a function
   diff <expr> [var]   symbolic derivative
@@ -371,7 +638,20 @@ commands:
   int <expr> a b      numerical integral over [a, b]
   solve <expr> [var] [guess]
   plot <expr> a b [out.png]
+  taylor <expr> [a] [order]
+                      Taylor series around a (default 0, order 5)
   fft <numbers...>    magnitude spectrum of a real signal
+  conv <a...> x <b...>  convolution of two signals
+  stats <numbers...>  descriptive statistics
+  poly-roots <coeffs...>  polynomial roots (highest degree first)
+  gcd <n...>          greatest common divisor
+  lcm <n...>          least common multiple
+  is-prime <n>        primality test
+  factor <n>          prime factorization
+  fib <n>             Fibonacci number
+  binom <n> <k>       binomial coefficient
+  fact <n>            factorial
+  mr-prime <n> [r]    Miller–Rabin primality test
   vars / funcs        show bindings
   clear               reset context
   help                this help
@@ -379,7 +659,8 @@ commands:
 constants: pi, e, tau, inf
 functions: sin, cos, tan, asin, acos, atan, sinh, cosh, tanh,
            exp, ln, log, log2, log10, sqrt, cbrt, abs, floor,
-           ceil, round, sign, min, max, pow, mod, fract
+           ceil, round, sign, min, max, pow, mod, fract,
+           gamma, erf, erfc, sinc
 ";
 
 /// Suppresses an unused warning for the `Cow` import in environments where

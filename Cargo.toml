@@ -1,20 +1,20 @@
 [package]
-name = "maths"
+name = "mathr"
 version = "0.1.0"
 edition = "2021"
 description = "A comprehensive math library and CLI for symbolic and numerical computation, including FFT from scratch, calculus, equation solving, and plotting."
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/maths"
+license = "Apache-2.0"
+repository = "https://github.com/yingkitw/mathr"
 readme = "README.md"
 keywords = ["math", "fft", "calculus", "symbolic", "plotting"]
 categories = ["mathematics", "science", "command-line-utilities"]
 
 [lib]
-name = "maths"
+name = "mathr"
 path = "src/lib.rs"
 
 [[bin]]
-name = "maths"
+name = "mathr"
 path = "src/main.rs"
 
 [dependencies]

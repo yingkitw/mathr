@@ -110,13 +110,21 @@ fn try_eval_const(e: &Expr) -> Option<f64> {
         }
         Pow(a, b) => Some(try_eval_const(a)?.powf(try_eval_const(b)?)),
         Func(name, args) => {
+            let _ = name;
             let vs: Option<Vec<f64>> = args.iter().map(try_eval_const).collect();
-            vs.and_then(|vs| {
-                let ctx = crate::eval::Context::standard();
-                crate::eval::eval(e, &ctx).ok()
+            vs.and_then(|_| {
+                crate::eval::eval(e, standard_ctx()).ok()
             })
         }
     }
+}
+
+use std::sync::OnceLock;
+
+static STANDARD_CTX: OnceLock<crate::eval::Context> = OnceLock::new();
+
+fn standard_ctx() -> &'static crate::eval::Context {
+    STANDARD_CTX.get_or_init(crate::eval::Context::standard)
 }
 
 #[cfg(test)]

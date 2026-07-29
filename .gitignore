@@ -17,7 +17,7 @@
 *.dll
 
 # REPL history
-.maths_history
+.mathr_history
 
 # Plot output
 *.png

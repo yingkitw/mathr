@@ -46,8 +46,7 @@ pub fn bisect<F: Fn(f64) -> f64>(
     }
     let mut mid = 0.5 * (lo + hi);
     for _ in 0..opts.max_iter {
-        let mid_new = 0.5 * (lo + hi);
-        mid = mid_new;
+        mid = 0.5 * (lo + hi);
         let fm = f(mid);
         if fm.abs() < opts.tol || (hi - lo) * 0.5 < opts.tol {
             return Ok((mid, fm));

@@ -99,10 +99,12 @@ pub fn eval(expr: &Expr, ctx: &Context) -> Result<f64> {
                             values.len()
                         )));
                     }
-                    let mut inner = ctx.clone();
+                    // Build a child context that shares funcs but has its own vars
+                    let mut inner_vars = ctx.vars.clone();
                     for (p, v) in params.iter().zip(values.iter()) {
-                        inner.vars.insert(p.clone(), *v);
+                        inner_vars.insert(p.clone(), *v);
                     }
+                    let inner = Context { vars: inner_vars, funcs: ctx.funcs.clone() };
                     eval(body, &inner)
                 }
             }
@@ -169,6 +171,10 @@ fn builtins() -> Vec<(&'static str, fn(&[f64]) -> Result<f64>)> {
             _ => Err(MathError::Eval("mod requires non-zero divisor".into())),
         }),
         ("fract", |a| unary(a, |x| Ok(x.fract()))),
+        ("gamma", |a| unary(a, |x| Ok(crate::special::gamma(x)))),
+        ("erf", |a| unary(a, |x| Ok(crate::special::erf(x)))),
+        ("erfc", |a| unary(a, |x| Ok(crate::special::erfc(x)))),
+        ("sinc", |a| unary(a, |x| Ok(crate::special::sinc(x)))),
     ]
 }
 
