@@ -2,15 +2,15 @@
 //! differentiation, numeric integration, root-finders and plotter.
 //!
 //! Commands available at the prompt:
-//!   <expr>             evaluate
-//!   let x = 2          bind a variable
-//!   fn f(x) = x^2      define a function
-//!   diff <expr> [wrt]  symbolic derivative
-//!   int <expr> a b     numerical integral
-//!   solve <expr> [wrt] [guess]
-//!   simplify <expr>
-//!   plot <expr> a b [out.png]
-//!   vars | funcs | clear | help | quit
+//!   `\<expr\>`             evaluate
+//!   `let x = 2`            bind a variable
+//!   `fn f(x) = x^2`        define a function
+//!   `diff \<expr\> \[wrt\]`  symbolic derivative
+//!   `int \<expr\> a b`     numerical integral
+//!   `solve \<expr\> \[wrt\] \[guess\]`
+//!   `simplify \<expr\>`
+//!   `plot \<expr\> a b \[out.png\]`
+//!   `vars | funcs | clear | help | quit`
 
 use crate::error::Result;
 use crate::eval::{eval, Context, Func};
