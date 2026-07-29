@@ -122,7 +122,7 @@ impl Expr {
             Num(n) => Num(*n),
             Var(v) => Var(v.clone()),
             Neg(e) => Expr::neg(e.canonicalize()),
-            Add(a, b) => {
+            Add(_, _) => {
                 let terms = flatten_add(self);
                 let canonical_terms: Vec<Expr> = terms.iter().map(|t| t.canonicalize()).collect();
                 recombine_add(&canonical_terms)
@@ -132,7 +132,7 @@ impl Expr {
                 let canonical_terms: Vec<Expr> = terms.iter().map(|t| t.canonicalize()).collect();
                 recombine_add(&canonical_terms)
             }
-            Mul(a, b) => {
+            Mul(_, _) => {
                 let factors = flatten_mul(self);
                 let canonical_factors: Vec<Expr> = factors.iter().map(|f| f.canonicalize()).collect();
                 recombine_mul(&canonical_factors)

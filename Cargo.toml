@@ -1,12 +1,15 @@
 [package]
 name = "mathr"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-description = "A comprehensive math library and CLI for symbolic and numerical computation, including FFT from scratch, calculus, equation solving, and plotting."
+description = "Pure-Rust math library & CLI: symbolic differentiation, numerical integration, FFT, equation solving, matrix operations, statistics, number theory, ODE solvers, Taylor series, interpolation, special functions, LaTeX/TeX input, and plotting."
 license = "Apache-2.0"
 repository = "https://github.com/yingkitw/mathr"
+documentation = "https://docs.rs/mathr"
+homepage = "https://github.com/yingkitw/mathr"
+authors = ["Ying Kit WONG"]
 readme = "README.md"
-keywords = ["math", "fft", "calculus", "symbolic", "plotting"]
+keywords = ["math", "fft", "calculus", "symbolic", "numerical", "matrix", "statistics", "number-theory", "ode", "latex"]
 categories = ["mathematics", "science", "command-line-utilities"]
 
 [lib]

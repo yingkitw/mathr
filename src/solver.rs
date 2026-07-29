@@ -44,7 +44,7 @@ pub fn bisect<F: Fn(f64) -> f64>(
             lo, fa, hi, fb
         )));
     }
-    let mut mid = 0.5 * (lo + hi);
+    let mut mid;
     for _ in 0..opts.max_iter {
         mid = 0.5 * (lo + hi);
         let fm = f(mid);

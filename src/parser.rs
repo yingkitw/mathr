@@ -78,10 +78,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn starts_ident(&self) -> bool {
-        matches!(self.peek(), Some(b'a'..=b'z') | Some(b'A'..=b'Z') | Some(b'_'))
-    }
-
     fn read_ident(&mut self) -> String {
         let start = self.pos;
         while let Some(c) = self.peek() {

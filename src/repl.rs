@@ -31,7 +31,7 @@ use std::collections::HashSet;
 struct ReplHelper {
     #[rustyline(Completer)]
     completer: FilenameCompleter,
-    highlighter: MatchingBracketHighlighter,
+    _highlighter: MatchingBracketHighlighter,
     #[rustyline(Validator)]
     validator: MatchingBracketValidator,
     #[rustyline(Hinter)]
@@ -42,7 +42,7 @@ impl Default for ReplHelper {
     fn default() -> Self {
         Self {
             completer: FilenameCompleter::new(),
-            highlighter: MatchingBracketHighlighter::new(),
+            _highlighter: MatchingBracketHighlighter::new(),
             validator: MatchingBracketValidator::new(),
             hinter: HistoryHinter::new(),
         }
