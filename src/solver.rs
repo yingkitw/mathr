@@ -220,6 +220,67 @@ fn polynomial_eval(coeffs: &[f64], x: f64) -> f64 {
     acc
 }
 
+/// Solve a system of `n` nonlinear equations in `n` unknowns using
+/// Newton's method with a finite-difference Jacobian.
+///
+/// `system` is a function that maps the current guess `x ∈ ℝⁿ` to
+/// the residual vector `f(x) ∈ ℝⁿ`. The algorithm iterates
+/// `x ← x − J(x)⁻¹ f(x)` until either `‖f(x)‖ < tol` or `max_iter` is hit.
+///
+/// On non-convergence or singular Jacobian, returns [`MathError::NotConvergent`].
+pub fn newton_system<F: Fn(&[f64]) -> Vec<f64>>(
+    system: F,
+    x0: &[f64],
+    opts: SolveOptions,
+) -> Result<Vec<f64>> {
+    let n = x0.len();
+    if n == 0 {
+        return Err(MathError::InvalidArgument("newton_system: empty initial guess".into()));
+    }
+    let h = if opts.h <= 0.0 { 1e-6 } else { opts.h };
+    let mut x = x0.to_vec();
+    for _ in 0..opts.max_iter {
+        let f0 = system(&x);
+        if f0.len() != n {
+            return Err(MathError::InvalidArgument(format!(
+                "newton_system: system returned {} values, expected {}",
+                f0.len(), n
+            )));
+        }
+        let norm: f64 = f0.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if norm < opts.tol {
+            return Ok(x);
+        }
+        // Build Jacobian by central finite differences.
+        let mut jac = vec![0.0_f64; n * n];
+        for j in 0..n {
+            let mut xp = x.clone();
+            let mut xm = x.clone();
+            xp[j] += h;
+            xm[j] -= h;
+            let fp = system(&xp);
+            let fm = system(&xm);
+            for i in 0..n {
+                jac[i * n + j] = (fp[i] - fm[i]) / (2.0 * h);
+            }
+        }
+        // Solve J · delta = -f0 for delta.
+        let neg_f0: Vec<f64> = f0.iter().map(|v| -v).collect();
+        let m = crate::matrix::Matrix::from_row_major(n, n, jac.clone())
+            .map_err(|e| MathError::InvalidArgument(format!("newton_system: {}", e)))?;
+        let delta = m
+            .solve(&neg_f0)
+            .map_err(|_| MathError::NotConvergent("newton_system: singular Jacobian".into()))?;
+        for i in 0..n {
+            x[i] += delta[i];
+        }
+    }
+    Err(MathError::NotConvergent(format!(
+        "newton_system: failed to converge in {} iterations",
+        opts.max_iter
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +329,47 @@ mod tests {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert!((sorted[0] - 2.0).abs() < 1e-4);
         assert!((sorted[1] - 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn newton_system_linear() {
+        // 2x + y = 5; x + 3y = 7  →  (x, y) = (1.6, 1.8).
+        let system = |x: &[f64]| vec![2.0 * x[0] + x[1] - 5.0, x[0] + 3.0 * x[1] - 7.0];
+        let sol = newton_system(system, &[0.0, 0.0], SolveOptions::default()).unwrap();
+        assert!((sol[0] - 1.6).abs() < 1e-6, "x = {}", sol[0]);
+        assert!((sol[1] - 1.8).abs() < 1e-6, "y = {}", sol[1]);
+    }
+
+    #[test]
+    fn newton_system_nonlinear() {
+        // Intersection of x² + y² = 1 and y = x² − 0.5.
+        let system = |x: &[f64]| {
+            vec![
+                x[0] * x[0] + x[1] * x[1] - 1.0,
+                x[1] - x[0] * x[0] + 0.5,
+            ]
+        };
+        let sol = newton_system(system, &[0.9, 0.3], SolveOptions::default()).unwrap();
+        let r = (sol[0] * sol[0] + sol[1] * sol[1] - 1.0).abs();
+        assert!(r < 1e-6, "residual = {}", r);
+        let s = (sol[1] - sol[0] * sol[0] + 0.5).abs();
+        assert!(s < 1e-6, "residual = {}", s);
+    }
+
+    #[test]
+    fn newton_system_3d() {
+        // 3×3 linear: x + y + z = 6, 2x - y + z = 3, x + 2y - z = 2.
+        // Solution: x = 1, y = 2, z = 3.
+        let system = |v: &[f64]| {
+            vec![
+                v[0] + v[1] + v[2] - 6.0,
+                2.0 * v[0] - v[1] + v[2] - 3.0,
+                v[0] + 2.0 * v[1] - v[2] - 2.0,
+            ]
+        };
+        let sol = newton_system(system, &[0.0, 0.0, 0.0], SolveOptions::default()).unwrap();
+        assert!((sol[0] - 1.0).abs() < 1e-6, "x = {}", sol[0]);
+        assert!((sol[1] - 2.0).abs() < 1e-6, "y = {}", sol[1]);
+        assert!((sol[2] - 3.0).abs() < 1e-6, "z = {}", sol[2]);
     }
 }

@@ -21,18 +21,20 @@
 //! - **Plotting** ([`plot`]): PNG output via [`plotters`], with single-,
 //!   multi- and scatter-plot variants.
 //! - **Matrix operations** ([`matrix`]): arithmetic, determinant, inverse,
-//!   linear system solving, trace.
+//!   linear system solving, trace, LU decomposition with partial pivoting,
+//!   and rank estimation.
 //! - **Statistics** ([`stats`]): mean, median, variance, stddev, quartiles,
 //!   correlation, linear regression.
 //! - **Number theory** ([`numtheory`]): GCD, LCM, primality, factorization,
 //!   binomial coefficients, Fibonacci, sieve, Euler's totient, Miller–Rabin,
-//!   Chinese Remainder Theorem, modular exponentiation.
+//!   Chinese Remainder Theorem, modular exponentiation, Jacobi symbol,
+//!   continued fractions, linear Diophantine solver.
 //! - **ODE solvers** ([`ode`]): Euler, RK4, RK4 systems, adaptive RKF45.
 //! - **Taylor series** ([`taylor`]): symbolic Taylor expansion around a point.
 //! - **Interpolation** ([`interpolate`]): Lagrange, Newton divided-difference,
-//!   linear interpolation.
+//!   linear interpolation, and natural / clamped cubic splines.
 //! - **Special functions** ([`special`]): Gamma, log-Gamma, Beta, erf, erfc,
-//!   sinc, incomplete gamma P.
+//!   sinc, incomplete gamma P, Bessel functions `J_0`, `J_1`, `J_n`.
 //!
 //! The CLI (`mathr "<expr or command>"`) is a thin wrapper around the same
 //! library functions. It accepts plain math expressions, LaTeX/TeX input,
@@ -68,12 +70,24 @@ pub mod prelude {
     pub use crate::expr::Expr;
     pub use crate::parser::Parser;
     pub use crate::simplify::simplify;
-    pub use crate::matrix::Matrix;
-    pub use crate::interpolate::{lagrange_interp, newton_interp, NewtonInterpolator};
-    pub use crate::numtheory::{binomial, chinese_remainder, factorial, fibonacci, gcd, is_prime, is_prime_miller_rabin, lcm, mod_pow, prime_factors, sieve_primes};
+    pub use crate::matrix::{Cholesky, EigenPair, Lu, Matrix, PowerIterOptions, Svd};
+    pub use crate::interpolate::{
+        chebyshev_coefficients, chebyshev_eval, chebyshev_nodes, chebyshev_rescale, chebyshev_t,
+        gauss_legendre, lagrange_interp, legendre_associated, legendre_p, lerp, newton_interp,
+        CubicSpline, NewtonInterpolator,
+    };
+    pub use crate::numtheory::{
+        binomial, chinese_remainder, continued_fraction, continued_fraction_value, diophantine,
+        discrete_log, euler_totient, extended_gcd, factorial, fibonacci, gcd, is_prime,
+        is_prime_miller_rabin, jacobi_symbol, lcm, mod_inverse, mod_pow, prime_factors,
+        sieve_primes,
+    };
     pub use crate::ode::{euler, rk4, rk4_system, rkf45};
-    pub use crate::solver::{bisect, newton_central, polynomial_roots, secant, SolveOptions};
-    pub use crate::special::{beta, erfc, erf, gamma, log_gamma, sinc};
+    pub use crate::solver::{
+        bisect, newton_central, newton_system, polynomial_roots, secant, SolveOptions,
+    };
+    pub use crate::special::{bessel_j0, bessel_j1, bessel_jn, beta, erfc, erf, gamma, log_gamma, sinc};
+    pub use crate::symbolic::integrate;
     pub use crate::stats::{correlation, linear_regression, mean, median, stddev, variance, Summary};
     pub use crate::symbolic::differentiate;
     pub use crate::taylor::taylor_series;

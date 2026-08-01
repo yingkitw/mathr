@@ -1,8 +1,8 @@
 [package]
 name = "mathr"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
-description = "Pure-Rust math library & CLI: symbolic differentiation, numerical integration, FFT, equation solving, matrix operations, statistics, number theory, ODE solvers, Taylor series, interpolation, special functions, LaTeX/TeX input, and plotting."
+description = "Pure-Rust math library & CLI: symbolic differentiation and integration, numerical integration, FFT, equation solving (1D + systems), matrix operations (LU, Cholesky, SVD, eigensolvers), statistics, number theory (gcd, primality, Jacobi, Diophantine, discrete log), ODE solvers, Taylor series, interpolation (spline, Chebyshev, Legendre, Gauss–Legendre), special functions (Bessel, Gamma, erf), LaTeX/TeX input, and plotting."
 license = "Apache-2.0"
 repository = "https://github.com/yingkitw/mathr"
 documentation = "https://docs.rs/mathr"

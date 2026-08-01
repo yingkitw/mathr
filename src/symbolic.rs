@@ -154,6 +154,180 @@ fn derivative_of_builtin(name: &str, arg: &Expr) -> Result<Expr> {
     })
 }
 
+/// Symbolic indefinite integration for the common elementary rules.
+///
+/// Handles:
+/// - constants: ∫ c dx = c·x
+/// - variable: ∫ x dx = x²/2
+/// - powers: ∫ x^n dx = x^(n+1)/(n+1) for `n ≠ -1`, otherwise `ln(x)`
+/// - sums / differences: linearity
+/// - constant multiples: ∫ c·f dx = c·∫f dx
+/// - exponentials: ∫ e^x dx = e^x,  ∫ a^x dx = a^x / ln(a)
+/// - trig: ∫ sin(x) dx = −cos(x),  ∫ cos(x) dx = sin(x),  ∫ sec²(x) dx = tan(x)
+/// - inverses: ∫ 1/x dx = ln(x),  ∫ 1/(1+x²) dx = atan(x),  ∫ 1/√(1−x²) dx = asin(x)
+///
+/// Returns `Err` for unsupported integrands (e.g., products of non-constants).
+pub fn integrate(expr: &Expr, var: &str) -> Result<Expr> {
+    Ok(simplify(&int_step(expr, var)?))
+}
+
+fn int_step(expr: &Expr, var: &str) -> Result<Expr> {
+    match expr {
+        Expr::Num(n) => Ok(Expr::mul(Expr::num(*n), Expr::var(var))),
+        Expr::Var(v) if v == var => Ok(Expr::div(Expr::pow(Expr::var(var), Expr::num(2.0)), Expr::num(2.0))),
+        Expr::Var(_) => Ok(Expr::mul(expr.clone(), Expr::var(var))),
+        Expr::Neg(e) => Ok(Expr::neg(int_step(e, var)?)),
+        Expr::Add(a, b) => Ok(Expr::add(int_step(a, var)?, int_step(b, var)?)),
+        Expr::Sub(a, b) => Ok(Expr::sub(int_step(a, var)?, int_step(b, var)?)),
+        Expr::Mul(a, b) => {
+            if a.is_constant() {
+                Ok(Expr::mul((**a).clone(), int_step(b, var)?))
+            } else if b.is_constant() {
+                Ok(Expr::mul(int_step(a, var)?, (**b).clone()))
+            } else {
+                Err(MathError::Eval(format!(
+                    "integrate: cannot integrate non-linear product: {}",
+                    expr
+                )))
+            }
+        }
+        Expr::Div(a, b) => {
+            if b.is_constant() {
+                Ok(Expr::mul(Expr::div(Expr::num(1.0), (**b).clone()), int_step(a, var)?))
+            } else if a.is_constant() {
+                integrate_constant_over(a, b, var)
+            } else {
+                Err(MathError::Eval(format!(
+                    "integrate: cannot integrate non-constant numerator over non-constant denominator: {}",
+                    expr
+                )))
+            }
+        }
+        Expr::Pow(base, exp) => match (base.as_ref(), exp.as_ref()) {
+            (Expr::Var(v), Expr::Num(n)) if v == var && *n == -1.0 => {
+                Ok(Expr::func("ln", vec![Expr::var(var)]))
+            }
+            (Expr::Var(v), Expr::Num(n)) if v == var => {
+                let np1 = *n + 1.0;
+                Ok(Expr::div(
+                    Expr::pow(Expr::var(var), Expr::num(np1)),
+                    Expr::num(np1),
+                ))
+            }
+            (Expr::Num(_), _) | (_, _) if (**base).is_constant() => {
+                Ok(Expr::div(
+                    expr.clone(),
+                    Expr::func("ln", vec![(**base).clone()]),
+                ))
+            }
+            _ => Err(MathError::Eval(format!(
+                "integrate: cannot integrate power: {}",
+                expr
+            ))),
+        },
+        Expr::Func(name, args) if args.len() == 1 => {
+            let inner = &args[0];
+            let inner_is_var = matches!(inner, Expr::Var(v) if v == var);
+            match (name.as_str(), inner_is_var) {
+                ("exp", true) => Ok(Expr::func("exp", vec![Expr::var(var)])),
+                ("sin", true) => Ok(Expr::neg(Expr::func("cos", vec![Expr::var(var)]))),
+                ("cos", true) => Ok(Expr::func("sin", vec![Expr::var(var)])),
+                ("sec", true) => Ok(Expr::func("ln", vec![Expr::add(
+                    Expr::func("sec", vec![Expr::var(var)]),
+                    Expr::func("tan", vec![Expr::var(var)]),
+                )])),
+                ("tan", true) => Ok(Expr::neg(Expr::func("ln", vec![Expr::func("cos", vec![Expr::var(var)])]))),
+                _ => Err(MathError::Eval(format!(
+                    "integrate: unsupported integrand `{}{}`", name, inner
+                ))),
+            }
+        }
+        Expr::Func(name, args) => Err(MathError::Eval(format!(
+            "integrate: cannot integrate multi-argument function {} with {} args",
+            name,
+            args.len()
+        ))),
+    }
+}
+
+/// Handle integrands of the form `c / g(x)` where `c` is constant.
+/// Recognises `1/x` and `1/(1+x²)` and `1/√(1−x²)`.
+fn integrate_constant_over(num: &Expr, den: &Expr, var: &str) -> Result<Expr> {
+    let num_val = if let Expr::Num(n) = num { *n } else { 1.0 };
+    let _ = num_val;
+    match den {
+        Expr::Var(v) if v == var => Ok(Expr::mul(Expr::num(num_val), Expr::func("ln", vec![Expr::var(var)]))),
+        Expr::Add(a, b) | Expr::Sub(a, b) => {
+            // 1 / (1 ± x²) → atan or -atan
+            let is_one = matches!(a.as_ref(), Expr::Num(n) if (*n - 1.0).abs() < 1e-12);
+            let is_xsq = match b.as_ref() {
+                Expr::Pow(p, e) => matches!(p.as_ref(), Expr::Var(v) if v == var)
+                    && matches!(e.as_ref(), Expr::Num(n) if (*n - 2.0).abs() < 1e-12),
+                _ => false,
+            };
+            if is_one && is_xsq {
+                let sign = if matches!(den, Expr::Sub(..)) { -1.0 } else { 1.0 };
+                Ok(Expr::mul(
+                    Expr::num(sign * num_val),
+                    Expr::func("atan", vec![Expr::var(var)]),
+                ))
+            } else {
+                Err(MathError::Eval(format!(
+                    "integrate: unsupported integrand 1/{}", den
+                )))
+            }
+        }
+        Expr::Func(name, args) if name == "sqrt" && args.len() == 1 => {
+            // 1 / sqrt(1 - x²) → asin
+            if let Expr::Sub(a_inner, b_inner) = &args[0] {
+                let is_one = matches!(a_inner.as_ref(), Expr::Num(n) if (*n - 1.0).abs() < 1e-12);
+                let is_xsq = matches!(
+                    b_inner.as_ref(),
+                    Expr::Pow(pp, ee)
+                        if matches!(pp.as_ref(), Expr::Var(v) if v == var)
+                            && matches!(ee.as_ref(), Expr::Num(n) if (*n - 2.0).abs() < 1e-12)
+                );
+                if is_one && is_xsq {
+                    return Ok(Expr::mul(
+                        Expr::num(num_val),
+                        Expr::func("asin", vec![Expr::var(var)]),
+                    ));
+                }
+            }
+            Err(MathError::Eval(format!(
+                "integrate: unsupported integrand 1/{}",
+                den
+            )))
+        }
+        Expr::Pow(p, e) => {
+            // 1 / (1 - x²)^{1/2} (as Pow rather than sqrt) → asin
+            if let Expr::Sub(a_inner, b_inner) = p.as_ref() {
+                let is_one = matches!(a_inner.as_ref(), Expr::Num(n) if (*n - 1.0).abs() < 1e-12);
+                let is_xsq = matches!(
+                    b_inner.as_ref(),
+                    Expr::Pow(pp, ee)
+                        if matches!(pp.as_ref(), Expr::Var(v) if v == var)
+                            && matches!(ee.as_ref(), Expr::Num(n) if (*n - 2.0).abs() < 1e-12)
+                );
+                let is_half = matches!(e.as_ref(), Expr::Num(n) if (*n - 0.5).abs() < 1e-12);
+                if is_one && is_xsq && is_half {
+                    return Ok(Expr::mul(
+                        Expr::num(num_val),
+                        Expr::func("asin", vec![Expr::var(var)]),
+                    ));
+                }
+            }
+            Err(MathError::Eval(format!(
+                "integrate: unsupported integrand 1/{}",
+                den
+            )))
+        }
+        _ => Err(MathError::Eval(format!(
+            "integrate: unsupported integrand {}/{}", num, den
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +397,55 @@ mod tests {
         let got = d("exp(x)");
         let want = Parser::parse("exp(x)").unwrap();
         agrees(&got, &want, &[0.0, 1.0, -2.0]);
+    }
+
+    fn integrate_agrees(src: &str, want: &str, xs: &[f64]) {
+        // Differentiate the symbolic integral and verify it matches the
+        // original integrand at sample points.
+        let e = Parser::parse(src).unwrap();
+        let antideriv = integrate(&e, "x").unwrap();
+        let derived = differentiate(&antideriv, "x").unwrap();
+        let want_e = Parser::parse(want).unwrap();
+        agrees(&derived, &want_e, xs);
+    }
+
+    #[test]
+    fn integrate_constant() {
+        // ∫ 3 dx = 3x
+        let e = Parser::parse("3").unwrap();
+        let result = integrate(&e, "x").unwrap();
+        let want = Parser::parse("3*x").unwrap();
+        agrees(&result, &want, &[1.0, 2.0, -5.0]);
+    }
+
+    #[test]
+    fn integrate_polynomial() {
+        integrate_agrees("x", "x", &[0.5, 1.0, 2.0]);
+        integrate_agrees("x^2", "x^2", &[0.5, 1.0, 2.0]);
+        integrate_agrees("x^3 - 2*x + 1", "x^3 - 2*x + 1", &[0.5, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn integrate_reciprocal() {
+        // ∫ 1/x dx = ln(x)
+        integrate_agrees("1/x", "1/x", &[0.5, 1.5, 3.0]);
+    }
+
+    #[test]
+    fn integrate_exp() {
+        integrate_agrees("exp(x)", "exp(x)", &[0.5, 1.0, 2.0]);
+        integrate_agrees("2^x", "2^x", &[0.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn integrate_trig() {
+        integrate_agrees("sin(x)", "sin(x)", &[0.5, 1.0, 2.0]);
+        integrate_agrees("cos(x)", "cos(x)", &[0.5, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn integrate_atan_arcsin() {
+        integrate_agrees("1/(1+x^2)", "1/(1+x^2)", &[0.5, 1.0, 2.0]);
+        integrate_agrees("1/sqrt(1-x^2)", "1/sqrt(1-x^2)", &[0.0, 0.3, 0.5]);
     }
 }

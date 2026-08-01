@@ -8,22 +8,22 @@ A pure-Rust mathematics library and command-line tool for **symbolic and numeric
 
 ## Features
 
-- **Symbolic differentiation** — product, quotient, and chain rules with automatic simplification
-- **Numerical integration** — trapezoidal, Simpson's, and adaptive quadrature
-- **FFT (Fast Fourier Transform)** — Cooley–Tukey radix-2 from scratch: forward, inverse, 2D, real-input, magnitude/power spectra, convolution, cross-correlation, window functions
-- **Equation solving** — bisection, Newton–Raphson, secant method, Durand–Kerner polynomial root finding
-- **Matrix operations** — arithmetic, determinant, inverse, linear system solver, trace, transpose
+- **Symbolic algebra** — differentiation (product, quotient, chain rules) and **symbolic integration** (polynomial, exponential, trigonometric, and inverse-trigonometric primitives) with automatic simplification
+- **Numerical calculus** — high-order finite-difference derivatives, trapezoidal / Simpson's / adaptive quadrature, **Romberg with Richardson extrapolation**, partial derivatives and gradients
+- **FFT** — Cooley–Tukey radix-2 from scratch: forward, inverse, 2D, real-input, magnitude / power spectra, convolution, cross-correlation, window functions (Hann, Hamming, Blackman, Rectangular)
+- **Equation solving** — bisection, Newton–Raphson, secant, Durand–Kerner polynomial root finding, and **Newton's method for nonlinear systems**
+- **Matrix operations** — arithmetic, determinant, inverse, linear-system solver, trace, transpose, **rank** estimation, **LU decomposition** with partial pivoting, **Cholesky decomposition** `A = L·Lᵀ` for SPD matrices, **SVD** `A = U · Σ · Vᵀ`, **dominant eigenvalue/eigenvector** via power iteration
 - **Statistics** — mean, median, variance, standard deviation, quartiles, IQR, correlation, linear regression
-- **Number theory** — GCD, LCM, primality (trial + Miller–Rabin), factorization, sieve of Eratosthenes, binomial coefficients, factorial, Fibonacci, Euler's totient, Chinese Remainder Theorem, modular exponentiation
+- **Number theory** — GCD, LCM, primality (trial + Miller–Rabin), factorization, sieve of Eratosthenes, binomial coefficients, factorial, Fibonacci, Euler's totient, Chinese Remainder Theorem, modular exponentiation, **Jacobi symbol**, **continued fractions**, **linear Diophantine solver**, **discrete logarithm** (baby-step giant-step)
 - **ODE solvers** — Euler, RK4, RK4 systems, adaptive RKF45
 - **Taylor series** — symbolic expansion around any point
-- **Interpolation** — Lagrange, Newton divided-difference, linear
-- **Special functions** — Gamma, log-Gamma, Beta, erf, erfc, sinc, incomplete gamma P
+- **Interpolation** — Lagrange, Newton divided-difference, linear, **natural / clamped cubic spline**, **Chebyshev polynomials** and series approximation, **Legendre polynomials** and associated, **Gauss–Legendre quadrature**
+- **Special functions** — Gamma, log-Gamma, Beta, erf, erfc, sinc, incomplete gamma P, **Bessel functions** `J_0`, `J_1`, `J_n`
 - **Complex numbers** — generic `Complex<T>` with arithmetic, polar conversion, powers
 - **Plotting** — PNG output via `plotters` (line, multi-series, scatter)
-- **LaTeX/TeX input** — parse `\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, and more; supports `$...$`, `$$...$$`, `\[...\]`, `\(...\)` delimiters
+- **LaTeX / TeX input** — parse `\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, and more; supports `$...$`, `$$...$$`, `\[...\]`, `\(...\)` delimiters
 - **Interactive REPL** — rustyline-powered with history, bracket matching, variable/function bindings
-- **Expression parser** — recursive-descent, implicit multiplication, scientific notation, 27+ built-in functions
+- **Expression parser** — recursive-descent, implicit multiplication, scientific notation, 30+ built-in functions
 
 ## Quick Start
 
@@ -44,25 +44,50 @@ cargo build --release
 Just pass a string — `mathr` figures out what to do:
 
 ```bash
-mathr "sin(pi/4) + 2^3"          # evaluate an expression
-mathr "gamma(0.5)"               # special functions
-mathr "diff x^3 + 2*x^2"         # symbolic derivative
-mathr "simplify 2*x + 3*x + 0"   # algebraic simplification
-mathr "solve x^2 - 4"            # find roots (Newton–Raphson)
-mathr "int sin(x) 0 pi"          # numerical integral over [0, π]
-mathr "taylor exp(x) 0 5"        # Taylor series (5 terms around 0)
-mathr "poly-roots 1 -5 6"        # polynomial roots (Durand–Kerner)
-mathr "fft 1 0 -1 0 1 0 -1 0"    # FFT magnitude spectrum
-mathr "conv 1 2 3 x 1 1"         # convolution (x separates signals)
-mathr "stats 1 2 3 4 5 6 7 8"    # descriptive statistics
-mathr "gcd 48 36"                # number theory
-mathr "is-prime 97"              # primality test
-mathr "factor 360"               # prime factorization
-mathr "fib 50"                   # Fibonacci number
-mathr "mr-prime 2305843009213693951"  # Miller–Rabin primality
-mathr "plot sin(x) -6.28 6.28 wave.png"  # plot to PNG
-echo "sin(pi/2)" | mathr         # read from stdin
-mathr                            # interactive REPL
+mathr "sin(pi/4) + 2^3"               # evaluate an expression
+mathr "gamma(0.5)"                    # special functions
+mathr "diff x^3 + 2*x^2"              # symbolic derivative
+mathr "integrate sin(x)"              # symbolic integration → -cos(x)
+mathr "simplify 2*x + 3*x + 0"        # algebraic simplification
+mathr "solve x^2 - 4"                 # find roots (Newton–Raphson)
+mathr "int sin(x) 0 pi"               # numerical integral over [0, π]
+mathr "romberg sin(x) 0 3.14159"      # Romberg-integral of sin on [0, π]
+mathr "taylor exp(x) 0 5"             # Taylor series (5 terms around 0)
+mathr "poly-roots 1 -5 6"             # polynomial roots (Durand–Kerner)
+mathr "fft 1 0 -1 0 1 0 -1 0"         # FFT magnitude spectrum
+mathr "conv 1 2 3 x 1 1"              # convolution (x separates signals)
+mathr "stats 1 2 3 4 5 6 7 8"         # descriptive statistics
+
+# Matrix operations (rows separated by `|`)
+mathr "lu 1 2 3 | 4 -6 0 | -2 7 2"                    # LU decomposition
+mathr "cholesky 4 12 -16 | 12 37 -43 | -16 -43 98"    # Cholesky decomposition
+mathr "eig 2 1 | 1 2"                                 # dominant eigenpair
+mathr "svd 1 2 | 3 4 | 5 6"                           # SVD (rectangular OK)
+
+# Interpolation
+mathr "spline 0 0 1 1 2 4 3 9 1.5"    # cubic spline at x=1.5
+mathr "chebyshev 5 0.3"                # Chebyshev T_5(0.3)
+mathr "legendre 5 0.3"                 # Legendre P_5(0.3)
+
+# Number theory
+mathr "gcd 48 36"                                         # GCD
+mathr "is-prime 97"                                       # primality test
+mathr "factor 360"                                        # prime factorization
+mathr "fib 50"                                            # Fibonacci
+mathr "mr-prime 2305843009213693951"                     # Miller–Rabin
+mathr "jacobi 5 7"                                        # Jacobi symbol
+mathr "cf 22 7"                                           # continued fraction
+mathr "diophantine 3 5 7"                                 # linear Diophantine
+mathr "dlog 2 27 101"                                     # discrete log
+
+# Special functions
+mathr "bessel_j(2, 5)"                                   # Bessel J_2(5)
+
+# Plot to PNG
+mathr "plot sin(x) -6.28 6.28 wave.png"
+
+echo "sin(pi/2)" | mathr       # read from stdin
+mathr                         # interactive REPL
 ```
 
 ## LaTeX / TeX Input
@@ -99,8 +124,14 @@ mathr> f(5)
 36
 mathr> diff sin(x^2)
 2*x*cos(x^2)
+mathr> integrate sin(x)
+-cos(x)
 mathr> taylor exp(x) 0 5
 1 + x + 0.5*x^2 + 0.1666666667*x^3 + 0.0416666667*x^4
+mathr> romberg sin(x) 0 3.14159
+2
+mathr> svd 1 2 | 3 4 | 5 6
+σ = [9.525518, 0.514301]
 mathr> quit
 ```
 
@@ -112,27 +143,36 @@ use mathr::prelude::*;
 // Evaluate an expression
 let val = eval_str("sin(pi/4) + 2^3", &[])?;
 
-// Symbolic differentiation
+// Symbolic differentiation and integration
 let expr = Parser::parse("x^3 + 2*x")?;
 let deriv = differentiate(&expr, "x")?;
+let integr = integrate(&Parser::parse("x^2")?, "x")?;   // x³/3
 
 // FFT magnitude spectrum
 let samples = vec![1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0];
 let mags = mathr::fft::magnitude_spectrum(&samples)?;
 
-// Matrix determinant and inverse
+// Matrix operations
 let m = Matrix::from_rows(&[vec![1.0, 2.0], vec![3.0, 4.0]])?;
 let det = m.determinant()?;
 let inv = m.inverse()?;
+let lu = m.lu()?;
+let chol = m.cholesky()?;
+let svd = m.svd()?;                              // A = U Σ Vᵀ
+let eigen = m.power_iteration(PowerIterOptions::default())?;
 
 // Descriptive statistics
 let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
 let s = mathr::stats::summary(&data)?;
 
-// Number theory: sieve, Fibonacci, Miller–Rabin
+// Number theory
 let primes = mathr::numtheory::sieve_primes(100);
 let fib50 = mathr::numtheory::fibonacci(50);
 let is_prime = mathr::numtheory::is_prime_miller_rabin(2305843009213693951, 20);
+let cf = mathr::numtheory::continued_fraction(22, 7)?;       // [3; 7]
+let j  = mathr::numtheory::jacobi_symbol(5, 7);                // -1
+let (x, y) = mathr::numtheory::diophantine(3, 5, 7)?;          // (14, -7)
+let dl = mathr::numtheory::discrete_log(2, 27, 101);            // Some(7)
 
 // ODE: solve y' = y, y(0) = 1, on [0, 1]
 let y = mathr::ode::rk4(|_t, y| y, 0.0, 1.0, 1.0, 100)?;
@@ -140,13 +180,31 @@ let y = mathr::ode::rk4(|_t, y| y, 0.0, 1.0, 1.0, 100)?;
 // Taylor series expansion
 let series = mathr::taylor::taylor_series_str("exp(x)", "x", 0.0, 5)?;
 
-// Lagrange interpolation
+// Interpolation
 let pts = vec![(0.0, 1.0), (1.0, 2.0), (2.0, 5.0)];
 let y = lagrange_interp(&pts, 0.5)?;
+let sp = CubicSpline::new(&[(0.0, 0.0), (1.0, 1.0), (2.0, 4.0), (3.0, 9.0)])?;
+let v = sp.eval(1.5);
+// Chebyshev series
+let coeffs = chebyshev_coefficients(|x| x.sin(), 8);
+let y_eval = chebyshev_eval(&coeffs, 0.5);
+// Gauss–Legendre quadrature
+let (nodes, weights) = gauss_legendre(8);
 
 // Special functions
-let g = mathr::special::gamma(0.5); // √π
-let e = mathr::special::erf(1.0);
+let g = mathr::special::gamma(0.5);
+let j0 = mathr::special::bessel_j0(5.0);
+let j5 = mathr::special::bessel_jn(5, 2.0);
+
+// Numerical integration
+let integral = mathr::calculus::integrate_romberg(|x| x.exp(), 0.0, 1.0, 10)?;
+
+// Newton's method for nonlinear systems
+let system = |x: &[f64]| vec![
+    2.0 * x[0] + x[1] - 5.0,
+    x[0] + 3.0 * x[1] - 7.0,
+];
+let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::default())?;
 ```
 
 ## Modules
@@ -157,18 +215,18 @@ let e = mathr::special::erf(1.0);
 | `parser` | Recursive-descent parser with LaTeX/TeX support |
 | `eval` | Tree-walking evaluator with `Context` (variables, functions) |
 | `simplify` | Constant folding and algebraic identity simplification |
-| `symbolic` | Symbolic differentiation rules |
-| `calculus` | Numerical derivatives, quadrature, gradients |
-| `solver` | Bisection, Newton–Raphson, secant, polynomial roots |
+| `symbolic` | Symbolic differentiation and integration |
+| `calculus` | Numerical derivatives, quadrature, gradients, Romberg |
+| `solver` | Bisection, Newton, secant, polynomial roots, **Newton for systems** |
 | `fft` | Cooley–Tukey FFT, convolution, cross-correlation, windows |
 | `complex` | Generic complex number type |
-| `matrix` | Matrix arithmetic, determinant, inverse, linear solve |
+| `matrix` | Matrix arithmetic, determinant, inverse, solve, **LU**, **Cholesky**, **SVD**, **power iteration**, rank |
 | `stats` | Descriptive statistics, correlation, regression |
-| `numtheory` | GCD, LCM, primality, factorization, sieve, CRT, totient |
+| `numtheory` | GCD, LCM, primality, factorization, sieve, CRT, totient, **Jacobi**, **Diophantine**, **continued fractions**, **discrete log** |
 | `ode` | Euler, RK4, RK4 systems, adaptive RKF45 |
 | `taylor` | Symbolic Taylor series expansion |
-| `interpolate` | Lagrange, Newton divided-difference, linear |
-| `special` | Gamma, Beta, erf, erfc, sinc, incomplete gamma |
+| `interpolate` | Lagrange, Newton, linear, **cubic spline**, **Chebyshev**, **Legendre**, **Gauss–Legendre** |
+| `special` | Gamma, Beta, erf, erfc, sinc, incomplete gamma, **Bessel J_0/J_1/J_n** |
 | `plot` | PNG plotting via `plotters` |
 
 ## Dependencies

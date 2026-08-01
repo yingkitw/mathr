@@ -196,6 +196,12 @@ fn builtins() -> Vec<(&'static str, fn(&[f64]) -> Result<f64>)> {
         ("erf", |a| unary(a, |x| Ok(crate::special::erf(x)))),
         ("erfc", |a| unary(a, |x| Ok(crate::special::erfc(x)))),
         ("sinc", |a| unary(a, |x| Ok(crate::special::sinc(x)))),
+        ("bessel_j0", |a| unary(a, |x| Ok(crate::special::bessel_j0(x)))),
+        ("bessel_j1", |a| unary(a, |x| Ok(crate::special::bessel_j1(x)))),
+        ("bessel_j", |a| match a {
+            [n, x] => Ok(crate::special::bessel_jn(*n as i32, *x)),
+            _ => Err(MathError::Eval("bessel_j(n, x) takes two args".into())),
+        }),
     ]
 }
 

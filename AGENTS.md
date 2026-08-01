@@ -1,6 +1,6 @@
 # Agent Development Loop
 
-This document defines the continuous improvement cycle for the **mathr** crate — a pure-Rust mathematics library and CLI for symbolic and numerical computation (FFT, calculus, equation solving, plotting).
+This document defines the continuous improvement cycle for the **mathr** crate — a pure-Rust mathematics library and CLI for symbolic and numerical computation.
 
 ## Project Structure
 
@@ -8,29 +8,41 @@ This document defines the continuous improvement cycle for the **mathr** crate �
 .
 ├── src/
 │   ├── lib.rs          # crate root, module declarations, prelude re-exports
-│   ├── main.rs         # CLI entry point (clap subcommands: eval, diff, simplify, integrate, solve, poly-roots, plot, fft, taylor, stats, gcd, lcm, is-prime, factor, fib, binom, fact, mr-prime, gamma, erf, conv, repl)
-│   ├── expr.rs         # Expr AST (num, var, binary, unary, call, pow)
-│   ├── parser.rs       # recursive-descent parser → Expr
+│   ├── main.rs         # CLI entry point (single string dispatch via clap)
+│   ├── expr.rs         # Expr AST (num, var, neg, add, sub, mul, div, pow, func) + canonicalize/equals
+│   ├── parser.rs       # recursive-descent parser → Expr (with implicit multiplication, LaTeX/TeX)
 │   ├── eval.rs         # tree-walking evaluator with Context (vars, funcs, constants)
 │   ├── simplify.rs     # constant folding + algebraic identity simplifier
-│   ├── symbolic.rs     # symbolic differentiation rules
-│   ├── calculus.rs     # numerical derivatives, Simpson/trapezoidal/adaptive quadrature, gradients
-│   ├── solver.rs       # bisection, Newton–Raphson, secant, Durand–Kerner polynomial roots
-│   ├── fft.rs          # Cooley–Tukey radix-2 FFT (forward, inverse, 2D, real-input, spectra)
+│   ├── symbolic.rs     # symbolic differentiation + indefinite integration rules
+│   ├── calculus.rs     # numerical derivatives, trapezoidal/Simpson/adaptive quadrature,
+│   │                   # gradients, Romberg with Richardson extrapolation
+│   ├── solver.rs       # bisection, Newton–Raphson, secant, Durand–Kerner polynomial roots,
+│   │                   # Newton's method for nonlinear systems
+│   ├── fft.rs          # Cooley–Tukey radix-2 FFT (forward, inverse, 2D, real-input, spectra),
+│   │                   # convolution, cross-correlation, window functions
 │   ├── complex.rs      # Complex<T> type with arithmetic, abs, arg, powers
-│   ├── interpolate.rs  # Lagrange, Newton divided-difference, linear interpolation
-│   ├── matrix.rs       # Matrix type, arithmetic, determinant, inverse, linear solve, trace
+│   ├── interpolate.rs  # Lagrange, Newton, linear, cubic spline, Chebyshev,
+│   │                   # Legendre polynomials, Gauss–Legendre quadrature
+│   ├── matrix.rs       # Matrix type: arithmetic, determinant, inverse, linear solve,
+│   │                   # rank, trace, transpose, LU, Cholesky, SVD, power iteration
 │   ├── stats.rs        # mean, median, variance, stddev, quartiles, correlation, regression
-│   ├── numtheory.rs    # GCD, LCM, primality, factorization, binomial, factorial, Fibonacci, sieve, totient, Miller–Rabin, CRT
+│   ├── numtheory.rs    # GCD, LCM, extended GCD, modular inverse, modular exponentiation,
+│   │                   # primality, factorization, sieve, binomial, factorial, Fibonacci,
+│   │                   # Euler's totient, Miller–Rabin, Jacobi symbol, continued fractions,
+│   │                   # linear Diophantine solver, discrete logarithm, CRT
 │   ├── ode.rs          # Euler, RK4, RK4 systems, adaptive RKF45
 │   ├── taylor.rs       # symbolic Taylor series expansion
-│   ├── special.rs      # Gamma, Beta, erf, erfc, sinc, incomplete gamma P
+│   ├── special.rs      # Gamma, Beta, erf, erfc, sinc, incomplete gamma P,
+│   │                   # Bessel functions J_0, J_1, J_n
 │   ├── plot.rs         # PNG plotting via plotters (single, multi, scatter)
-│   ├── repl.rs         # interactive REPL (rustyline)
+│   ├── repl.rs         # interactive REPL (rustyline) + REPL dispatch
 │   └── error.rs        # MathError + Result alias
 ├── examples/
 │   └── debug_solve.rs  # example: using the solver API programmatically
-├── Cargo.toml          # package metadata, deps (clap, anyhow, thiserror, rustyline, plotters, num-traits), dev-dep (approx)
+├── tests/
+│   └── integration.rs  # end-to-end CLI smoke tests (parse, dispatch, output)
+├── Cargo.toml          # package metadata, deps (clap, anyhow, thiserror, rustyline,
+│                       # plotters, num-traits), dev-dep (approx)
 └── Cargo.lock
 ```
 
@@ -44,11 +56,12 @@ For every new capability:
 - Add inline `#[cfg(test)] mod tests` in the relevant source file — exercise the feature end-to-end
 - Add unit tests for core math logic (use `approx` for float comparisons)
 - Provide a minimal usage example in `examples/` if the feature is library-facing
+- Add a CLI smoke test to `tests/integration.rs` if there's a CLI dispatch path
 
 ### 3. Ensure `cargo test` Passes
 Run the full test suite:
 ```bash
-cargo test                  # all inline unit tests
+cargo test                  # all inline unit tests + integration tests
 cargo test --examples       # examples compile and run
 cargo clippy                # lint pass (warnings acceptable but noted)
 ```
@@ -61,7 +74,7 @@ Return to `TODO.md` and pick the next item. Repeat until the backlog is clear.
 After each batch of features, perform a quality pass:
 - **Maintainability**: Are functions small and well-named? Is the module structure logical?
 - **Leanness**: Remove dead code, unused imports, and speculative abstractions
-- **Wiring**: Ensure all new features are properly integrated into `lib.rs`, `main.rs` CLI subcommands, and the `prelude`
+- **Wiring**: Ensure all new features are properly integrated into `lib.rs`, the `prelude`, and `repl.rs` CLI dispatch
 - **Small footprint**: Avoid unnecessary dependencies; prefer standard library or lightweight crates
 - **Consistency**: Match existing code style and patterns (Rust 2021 edition, `thiserror` for errors, `num-traits` for numerics)
 

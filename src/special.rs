@@ -101,6 +101,153 @@ pub fn sinc_unnorm(x: f64) -> f64 {
     }
 }
 
+/// Bessel function of the first kind, order 0: J₀(x).
+///
+/// Uses the Maclaurin series
+/// `J_0(x) = Σ (-1)^k (x/2)^(2k) / (k! k!)`
+/// for small `|x|` and the asymptotic expansion for larger `|x|`.
+pub fn bessel_j0(x: f64) -> f64 {
+    let ax = x.abs();
+    if ax < 8.0 {
+        // J_0(x) = Σ (-1)^k (x²/4)^k / (k!)²
+        let xsq = x * x / 4.0;
+        let mut term = 1.0_f64;
+        let mut sum = term;
+        for k in 1..60 {
+            let kf = k as f64;
+            term *= -xsq / (kf * kf);
+            sum += term;
+            if term.abs() < 1e-17 * sum.abs().max(1e-300) {
+                break;
+            }
+        }
+        sum
+    } else {
+        // Asymptotic: J_0(x) ~ sqrt(2/(πx)) * [P cos θ - Q sin θ] with θ = x - π/4.
+        let z = 8.0 / ax;
+        let y = z * z;
+        let p = 1.0
+            + y * (-0.1098628627e-2
+                + y * (0.7464519654e-3
+                    + y * (-0.4724987825e-4
+                        + y * (0.2181196076e-5
+                            + y * (-0.6397653302e-7 + y * 0.9538904063e-9)))));
+        let q = -0.1562499995e-1
+            + y * (0.1430484407e-3
+                + y * (-0.4253339102e-4
+                    + y * (0.2493458662e-5
+                        + y * (-0.1248279047e-6 + y * 0.2860702546e-8))));
+        let xx = ax - PI / 4.0;
+        let result = (p * xx.cos() - z * q * xx.sin()) / ax.sqrt();
+        // The x < 0 case: J_0 is even.
+        result.abs() * result.signum()
+    }
+}
+
+/// Bessel function of the first kind, order 1: J₁(x).
+pub fn bessel_j1(x: f64) -> f64 {
+    let ax = x.abs();
+    let sign = if x < 0.0 { -1.0 } else { 1.0 };
+    if ax < 8.0 {
+        // J_1(x) = (x/2) Σ (-1)^k (x²/4)^k / (k!(k+1)!)
+        let xsq = x * x / 4.0;
+        let mut term = 0.5 * x; // k=0: (x/2)^1 / (0! 1!)
+        let mut sum = term;
+        for k in 1..60 {
+            let kf = k as f64;
+            term *= -xsq / (kf * (kf + 1.0));
+            sum += term;
+            if term.abs() < 1e-17 * sum.abs().max(1e-300) {
+                break;
+            }
+        }
+        sum
+    } else {
+        // Asymptotic.
+        let z = 8.0 / ax;
+        let y = z * z;
+        let p = 1.0
+            + y * (0.183105e-2
+                + y * (-0.3516396496e-3
+                    + y * (0.2457529642e-4
+                        + y * (-0.2403370194e-5
+                            + y * 0.1058465960e-7))));
+        let q = 0.4687499995e-1
+            + y * (-0.2002690873e-3
+                + y * (0.4717512717e-4
+                    + y * (-0.9414049147e-6
+                        + y * (0.1344888788e-7 + y * -0.2199534093e-9))));
+        let xx = ax - 3.0 * PI / 4.0;
+        let result = (p * xx.cos() - z * q * xx.sin()) / ax.sqrt();
+        sign * result
+    }
+}
+
+/// Bessel function of the first kind, integer order n: Jₙ(x).
+///
+/// Computes J_0, J_1 via polynomial approximation, then uses the
+/// forward recurrence `J_{n+1}(x) = (2n/x) J_n(x) - J_{n-1}(x)`
+/// (or the series formula for very small `|x|` or for `n > |x|`,
+/// where forward recurrence is unstable).
+pub fn bessel_jn(n: i32, x: f64) -> f64 {
+    if n == 0 {
+        return bessel_j0(x);
+    }
+    if n == 1 {
+        return bessel_j1(x);
+    }
+    if n < 0 {
+        // J_{-n}(x) = (-1)^n J_n(x) for integer n.
+        let jn = bessel_jn(-n, x);
+        return if (-n) % 2 == 1 { -jn } else { jn };
+    }
+    if x.abs() < 1e-15 {
+        return 0.0;
+    }
+    let n_u = n as u32;
+
+    // Series form: J_n(x) = (x/2)^n * Σ (-1)^k (x/2)^{2k} / (k! (n+k)!).
+    // Stable for n ≳ x (small x relative to n).
+    let half_x = x.abs() / 2.0;
+    if (n as f64) > x.abs() {
+        let mut term = 1.0 / factorial_u64(n_u);
+        let mut sum = term;
+        let xx = half_x * half_x;
+        for k in 1..200u32 {
+            term *= -xx / (k as f64 * (n_u + k) as f64);
+            let next = sum + term;
+            if (next - sum).abs() < 1e-18 * sum.abs().max(1e-300) {
+                break;
+            }
+            sum = next;
+        }
+        let mag = sum * half_x.powi(n);
+        if x < 0.0 && n_u % 2 == 1 { -mag } else { mag }
+    } else {
+        // Forward recurrence: stable for n < x.
+        let tox = 2.0 / x;
+        let mut prev = bessel_j0(x);
+        let mut curr = bessel_j1(x);
+        for k in 1..n_u {
+            let next = (k as f64) * tox * curr - prev;
+            prev = curr;
+            curr = next;
+            if curr.abs() > 1e150 {
+                return 0.0;
+            }
+        }
+        if x < 0.0 && n_u % 2 == 1 { -curr } else { curr }
+    }
+}
+
+fn factorial_u64(n: u32) -> f64 {
+    let mut f = 1.0_f64;
+    for i in 2..=n {
+        f *= i as f64;
+    }
+    f
+}
+
 /// Incomplete gamma function P(a, x) = γ(a, x) / Γ(a)
 /// via series expansion (for x < a+1) or continued fraction (for x >= a+1).
 pub fn incomplete_gamma_p(a: f64, x: f64) -> f64 {
@@ -275,5 +422,73 @@ mod tests {
         let p = incomplete_gamma_p(1.0, 2.0);
         // P(1, x) = 1 - e^{-x}
         assert!(close(p, 1.0 - (-2.0f64).exp(), 1e-8));
+    }
+
+    #[test]
+    fn bessel_j0_basic() {
+        // J_0(0) = 1
+        assert!(close(bessel_j0(0.0), 1.0, 1e-12));
+        // J_0 has its first zero near x = 2.4048
+        assert!(close(bessel_j0(2.4048255576957727), 0.0, 1e-6));
+        // J_0(5) ≈ -0.17759677131434
+        assert!(close(bessel_j0(5.0), -0.17759677131434, 1e-8));
+    }
+
+    #[test]
+    fn bessel_j1_basic() {
+        // J_1(0) = 0
+        assert!(close(bessel_j1(0.0), 0.0, 1e-12));
+        // J_1(2) ≈ 0.5767248077568736
+        assert!(close(bessel_j1(2.0), 0.5767248077568736, 1e-8));
+        // First zero of J_1 near x = 3.83171
+        assert!(close(bessel_j1(3.8317059702075125), 0.0, 1e-6));
+    }
+
+    #[test]
+    fn bessel_jn_positive() {
+        // J_n matches J_0 and J_1 for n=0,1
+        for &x in &[0.5, 1.0, 2.0, 5.0, 10.0] {
+            assert!(close(bessel_jn(0, x), bessel_j0(x), 1e-10));
+            assert!(close(bessel_jn(1, x), bessel_j1(x), 1e-10));
+        }
+        // J_2(5) ≈ 0.0465651
+        assert!(close(bessel_jn(2, 5.0), 0.0465651, 1e-6));
+        // J_3(2) ≈ 0.128943249
+        assert!(close(bessel_jn(3, 2.0), 0.128943249, 1e-6));
+        // J_10(5) — nonzero value, sanity test
+        let v = bessel_jn(10, 5.0);
+        assert!(v.is_finite());
+    }
+
+    #[test]
+    fn bessel_jn_negative() {
+        // J_{-n}(x) = (-1)^n J_n(x)
+        for &x in &[1.0, 3.0, 5.0] {
+            for n in [1, 2, 3, 4] {
+                let jn = bessel_jn(n, x);
+                let jneg = bessel_jn(-n, x);
+                let expected = if n % 2 == 1 { -jn } else { jn };
+                assert!(close(jneg, expected, 1e-10), "n={} x={}: {} vs {}", n, x, jneg, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn bessel_jn_at_zero() {
+        // J_n(0) = 0 for n >= 1
+        assert!(close(bessel_jn(5, 0.0), 0.0, 1e-12));
+    }
+
+    #[test]
+    fn bessel_recurrence() {
+        // Recurrence J_{n+1}(x) = (2n/x) J_n(x) - J_{n-1}(x)
+        for x in [1.0, 3.0, 5.0, 8.0] {
+            let jnm1 = bessel_jn(1, x);
+            let jn = bessel_jn(2, x);
+            let jnp1 = bessel_jn(3, x);
+            let lhs = jnp1;
+            let rhs = 2.0 * 2.0 / x * jn - jnm1;
+            assert!(close(lhs, rhs, 1e-8), "x={}: {} vs {}", x, lhs, rhs);
+        }
     }
 }

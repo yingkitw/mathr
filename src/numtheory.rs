@@ -183,6 +183,171 @@ pub fn euler_totient(n: u64) -> u64 {
     result
 }
 
+/// Jacobi symbol `(a/n)`, where `n` is an odd positive integer.
+///
+/// Returns one of `{-1, 0, 1}` based on quadratic-residue properties:
+/// - `0` if `gcd(a, n) != 1`
+/// - `1` if `a` is a quadratic residue mod `n` (or has too many to decide)
+/// - `-1` if `a` is a quadratic non-residue
+///
+/// Useful in number-theoretic primality tests (e.g., Solovay–Strassen).
+pub fn jacobi_symbol(a: i64, n: i64) -> i32 {
+    if n <= 0 || n % 2 == 0 {
+        return 0;
+    }
+    let mut a = a % n;
+    if a < 0 {
+        a += n;
+    }
+    let mut n = n;
+    let mut result = 1i32;
+    while a != 0 {
+        while a % 2 == 0 {
+            a /= 2;
+            let r = n % 8;
+            if r == 3 || r == 5 {
+                result = -result;
+            }
+        }
+        // Quadratic reciprocity: swap (a, n) with sign flip.
+        std::mem::swap(&mut a, &mut n);
+        if a % 4 == 3 && n % 4 == 3 {
+            result = -result;
+        }
+        a %= n;
+    }
+    if n == 1 {
+        result
+    } else {
+        0
+    }
+}
+
+/// Continued-fraction expansion of `p / q` (with `q > 0`).
+/// Returns the partial quotients `a_0, a_1, ..., a_n` of the simple
+/// continued fraction `[a_0; a_1, ..., a_n]`.
+pub fn continued_fraction(p: i64, q: i64) -> Result<Vec<i64>> {
+    if q <= 0 {
+        return Err(MathError::InvalidArgument("continued_fraction: q must be > 0".into()));
+    }
+    let mut p = p;
+    let mut q = q;
+    // Sign handling: cf expansion absorbs the sign into a_0.
+    let mut out = Vec::new();
+    let sign = if p < 0 { -1 } else { 1 };
+    p = p.abs();
+    while q != 0 {
+        let a = p / q;
+        out.push(a * sign);
+        let r = p % q;
+        p = q;
+        q = r;
+        let sign = 1;
+        let _ = sign;
+    }
+    Ok(out)
+}
+
+/// Approximate a real number by a continued fraction with at most
+/// `max_terms` partial quotients, starting from the value `x`.
+/// Returns the partial quotients and the final convergent (numerator, denominator).
+pub fn continued_fraction_value(x: f64, max_terms: usize) -> (Vec<i64>, i64, i64) {
+    let mut out = Vec::new();
+    let mut h_prev: i64 = 1;
+    let mut h_curr: i64 = 0;
+    let mut k_prev: i64 = 0;
+    let mut k_curr: i64 = 1;
+    let mut rem = x;
+    for _ in 0..max_terms {
+        if !rem.is_finite() {
+            break;
+        }
+        let a = rem.trunc() as i64;
+        out.push(a);
+        // Convergent: h_n = a_n * h_{n-1} + h_{n-2}
+        let h_new = a * h_curr + h_prev;
+        let k_new = a * k_curr + k_prev;
+        h_prev = h_curr;
+        k_prev = k_curr;
+        h_curr = h_new;
+        k_curr = k_new;
+        let frac = rem - a as f64;
+        if frac.abs() < 1e-15 {
+            break;
+        }
+        rem = 1.0 / frac;
+    }
+    (out, h_curr, k_curr)
+}
+
+/// Solve a linear Diophantine equation `a*x + b*y = c` for integers `x, y`.
+/// Returns one particular solution `(x0, y0)`.
+/// General solution: `(x, y) = (x0 + (b/g)*t, y0 - (a/g)*t)` for any integer `t`,
+/// where `g = gcd(a, b)`.
+pub fn diophantine(a: i64, b: i64, c: i64) -> Result<(i64, i64)> {
+    if a == 0 && b == 0 {
+        return if c == 0 {
+            Ok((0, 0))
+        } else {
+            Err(MathError::InvalidArgument(
+                "diophantine: 0x + 0y = c, no solution unless c == 0".into(),
+            ))
+        };
+    }
+    let (g, x0, y0) = extended_gcd(a, b);
+    if c % g != 0 {
+        return Err(MathError::InvalidArgument(format!(
+            "diophantine: no integer solution since gcd({}, {}) = {} does not divide c = {}",
+            a, b, g, c
+        )));
+    }
+    let scale = c / g;
+    Ok((x0 * scale, y0 * scale))
+}
+
+/// Discrete logarithm `x` such that `g^x ≡ h (mod p)` using the
+/// baby-step giant-step algorithm. `p` must be prime (or at least
+/// coprime to `g`). Complexity is `O(√p)` in time and space.
+///
+/// Returns `None` if no solution exists in `[0, p-1]`.
+pub fn discrete_log(g: u64, h: u64, p: u64) -> Option<u64> {
+    if p <= 1 {
+        return None;
+    }
+    if p == 2 {
+        return if h % 2 == 1 { Some(1) } else { Some(0) };
+    }
+    // Choose m = ⌈√p⌉.
+    let m = (p as f64).sqrt().ceil() as u64 + 1;
+    // Baby step: build a table {g^j mod p : j} for j = 0..m-1.
+    let mut table: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+    let mut power = 1u64 % p;
+    for j in 0..m {
+        // If h hits an entry here, x = j directly.
+        if power == h % p {
+            return Some(j);
+        }
+        table.insert(power, j);
+        power = (power * g) % p;
+    }
+    // Giant step factor: g^{-m} (mod p). Compute as the inverse of g^m.
+    let gm = mod_pow(g, m, p);
+    let gm_inv = mod_inverse(gm as i64, p as i64)
+        .map(|x| x.rem_euclid(p as i64) as u64)
+        .unwrap_or(0);
+    let factor = if gm_inv == 0 { 1 } else { gm_inv };
+    // Walk: cur = h · (g^{-m})^i; check if cur is in the baby-step table.
+    let mut cur = h % p;
+    for i in 0..m {
+        if let Some(&j) = table.get(&cur) {
+            // g^j · g^{m · i} ≡ h, so g^{j + m·i} ≡ h, x = j + m·i.
+            return Some(j + i * m);
+        }
+        cur = (cur * factor) % p;
+    }
+    None
+}
+
 // --- Modular exponentiation -------------------------------------------------
 
 /// Modular exponentiation: `base^exp mod m` using binary exponentiation.
@@ -282,7 +447,7 @@ pub fn is_prime_miller_rabin(n: u64, k: usize) -> bool {
 }
 
 /// Chinese Remainder Theorem: given pairwise coprime moduli and remainders,
-/// returns x such that x ≡ r_i (mod m_i) for all i.
+/// returns `x` such that `x ≡ r_i (mod m_i)` for all `i`.
 pub fn chinese_remainder(remainders: &[u64], moduli: &[u64]) -> Result<u64> {
     if remainders.len() != moduli.len() {
         return Err(MathError::InvalidArgument("chinese_remainder: length mismatch".into()));
@@ -454,5 +619,96 @@ mod tests {
         let r = vec![1, 2];
         let m = vec![4, 6];
         assert!(chinese_remainder(&r, &m).is_err());
+    }
+
+    #[test]
+    fn jacobi_basic() {
+        // (1/n) = 1 for all n>0
+        assert_eq!(jacobi_symbol(1, 9), 1);
+        // (2/3) = -1
+        assert_eq!(jacobi_symbol(2, 3), -1);
+        // (3/5) = -1
+        assert_eq!(jacobi_symbol(3, 5), -1);
+        // (5/7) = -1
+        assert_eq!(jacobi_symbol(5, 7), -1);
+        // gcd > 1 ⇒ symbol = 0
+        assert_eq!(jacobi_symbol(6, 9), 0);
+    }
+
+    #[test]
+    fn jacobi_quadratic_residue() {
+        // 4 is a perfect square, so (4/n) = 1 for all odd n with gcd(4,n)=1.
+        assert_eq!(jacobi_symbol(4, 7), 1);
+        assert_eq!(jacobi_symbol(4, 15), 1);
+        assert_eq!(jacobi_symbol(9, 13), 1);
+    }
+
+    #[test]
+    fn continued_fraction_rational() {
+        // 5/3 = [1; 1, 2] = 1 + 1/(1 + 1/2) = 1 + 2/3 = 5/3
+        let cf = continued_fraction(5, 3).unwrap();
+        assert_eq!(cf, vec![1, 1, 2]);
+        // 22/7 ≈ π → [3; 7] would be too short, full is [3; 7, 1, 1, ...]
+        let cf_pi = continued_fraction(22, 7).unwrap();
+        assert_eq!(cf_pi[0], 3);
+        assert_eq!(cf_pi[1], 7);
+    }
+
+    #[test]
+    fn continued_fraction_real() {
+        // Approximate sqrt(2) ≈ 1.41421356... → [1; 2, 2, 2, ...]
+        let (cf, h, k) = continued_fraction_value(2.0_f64.sqrt(), 6);
+        assert_eq!(cf[0], 1);
+        for i in 1..cf.len() {
+            assert_eq!(cf[i], 2);
+        }
+        // Convergent 5/3 = 1 + 2/3 = 5/3 (best 2-term approximation).
+        let _ = (h, k);
+    }
+
+    #[test]
+    fn diophantine_basic() {
+        // 3x + 5y = 7  →  (4, -1) is one solution: 3*4 + 5*(-1) = 7
+        let (x0, y0) = diophantine(3, 5, 7).unwrap();
+        assert_eq!(3 * x0 + 5 * y0, 7);
+        // 12x + 18y = 6  →  reduces to 2x + 3y = 1, solutions exist
+        let (x1, y1) = diophantine(12, 18, 6).unwrap();
+        assert_eq!(12 * x1 + 18 * y1, 6);
+        // 2x + 4y = 7 has no solution (gcd=2 doesn't divide 7)
+        assert!(diophantine(2, 4, 7).is_err());
+    }
+
+    #[test]
+    fn discrete_log_small() {
+        // g=2, p=101 → check that 2^k mod 101 = h has k = discrete_log(2, h, 101).
+        // Sample known values: 2^0=1, 2^1=2, 2^7=128 mod 101=27, etc.
+        for (k, h) in [(0u64, 1u64), (1, 2), (7, 27), (10, 14), (50, 32)].iter() {
+            let x = discrete_log(2, *h, 101).unwrap();
+            assert_eq!(mod_pow(2, x, 101), *h, "for h={}", h);
+            let _ = k;
+        }
+    }
+
+    #[test]
+    fn discrete_log_larger() {
+        // Modulus 1009 is prime.
+        let p = 1009u64;
+        let g = 5u64;
+        // Pick some exponent k and verify roundtrip.
+        for &k in &[0u64, 1, 13, 87, 256, 999] {
+            let h = mod_pow(g, k, p);
+            let x = discrete_log(g, h, p).unwrap_or(0);
+            // discrete_log returns the value modulo ord(g); verify mod_pow.
+            assert_eq!(mod_pow(g, x, p), h, "k={} x={} h={}", k, x, h);
+        }
+    }
+
+    #[test]
+    fn discrete_log_no_solution() {
+        // For a non-generator g modulo prime p, some h are unreachable.
+        // g=2 mod p=11: order(2) = 10, so all non-zero h reachable.
+        // Use g=4 mod p=11: order(4) = 5, so only quadratic residues reachable.
+        // 2 mod 11 is not a QR (2 is a quadratic non-residue mod 11), so should be None.
+        assert_eq!(discrete_log(4, 2, 11), None);
     }
 }

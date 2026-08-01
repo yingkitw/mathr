@@ -183,6 +183,48 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("poly-roots ") {
         return do_poly_roots(rest.trim());
     }
+    if let Some(rest) = line.strip_prefix("lu ") {
+        return do_lu(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("rank ") {
+        return do_rank(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("spline ") {
+        return do_spline(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("jacobi ") {
+        return do_numtheory(rest.trim(), "jacobi");
+    }
+    if let Some(rest) = line.strip_prefix("cf ") {
+        return do_numtheory(rest.trim(), "cf");
+    }
+    if let Some(rest) = line.strip_prefix("diophantine ") {
+        return do_numtheory(rest.trim(), "diophantine");
+    }
+    if let Some(rest) = line.strip_prefix("dlog ") {
+        return do_numtheory(rest.trim(), "dlog");
+    }
+    if let Some(rest) = line.strip_prefix("cholesky ") {
+        return do_cholesky(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("eig ") {
+        return do_eig(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("chebyshev ") {
+        return do_chebyshev(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("romberg ") {
+        return do_romberg(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("svd ") {
+        return do_svd(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("legendre ") {
+        return do_legendre(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("integrate ") {
+        return do_integrate_sym(rest.trim(), ctx);
+    }
 
     // Default: evaluate the expression and print the value
     let e = Parser::parse(line)?;
@@ -486,8 +528,180 @@ fn do_numtheory(rest: &str, op: &str) -> Result<Option<String>> {
             let rounds: usize = tokens.get(1).and_then(|s| s.parse().ok()).unwrap_or(20);
             Ok(Some(numtheory::is_prime_miller_rabin(n, rounds).to_string()))
         }
+        "jacobi" => {
+            if tokens.len() < 2 { return Err(crate::error::MathError::Eval("jacobi needs a n".into())); }
+            let a: i64 = tokens[0].parse().map_err(|_| crate::error::MathError::Eval("bad a".into()))?;
+            let n: i64 = tokens[1].parse().map_err(|_| crate::error::MathError::Eval("bad n".into()))?;
+            Ok(Some(numtheory::jacobi_symbol(a, n).to_string()))
+        }
+        "cf" => {
+            if tokens.len() < 2 { return Err(crate::error::MathError::Eval("cf needs p q".into())); }
+            let p: i64 = tokens[0].parse().map_err(|_| crate::error::MathError::Eval("bad p".into()))?;
+            let q: i64 = tokens[1].parse().map_err(|_| crate::error::MathError::Eval("bad q".into()))?;
+            let cf = numtheory::continued_fraction(p, q)?;
+            let strs: Vec<String> = cf.iter().map(|v| v.to_string()).collect();
+            Ok(Some(format!("[{}]", strs.join("; "))))
+        }
+        "diophantine" => {
+            if tokens.len() < 3 { return Err(crate::error::MathError::Eval("diophantine needs a b c".into())); }
+            let a: i64 = tokens[0].parse().map_err(|_| crate::error::MathError::Eval("bad a".into()))?;
+            let b: i64 = tokens[1].parse().map_err(|_| crate::error::MathError::Eval("bad b".into()))?;
+            let c: i64 = tokens[2].parse().map_err(|_| crate::error::MathError::Eval("bad c".into()))?;
+            let (x, y) = numtheory::diophantine(a, b, c)?;
+            Ok(Some(format!("x = {}, y = {} (a*x + b*y = {})", x, y, a * x + b * y)))
+        }
+        "dlog" => {
+            if tokens.len() < 3 { return Err(crate::error::MathError::Eval("dlog needs g h p".into())); }
+            let g: u64 = tokens[0].parse().map_err(|_| crate::error::MathError::Eval("bad g".into()))?;
+            let h: u64 = tokens[1].parse().map_err(|_| crate::error::MathError::Eval("bad h".into()))?;
+            let p: u64 = tokens[2].parse().map_err(|_| crate::error::MathError::Eval("bad p".into()))?;
+            match numtheory::discrete_log(g, h, p) {
+                Some(x) => Ok(Some(format!("x = {} (g^x mod p = {})", x, numtheory::mod_pow(g, x, p)))),
+                None => Ok(Some("(no discrete log found)".into())),
+            }
+        }
         _ => Err(crate::error::MathError::Eval(format!("unknown op: {}", op))),
     }
+}
+
+fn do_cholesky(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let c = m.cholesky()?;
+    let l = c.l_factor();
+    let reconstructed = c.reconstruct();
+    let rows = m.rows;
+    let cols = m.cols;
+    let mut max_diff = 0.0_f64;
+    for i in 0..rows {
+        for j in 0..cols {
+            let d = (m[(i, j)] - reconstructed[(i, j)]).abs();
+            if d > max_diff {
+                max_diff = d;
+            }
+        }
+    }
+    Ok(Some(format!(
+        "cholesky ok (max reconstruction error = {:.2e})\nL =\n{}",
+        max_diff, l
+    )))
+}
+
+fn do_eig(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let result = m.power_iteration(crate::matrix::PowerIterOptions::default())?;
+    let v_strs: Vec<String> = result.vector.iter().map(|x| format!("{:.6}", x)).collect();
+    Ok(Some(format!(
+        "λ ≈ {} (dominant eigenvalue)\nv = [{}]",
+        format_value(result.value),
+        v_strs.join(", ")
+    )))
+}
+
+fn do_chebyshev(rest: &str) -> Result<Option<String>> {
+    // Format: "n x" — Chebyshev T_n(x). Or "n" alone for an array of nodes.
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("chebyshev needs n [x]".into()));
+    }
+    let n: u32 = tokens[0].parse().map_err(|_| crate::error::MathError::Eval("bad n".into()))?;
+    if tokens.len() == 1 {
+        let nodes = crate::interpolate::chebyshev_nodes(n as usize);
+        let strs: Vec<String> = nodes.iter().map(|x| format!("{:.6}", x)).collect();
+        return Ok(Some(format!("T_{} nodes: [{}]", n, strs.join(", "))));
+    }
+    let x: f64 = tokens[1].parse().map_err(|_| crate::error::MathError::Eval("bad x".into()))?;
+    Ok(Some(format!(
+        "T_{}({}) = {}",
+        n, x, format_value(crate::interpolate::chebyshev_t(n, x))
+    )))
+}
+
+fn do_romberg(rest: &str) -> Result<Option<String>> {
+    // Format: "<expr> a b [levels=8]"
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return Err(crate::error::MathError::Eval("romberg needs: <expr> a b [levels]".into()));
+    }
+    let b: f64 = tokens[tokens.len() - 1].parse()
+        .map_err(|_| crate::error::MathError::Eval("bad b".into()))?;
+    let a: f64 = tokens[tokens.len() - 2].parse()
+        .map_err(|_| crate::error::MathError::Eval("bad a".into()))?;
+    let levels: usize = if tokens.len() >= 4 {
+        tokens[tokens.len() - 3].parse().unwrap_or(8)
+    } else {
+        8
+    };
+    let levels = if tokens.len() == 3 { 8 } else if tokens.len() == 4 { 8 } else { levels };
+    let expr_end = if tokens.len() >= 4 { tokens.len() - 3 } else { tokens.len() - 2 };
+    let expr_src = tokens[..expr_end].join(" ");
+    let e = Parser::parse(&expr_src)?;
+    let ctx2 = Context::standard();
+    let f = move |x: f64| {
+        let mut cx = ctx2.clone();
+        cx.set("x", x);
+        crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
+    };
+    let v = crate::calculus::integrate_romberg(f, a, b, levels)?;
+    Ok(Some(format!("∫ ({}, {}; levels = {}) = {}", format_value(a), format_value(b), levels, format_value(v))))
+}
+
+fn do_svd(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let svd = m.svd()?;
+    let s_strs: Vec<String> = svd.singular_values.iter().map(|s| format!("{:.6}", s)).collect();
+    Ok(Some(format!(
+        "σ = [{}]\nU = {} rows × {} cols\nV = {}",
+        s_strs.join(", "),
+        svd.u.rows, svd.u.cols, svd.v
+    )))
+}
+
+fn do_legendre(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("legendre needs: n [x]".into()));
+    }
+    let n: u32 = tokens[0].parse().map_err(|_| crate::error::MathError::Eval("bad n".into()))?;
+    if tokens.len() == 1 {
+        // Show first few Gauss–Legendre nodes for order n.
+        let (nodes, weights) = crate::interpolate::gauss_legendre(n as usize);
+        let n_strs: Vec<String> = nodes.iter().map(|x| format!("{:.4}", x)).collect();
+        let w_strs: Vec<String> = weights.iter().map(|w| format!("{:.4}", w)).collect();
+        return Ok(Some(format!(
+            "Gauss–Legendre {} nodes:\n  x = [{}]\n  w = [{}]",
+            n, n_strs.join(", "), w_strs.join(", ")
+        )));
+    }
+    let x: f64 = tokens[1].parse().map_err(|_| crate::error::MathError::Eval("bad x".into()))?;
+    Ok(Some(format!(
+        "P_{}({}) = {}",
+        n, x, format_value(crate::interpolate::legendre_p(n, x))
+    )))
+}
+
+fn do_integrate_sym(rest: &str, _ctx: &mut Context) -> Result<Option<String>> {
+    // Format: "<expr> [var]" — symbolic integration.
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("integrate needs: <expr> [var]".into()));
+    }
+    let var = if tokens.len() >= 2 {
+        tokens[tokens.len() - 1].to_string()
+    } else {
+        "x".to_string()
+    };
+    let expr_end = if tokens.len() >= 2
+        && tokens[tokens.len() - 1].len() == 1
+        && tokens[tokens.len() - 1].chars().all(|c| c.is_ascii_alphabetic())
+    {
+        tokens.len() - 1
+    } else {
+        tokens.len()
+    };
+    let expr_src = tokens[..expr_end].join(" ");
+    let e = Parser::parse(&expr_src)?;
+    let result = crate::symbolic::integrate(&e, &var)?;
+    Ok(Some(format!("∫ {} d{} = {}", expr_src, var, result)))
 }
 
 fn parse_u64_single(tokens: &[&str]) -> Result<u64> {
@@ -546,6 +760,72 @@ fn do_poly_roots(rest: &str) -> Result<Option<String>> {
         let lines: Vec<String> = r.iter().map(|(x, fx)| format!("x = {}  (f = {})", format_value(*x), format_value(*fx))).collect();
         Ok(Some(lines.join("\n")))
     }
+}
+
+/// Parse a matrix from `rest` formatted as "1 2 3 | 4 5 6" (rows separated by |).
+fn parse_matrix(rest: &str) -> Result<crate::matrix::Matrix> {
+    let mut rows: Vec<Vec<f64>> = Vec::new();
+    for row_src in rest.split('|') {
+        let row_src = row_src.trim();
+        if row_src.is_empty() {
+            continue;
+        }
+        let row: Vec<f64> = row_src
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| {
+                s.trim().parse::<f64>()
+                    .map_err(|_| crate::error::MathError::Eval(format!("not a number: {}", s)))
+            })
+            .collect::<Result<_>>()?;
+        rows.push(row);
+    }
+    crate::matrix::Matrix::from_rows(&rows)
+}
+
+fn do_lu(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let fact = m.lu()?;
+    let det = fact.determinant();
+    let inv = fact.inverse()?;
+    Ok(Some(format!(
+        "det = {}\nA⁻¹ =\n{}",
+        format_value(det),
+        inv
+    )))
+}
+
+fn do_rank(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let r = m.rank(1e-10);
+    Ok(Some(format!("rank = {}", r)))
+}
+
+fn do_spline(rest: &str) -> Result<Option<String>> {
+    // Format: "x1 y1 x2 y2 ...  [eval x_value]"
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 3 || tokens.len() % 2 == 0 {
+        return Err(crate::error::MathError::Eval(
+            "spline expects: x1 y1 x2 y2 ... [x_at]".into(),
+        ));
+    }
+    let pts: Vec<(f64, f64)> = (0..(tokens.len() / 2))
+        .map(|i| {
+            let x: f64 = tokens[2 * i].parse().map_err(|_| {
+                crate::error::MathError::Eval(format!("bad x at {}", tokens[2 * i]))
+            })?;
+            let y: f64 = tokens[2 * i + 1].parse().map_err(|_| {
+                crate::error::MathError::Eval(format!("bad y at {}", tokens[2 * i + 1]))
+            })?;
+            Ok((x, y))
+        })
+        .collect::<Result<_>>()?;
+    let sp = crate::interpolate::CubicSpline::new(&pts)?;
+    let last = tokens.last().unwrap();
+    let x_at: f64 = last.parse().map_err(|_| {
+        crate::error::MathError::Eval(format!("bad x_at: {}", last))
+    })?;
+    Ok(Some(format!("spline({}) = {}", x_at, format_value(sp.eval(x_at)))))
 }
 
 fn parse_f64_list(rest: &str) -> Result<Vec<f64>> {
@@ -630,7 +910,7 @@ fn format_value(v: f64) -> String {
 
 const HELP: &str = "\
 commands:
-  <expr>              evaluate (e.g. sin(pi/4), gamma(0.5), erf(1.0))
+  <expr>              evaluate (e.g. sin(pi/4), gamma(0.5), bessel_j0(5))
   let x = <expr>      bind a variable
   fn f(x) = <expr>    define a function
   diff <expr> [var]   symbolic derivative
@@ -644,6 +924,19 @@ commands:
   conv <a...> x <b...>  convolution of two signals
   stats <numbers...>  descriptive statistics
   poly-roots <coeffs...>  polynomial roots (highest degree first)
+  lu <rows>           matrix LU decomposition (rows separated by '|')
+                      computes determinant and inverse
+  rank <rows>         matrix rank
+  spline x1 y1 x2 y2 ... x_at
+                      natural cubic spline interpolant at x_at
+  cholesky <rows>     Cholesky decomposition of symmetric positive-definite
+  eig <rows>          dominant eigenvalue + eigenvector (power iteration)
+  svd <rows>          singular value decomposition
+  chebyshev n [x]     Chebyshev T_n(x), or T_n nodes on [-1, 1]
+  legendre n [x]      Legendre P_n(x), or Gauss–Legendre n-node weights
+  integrate <expr> [var]
+                      symbolic integration of <expr> with respect to var
+  romberg <expr> a b  numerical integral via Romberg (Richardson)
   gcd <n...>          greatest common divisor
   lcm <n...>          least common multiple
   is-prime <n>        primality test
@@ -652,6 +945,10 @@ commands:
   binom <n> <k>       binomial coefficient
   fact <n>            factorial
   mr-prime <n> [r]    Miller–Rabin primality test
+  jacobi <a> <n>      Jacobi symbol (a/n)
+  cf <p> <q>          continued fraction of p/q
+  diophantine <a> <b> <c>  solve a*x + b*y = c
+  dlog <g> <h> <p>    discrete logarithm x: g^x ≡ h (mod p)
   vars / funcs        show bindings
   clear               reset context
   help                this help
@@ -660,7 +957,7 @@ constants: pi, e, tau, inf
 functions: sin, cos, tan, asin, acos, atan, sinh, cosh, tanh,
            exp, ln, log, log2, log10, sqrt, cbrt, abs, floor,
            ceil, round, sign, min, max, pow, mod, fract,
-           gamma, erf, erfc, sinc
+           gamma, erf, erfc, sinc, bessel_j0, bessel_j1, bessel_j
 ";
 
 /// Suppresses an unused warning for the `Cow` import in environments where
