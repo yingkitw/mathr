@@ -220,6 +220,247 @@ fn polynomial_eval(coeffs: &[f64], x: f64) -> f64 {
     acc
 }
 
+// ---------------------------------------------------------------------------
+// Polynomial root isolation via the Vincent–Akritas–Strzebonski (VAS) method.
+//
+// Given a polynomial with integer coefficients, finds disjoint open intervals
+// each containing exactly one real root.  Uses Descartes' rule of signs on
+// Möbius-transformed polynomials with exact i128 arithmetic.
+// ---------------------------------------------------------------------------
+
+/// Count the number of sign variations (sign changes) in a coefficient
+/// sequence, ignoring zeros.
+fn count_sign_variations(coeffs: &[i128]) -> usize {
+    let mut count = 0;
+    let mut prev_sign: i8 = 0;
+    for &c in coeffs {
+        let sign = if c > 0 { 1 } else if c < 0 { -1 } else { 0 };
+        if sign != 0 {
+            if prev_sign != 0 && sign != prev_sign {
+                count += 1;
+            }
+            prev_sign = sign;
+        }
+    }
+    count
+}
+
+/// Compute p(x + c) for a polynomial with integer coefficients
+/// (highest-degree-first ordering).
+/// Uses Horner's method: process from the leading coefficient.
+fn poly_translate(coeffs: &[i128], c: i128) -> Vec<i128> {
+    let n = coeffs.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // Horner: r = a_n; r = r*(x+c) + a_{n-1}; ... ; r = r*(x+c) + a_0
+    // r * (x + c) in highest-degree-first:
+    //   r*x appends 0 at the end (shift up one degree)
+    //   c*r prepends 0 at the front (same degree, padded)
+    //   sum: new[0] = old[0], new[j] = old[j] + c*old[j-1], new[len] = c*old[len-1]
+    let mut result = vec![coeffs[0]];
+    for i in 1..n {
+        let len = result.len();
+        let mut new_result = vec![0i128; len + 1];
+        new_result[0] = result[0];
+        for j in 1..len {
+            new_result[j] = result[j] + c.saturating_mul(result[j - 1]);
+        }
+        new_result[len] = c.saturating_mul(result[len - 1]);
+        // Add coeffs[i] to the constant term (last element in highest-degree-first)
+        new_result[len] += coeffs[i];
+        result = new_result;
+    }
+    result
+}
+
+/// Compute x^n * p(1/x) — reverses the coefficient list.
+/// If p(x) = a_0 + a_1*x + ... + a_n*x^n, then x^n * p(1/x) = a_n + a_{n-1}*x + ... + a_0*x^n.
+fn poly_reciprocal(coeffs: &[i128]) -> Vec<i128> {
+    coeffs.iter().rev().copied().collect()
+}
+
+/// Remove leading zeros (high-degree zero coefficients).
+fn trim_leading_zeros(coeffs: &[i128]) -> Vec<i128> {
+    let mut start = 0;
+    while start < coeffs.len() - 1 && coeffs[start] == 0 {
+        start += 1;
+    }
+    coeffs[start..].to_vec()
+}
+
+/// Compute a Cauchy bound: an integer upper bound on the absolute value of
+/// all real roots of the polynomial.
+fn cauchy_bound(coeffs: &[i128]) -> i128 {
+    let n = coeffs.len();
+    if n <= 1 {
+        return 0;
+    }
+    let an = coeffs[0].abs();
+    if an == 0 {
+        return 1;
+    }
+    let mut max_ratio: f64 = 0.0;
+    for i in 1..n {
+        let ratio = coeffs[i].abs() as f64 / an as f64;
+        if ratio > max_ratio {
+            max_ratio = ratio;
+        }
+    }
+    let bound = max_ratio + 1.0;
+    bound.ceil() as i128
+}
+
+/// Recursively isolate positive roots of a polynomial.
+///
+/// `coeffs` are the polynomial coefficients (highest degree first).
+/// The Möbius transformation (a, b, c, d) maps the current variable t
+/// to the original x via x = (a*t + b) / (c*t + d).
+/// When V(coeffs) = 1, the root is in the interval (b/d, a/c).
+/// `check_zero` controls whether to detect roots at t=0 (enabled for the
+/// right/shift branch to avoid duplicate detection at split points).
+fn isolate_positive_roots(
+    coeffs: &[i128],
+    a: i128,
+    b: i128,
+    c: i128,
+    d: i128,
+    depth: usize,
+    check_zero: bool,
+) -> Vec<(f64, f64)> {
+    if depth > 200 {
+        return Vec::new(); // safety limit
+    }
+
+    let trimmed = trim_leading_zeros(coeffs);
+    let n = trimmed.len();
+
+    // Check if 0 is a root (constant term is zero).
+    if check_zero && n > 1 && trimmed[n - 1] == 0 {
+        let root = b as f64 / d as f64;
+        let mut results = vec![(root, root)];
+
+        // Remove the factor t: divide by t (drop the trailing zero).
+        let reduced = &trimmed[..n - 1];
+        let v_reduced = count_sign_variations(reduced);
+        if v_reduced > 0 {
+            results.extend(isolate_positive_roots(reduced, a, b, c, d, depth + 1, true));
+        } else if reduced.len() > 1 && reduced[reduced.len() - 1] == 0 {
+            // Another root at 0 (repeated root).
+            results.extend(isolate_positive_roots(reduced, a, b, c, d, depth + 1, true));
+        }
+        return results;
+    }
+
+    let v = count_sign_variations(&trimmed);
+
+    if v == 0 {
+        return Vec::new();
+    }
+
+    if v == 1 {
+        // Exactly one positive root in (0, ∞) for the transformed variable t.
+        // This maps to x in (b/d, a/c) via the Möbius transformation.
+        let lo = b as f64 / d as f64;
+        let hi = if c == 0 { f64::INFINITY } else { a as f64 / c as f64 };
+        let (lo, hi) = if lo < hi { (lo, hi) } else { (hi, lo) };
+        return vec![(lo, hi)];
+    }
+
+    let mut results = Vec::new();
+
+    // Split: check (0, 1) via reciprocal, and (1, ∞) via shift.
+    // For (1, ∞): transform p(x) → p(x + 1), new Möbius: (a, a+b, c, c+d)
+    // check_zero=true because a root at t=0 here maps to the split point
+    // and is a genuine root in the right interval.
+    let shifted = poly_translate(&trimmed, 1);
+    results.extend(isolate_positive_roots(
+        &shifted,
+        a,
+        a + b,
+        c,
+        c + d,
+        depth + 1,
+        true,
+    ));
+
+    // For (0, 1): map (0, 1) to (0, ∞) via x → 1/(t+1).
+    // q(t) = reciprocal(p)(t+1) — first reverse coefficients, then shift by 1.
+    // New Möbius: (b, a+b, d, c+d)
+    // check_zero=false because a root at t=0 here maps to the split point
+    // which is already handled by the right branch.
+    let recip = poly_reciprocal(&trimmed);
+    let shifted_recip = poly_translate(&recip, 1);
+    results.extend(isolate_positive_roots(
+        &shifted_recip,
+        b,
+        a + b,
+        d,
+        c + d,
+        depth + 1,
+        false,
+    ));
+
+    results
+}
+
+/// Isolate all real roots of a polynomial with integer coefficients.
+///
+/// Returns a list of disjoint open intervals `(lo, hi)`, each containing
+/// exactly one real root.  Uses the Vincent–Akritas–Strzebonski method
+/// with exact i128 arithmetic.
+///
+/// Coefficients are given highest-degree-first: `p(x) = coeffs[0]*x^n + ... + coeffs[n]`.
+pub fn isolate_real_roots(coeffs: &[i64]) -> Result<Vec<(f64, f64)>> {
+    if coeffs.is_empty() {
+        return Err(MathError::InvalidArgument("isolate_real_roots: empty coefficients".into()));
+    }
+    let n = coeffs.len() - 1;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Convert to i128.
+    let p: Vec<i128> = coeffs.iter().map(|&x| x as i128).collect();
+    let p = trim_leading_zeros(&p);
+
+    if p.len() <= 1 {
+        return Ok(Vec::new());
+    }
+
+    // Compute Cauchy bound (used for informational purposes; the VAS
+    // algorithm converges without it, but it could be used for an initial
+    // shift to speed up convergence).
+    let _bound = cauchy_bound(&p);
+
+    let mut all_roots = Vec::new();
+
+    // Positive roots (including 0): search (0, ∞) with identity Möbius (1, 0, 0, 1).
+    // The root-at-0 case is handled inside isolate_positive_roots.
+    let pos_roots = isolate_positive_roots(&p, 1, 0, 0, 1, 0, true);
+    all_roots.extend(pos_roots);
+
+    // Negative roots: use p(-x) with identity Möbius (1, 0, 0, 1).
+    // Root at 0 is already found above, so skip it here.
+    let mut neg_coeffs: Vec<i128> = p.iter().enumerate().map(|(i, &c)| {
+        if (p.len() - 1 - i) % 2 == 0 { c } else { -c }
+    }).collect();
+    neg_coeffs = trim_leading_zeros(&neg_coeffs);
+    if neg_coeffs.len() > 1 {
+        let neg_roots = isolate_positive_roots(&neg_coeffs, 1, 0, 0, 1, 0, true);
+        // Negate the intervals to get negative roots, skipping root at 0.
+        for (lo, hi) in neg_roots {
+            if lo > 0.0 || hi > 0.0 {
+                all_roots.push((-hi, -lo));
+            }
+        }
+    }
+
+    // Sort and return.
+    all_roots.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(all_roots)
+}
+
 /// Solve a system of `n` nonlinear equations in `n` unknowns using
 /// Newton's method with a finite-difference Jacobian.
 ///
@@ -371,5 +612,82 @@ mod tests {
         assert!((sol[0] - 1.0).abs() < 1e-6, "x = {}", sol[0]);
         assert!((sol[1] - 2.0).abs() < 1e-6, "y = {}", sol[1]);
         assert!((sol[2] - 3.0).abs() < 1e-6, "z = {}", sol[2]);
+    }
+
+    #[test]
+    fn isolate_roots_quadratic() {
+        // (x-2)(x-3) = x^2 - 5x + 6
+        let intervals = isolate_real_roots(&[1, -5, 6]).unwrap();
+        assert_eq!(intervals.len(), 2, "expected 2 roots, got {:?}", intervals);
+        // Each interval should contain exactly one root.
+        for (lo, hi) in &intervals {
+            assert!(
+                (lo <= &2.0 && hi >= &2.0) || (lo <= &3.0 && hi >= &3.0),
+                "interval ({}, {}) should contain 2 or 3", lo, hi
+            );
+        }
+    }
+
+    #[test]
+    fn isolate_roots_cubic() {
+        // (x-1)(x-2)(x-3) = x^3 - 6x^2 + 11x - 6
+        let intervals = isolate_real_roots(&[1, -6, 11, -6]).unwrap();
+        assert_eq!(intervals.len(), 3, "expected 3 roots, got {:?}", intervals);
+        let roots = vec![1.0, 2.0, 3.0];
+        for (i, r) in roots.iter().enumerate() {
+            let (lo, hi) = intervals[i];
+            assert!(lo <= *r && *r <= hi, "root {} not in interval ({}, {})", r, lo, hi);
+        }
+    }
+
+    #[test]
+    fn isolate_roots_with_negatives() {
+        // (x+2)(x-1)(x-3) = x^3 - 2x^2 - 5x + 6
+        let intervals = isolate_real_roots(&[1, -2, -5, 6]).unwrap();
+        assert_eq!(intervals.len(), 3, "expected 3 roots, got {:?}", intervals);
+        let roots = vec![-2.0, 1.0, 3.0];
+        for (i, r) in roots.iter().enumerate() {
+            let (lo, hi) = intervals[i];
+            assert!(lo <= *r && *r <= hi, "root {} not in interval ({}, {})", r, lo, hi);
+        }
+    }
+
+    #[test]
+    fn isolate_roots_no_real_roots() {
+        // x^2 + 1 has no real roots
+        let intervals = isolate_real_roots(&[1, 0, 1]).unwrap();
+        assert_eq!(intervals.len(), 0, "expected 0 roots, got {:?}", intervals);
+    }
+
+    #[test]
+    fn isolate_roots_root_at_zero() {
+        // x * (x - 1) = x^2 - x
+        let intervals = isolate_real_roots(&[1, -1, 0]).unwrap();
+        assert_eq!(intervals.len(), 2, "expected 2 roots, got {:?}", intervals);
+        // One root should be at 0
+        assert!(intervals[0].0 <= 0.0 && 0.0 <= intervals[0].1,
+            "root 0 not in interval ({}, {})", intervals[0].0, intervals[0].1);
+    }
+
+    #[test]
+    fn isolate_roots_repeated() {
+        // (x-1)^2 = x^2 - 2x + 1 — repeated root at 1
+        let intervals = isolate_real_roots(&[1, -2, 1]).unwrap();
+        // Descartes' rule counts repeated roots as one interval
+        assert!(intervals.len() >= 1, "expected at least 1 root, got {:?}", intervals);
+        let (lo, hi) = intervals[0];
+        assert!(lo <= 1.0 && 1.0 <= hi, "root 1 not in interval ({}, {})", lo, hi);
+    }
+
+    #[test]
+    fn isolate_roots_higher_degree() {
+        // (x+1)(x-1)(x-2)(x+3) = x^4 + x^3 - 7x^2 - x + 6
+        let intervals = isolate_real_roots(&[1, 1, -7, -1, 6]).unwrap();
+        assert_eq!(intervals.len(), 4, "expected 4 roots, got {:?}", intervals);
+        let roots = vec![-3.0, -1.0, 1.0, 2.0];
+        for (i, r) in roots.iter().enumerate() {
+            let (lo, hi) = intervals[i];
+            assert!(lo <= *r && *r <= hi, "root {} not in interval ({}, {})", r, lo, hi);
+        }
     }
 }

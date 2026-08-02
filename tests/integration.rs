@@ -452,6 +452,98 @@ fn matrix_inverse_large_performance() {
 }
 
 #[test]
+fn matrix_symmetric_eig_decomposition() {
+    let a = Matrix::from_rows(&[
+        vec![4.0, 1.0, 2.0],
+        vec![1.0, 3.0, 0.0],
+        vec![2.0, 0.0, 5.0],
+    ]).unwrap();
+    let (vals, vecs) = a.symmetric_eig().unwrap();
+
+    // Eigenvalues should be sorted ascending.
+    assert!(vals[0] <= vals[1] && vals[1] <= vals[2]);
+
+    // Verify A v = λ v for each eigenvector.
+    for j in 0..3 {
+        let v: Vec<f64> = (0..3).map(|i| vecs[(i, j)]).collect();
+        let av = a.mul_vec(&v).unwrap();
+        for i in 0..3 {
+            assert!((av[i] - vals[j] * v[i]).abs() < 1e-8,
+                "A v_{} != λ_{} v_{} at i={}", j, j, j, i);
+        }
+    }
+
+    // Verify eigenvectors are orthonormal.
+    for i in 0..3 {
+        for j in 0..3 {
+            let dot: f64 = (0..3).map(|k| vecs[(k, i)] * vecs[(k, j)]).sum();
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!((dot - expected).abs() < 1e-8,
+                "v_{}·v_{} = {}, expected {}", i, j, dot, expected);
+        }
+    }
+}
+
+#[test]
+fn matrix_symmetric_eig_cli() {
+    // Test the REPL dispatch for symlig
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("symlig 2 1 | 1 2", ctx).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("eigenvalues"));
+    // eigenvalues of [[2,1],[1,2]] are 1 and 3
+    assert!(output.contains(" 1") || output.contains("[1,") || output.contains("[1 "),
+            "output should contain eigenvalue 1: {}", output);
+    assert!(output.contains(" 3") || output.contains("[3,") || output.contains(", 3"),
+            "output should contain eigenvalue 3: {}", output);
+}
+
+#[test]
+fn matrix_hessenberg_cli() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("hessenberg 1 2 3 | 4 5 6 | 7 8 10", ctx).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("Hessenberg"));
+    assert!(output.contains("orthogonal"));
+}
+
+#[test]
+fn matrix_schur_cli() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("schur 4 1 2 | 1 3 0 | 2 0 5", ctx).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("triangular"));
+    assert!(output.contains("orthogonal"));
+}
+
+#[test]
+fn isolate_roots_cli() {
+    let ctx = mathr::eval::Context::standard();
+    // (x-1)(x-2)(x-3) = x^3 - 6x^2 + 11x - 6
+    let result = mathr::repl::dispatch_str("isolate-roots 1 -6 11 -6", ctx).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("x"), "output should contain roots: {}", output);
+    // Should find 3 roots
+    assert!(output.lines().count() >= 3, "expected 3 roots, got: {}", output);
+}
+
+#[test]
+fn isolate_roots_api() {
+    // (x+2)(x-1)(x-3) = x^3 - 2x^2 - 5x + 6
+    let intervals = mathr::solver::isolate_real_roots(&[1, -2, -5, 6]).unwrap();
+    assert_eq!(intervals.len(), 3);
+    let roots = [-2.0, 1.0, 3.0];
+    for (i, r) in roots.iter().enumerate() {
+        let (lo, hi) = intervals[i];
+        assert!(lo <= *r && *r <= hi, "root {} not in ({}, {})", r, lo, hi);
+    }
+}
+
+#[test]
 fn next_pow2_correctness() {
     assert_eq!(fft::next_pow2(0), 1);
     assert_eq!(fft::next_pow2(1), 1);

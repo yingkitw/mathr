@@ -22,7 +22,9 @@
 //!   multi- and scatter-plot variants.
 //! - **Matrix operations** ([`matrix`]): arithmetic, determinant, inverse,
 //!   linear system solving, trace, LU decomposition with partial pivoting,
-//!   and rank estimation.
+//!   rank estimation, Cholesky decomposition, SVD, power iteration, and
+//!   symmetric eigenvalue decomposition via the QR algorithm, Hessenberg
+//!   decomposition, and real Schur decomposition.
 //! - **Statistics** ([`stats`]): mean, median, variance, stddev, quartiles,
 //!   correlation, linear regression.
 //! - **Number theory** ([`numtheory`]): GCD, LCM, primality, factorization,
@@ -84,7 +86,7 @@ pub mod prelude {
     };
     pub use crate::ode::{euler, rk4, rk4_system, rkf45};
     pub use crate::solver::{
-        bisect, newton_central, newton_system, polynomial_roots, secant, SolveOptions,
+        bisect, isolate_real_roots, newton_central, newton_system, polynomial_roots, secant, SolveOptions,
     };
     pub use crate::special::{bessel_j0, bessel_j1, bessel_jn, beta, erfc, erf, gamma, log_gamma, sinc};
     pub use crate::symbolic::integrate;

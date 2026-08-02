@@ -12,12 +12,13 @@
 | `solve` | `mathr solve <expr> [--var x] [--guess 0] [--bisect A B] [--max-iter 100] [--tol 1e-10]` | Root finding |
 | `solve-system` | `mathr solve-system <sys> [--guess x0,y0,...]` | Newton's method for nonlinear systems |
 | `poly-roots` | `mathr poly-roots <coeffs...>` | Polynomial roots (Durand–Kerner) |
+| `isolate-roots` | `mathr isolate-roots <ints...>` | Real root isolation (VAS, integer coefficients) |
 | `plot` | `mathr plot <expr> [-o path] [--var x] [--a -τ] [--b τ] [--samples 800]` | PNG plot |
 | `fft` | `mathr fft <samples...> [--complex] [--inverse] [--magnitude] [--power]` | FFT |
 | `conv` | `mathr conv <a...> <b...>` | FFT convolution of two signals |
 | `taylor` | `mathr taylor <expr> [--var x] [--around 0] [--order 5]` | Taylor series |
 | `stats` | `mathr stats <data...>` | Descriptive statistics |
-| `matrix` | `mathr matrix <op> <rows...>` | `lu`/`cholesky`/`svd`/`eig`/`rank`/`solve` |
+| `matrix` | `mathr matrix <op> <rows...>` | `lu`/`cholesky`/`svd`/`eig`/`symlig`/`hessenberg`/`schur`/`rank`/`solve` |
 | `interp` | `mathr interp <op> ...` | `lagrange`/`newton`/`spline`/`chebyshev`/`legendre` |
 | `gcd` | `mathr gcd <n1> <n2> [...]` | GCD of integers |
 | `lcm` | `mathr lcm <n1> <n2> [...]` | LCM of integers |
@@ -96,10 +97,14 @@ args   := expr (',' expr)*
 | `conv <a...> x <b...>` | Convolution |
 | `stats <numbers...>` | Descriptive statistics |
 | `poly-roots <coeffs...>` | Polynomial roots |
+| `isolate-roots <ints...>` | Real root isolation (VAS) |
 | `lu <rows...>` | LU decomposition (rows separated by `\|`) |
 | `cholesky <rows...>` | Cholesky decomposition |
 | `svd <rows...>` | Singular value decomposition |
-| `eig <rows...>` | Dominant eigenpair |
+| `eig <rows...>` | Dominant eigenpair (power iteration) |
+| `symlig <rows...>` | Full symmetric eigenvalue decomposition (QR algorithm) |
+| `hessenberg <rows...>` | Hessenberg decomposition `A = Q·H·Qᵀ` |
+| `schur <rows...>` | Real Schur decomposition `A = Q·T·Qᵀ` |
 | `rank <rows...>` | Matrix rank |
 | `spline x1 y1 x2 y2 ... x_at` | Cubic spline at `x_at` |
 | `chebyshev n [x]` | Chebyshev `T_n(x)` (or `n` nodes) |

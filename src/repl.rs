@@ -183,6 +183,9 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("poly-roots ") {
         return do_poly_roots(rest.trim());
     }
+    if let Some(rest) = line.strip_prefix("isolate-roots ") {
+        return do_isolate_roots(rest.trim());
+    }
     if let Some(rest) = line.strip_prefix("lu ") {
         return do_lu(rest.trim());
     }
@@ -209,6 +212,15 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("eig ") {
         return do_eig(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("symlig ") {
+        return do_symlig(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("hessenberg ") {
+        return do_hessenberg(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("schur ") {
+        return do_schur(rest.trim());
     }
     if let Some(rest) = line.strip_prefix("chebyshev ") {
         return do_chebyshev(rest.trim());
@@ -597,6 +609,56 @@ fn do_eig(rest: &str) -> Result<Option<String>> {
     )))
 }
 
+fn do_symlig(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let (eigenvalues, eigenvectors) = m.symmetric_eig()?;
+    let val_strs: Vec<String> = eigenvalues.iter().map(|x| format_value(*x)).collect();
+    let mut rows: Vec<String> = Vec::new();
+    for i in 0..eigenvectors.rows {
+        let row: Vec<String> = (0..eigenvectors.cols)
+            .map(|j| format!("{:.6}", eigenvectors[(i, j)]))
+            .collect();
+        rows.push(format!("[{}]", row.join(", ")));
+    }
+    Ok(Some(format!(
+        "eigenvalues (ascending):\n  [{}]\neigenvectors (columns):\n{}",
+        val_strs.join(", "),
+        rows.join("\n")
+    )))
+}
+
+fn do_hessenberg(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let (h, q) = m.hessenberg()?;
+    let mut out = String::from("H (upper Hessenberg):\n");
+    for i in 0..h.rows {
+        let row: Vec<String> = (0..h.cols).map(|j| format!("{:.6}", h[(i, j)])).collect();
+        out.push_str(&format!("[{}]\n", row.join(", ")));
+    }
+    out.push_str("Q (orthogonal):\n");
+    for i in 0..q.rows {
+        let row: Vec<String> = (0..q.cols).map(|j| format!("{:.6}", q[(i, j)])).collect();
+        out.push_str(&format!("[{}]\n", row.join(", ")));
+    }
+    Ok(Some(out))
+}
+
+fn do_schur(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let (t, q) = m.schur()?;
+    let mut out = String::from("T (quasi-upper triangular):\n");
+    for i in 0..t.rows {
+        let row: Vec<String> = (0..t.cols).map(|j| format!("{:.6}", t[(i, j)])).collect();
+        out.push_str(&format!("[{}]\n", row.join(", ")));
+    }
+    out.push_str("Q (orthogonal):\n");
+    for i in 0..q.rows {
+        let row: Vec<String> = (0..q.cols).map(|j| format!("{:.6}", q[(i, j)])).collect();
+        out.push_str(&format!("[{}]\n", row.join(", ")));
+    }
+    Ok(Some(out))
+}
+
 fn do_chebyshev(rest: &str) -> Result<Option<String>> {
     // Format: "n x" — Chebyshev T_n(x). Or "n" alone for an array of nodes.
     let tokens: Vec<&str> = rest.split_whitespace().collect();
@@ -758,6 +820,29 @@ fn do_poly_roots(rest: &str) -> Result<Option<String>> {
         Ok(Some("(no real roots found)".into()))
     } else {
         let lines: Vec<String> = r.iter().map(|(x, fx)| format!("x = {}  (f = {})", format_value(*x), format_value(*fx))).collect();
+        Ok(Some(lines.join("\n")))
+    }
+}
+
+fn do_isolate_roots(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("isolate-roots needs integer coefficients".into()));
+    }
+    let coeffs: Vec<i64> = tokens.iter()
+        .map(|t| t.parse::<i64>().map_err(|_| crate::error::MathError::Eval(format!("invalid integer: {}", t))))
+        .collect::<crate::error::Result<_>>()?;
+    let intervals = crate::solver::isolate_real_roots(&coeffs)?;
+    if intervals.is_empty() {
+        Ok(Some("(no real roots found)".into()))
+    } else {
+        let lines: Vec<String> = intervals.iter().map(|(lo, hi)| {
+            if (lo - hi).abs() < 1e-10 {
+                format!("x = {}", format_value(*lo))
+            } else {
+                format!("x in ({}, {})", format_value(*lo), format_value(*hi))
+            }
+        }).collect();
         Ok(Some(lines.join("\n")))
     }
 }
@@ -924,6 +1009,7 @@ commands:
   conv <a...> x <b...>  convolution of two signals
   stats <numbers...>  descriptive statistics
   poly-roots <coeffs...>  polynomial roots (highest degree first)
+  isolate-roots <ints...>  real root isolation (VAS, integer coefficients)
   lu <rows>           matrix LU decomposition (rows separated by '|')
                       computes determinant and inverse
   rank <rows>         matrix rank

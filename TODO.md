@@ -19,6 +19,7 @@
 ### Equation solving
 - [x] Bisection, Newton–Raphson, secant
 - [x] Durand–Kerner polynomial root finding
+- [x] **Polynomial root isolation** (VAS method with i128 exact arithmetic)
 - [x] **Newton's method for nonlinear systems** (central-difference Jacobian)
 
 ### FFT
@@ -35,6 +36,9 @@
 - [x] **Cholesky decomposition** `A = L · Lᵀ` for symmetric positive-definite matrices
 - [x] **SVD** `A = U · Σ · Vᵀ` via one-sided Jacobi rotations
 - [x] **Power iteration** for the dominant eigenvalue/eigenvector
+- [x] **QR algorithm** for full symmetric eigenvalue decomposition (Householder tridiagonalisation + Wilkinson-shift QR iteration)
+- [x] **Hessenberg decomposition** `A = Q·H·Qᵀ` via Householder reflections
+- [x] **Real Schur decomposition** `A = Q·T·Qᵀ` via shifted QR on Hessenberg form
 
 ### Statistics
 - [x] Mean, median, variance, standard deviation
@@ -86,9 +90,7 @@
 ## Brainstorming
 
 ### High Priority
-- [ ] QR algorithm for full symmetric eigenvalue decomposition
-- [ ] Hessenberg / Schur decomposition
-- [ ] Polynomial root isolation (Vincent–Akritas–Strzebonski)
+(none currently)
 
 ### Medium Priority
 - [ ] Multi-variable symbolic differentiation (partial derivatives and gradients)
@@ -106,8 +108,6 @@
 - [ ] Interval arithmetic for rigorous bounds
 - [ ] Automatic differentiation (dual numbers)
 - [ ] Expression serialization (S-expressions, JSON, RPN)
-- [ ] WebAssembly build for browser use
-- [ ] Python bindings (PyO3)
 - [ ] GPU-accelerated FFT (via `wgpu`)
 - [ ] 3D plotting (surface plots, contour plots)
 - [ ] Animated plot output (GIF/WebM)

@@ -14,12 +14,14 @@ parser.rs ──parse──▶ expr.rs (Expr AST)
                         │           → Expr
                         ▼
                     calculus.rs (numerical)
-                    solver.rs   (root finding, 1-D and systems)
+                    solver.rs   (root finding, 1-D and systems, polynomial root isolation)
                     taylor.rs   (uses symbolic + eval)
 
 complex.rs ──▶ fft.rs (Cooley–Tukey, convolution, cross-correlation, windows)
 
-matrix.rs       (standalone, f64 linear algebra: LU, Cholesky, SVD, power iteration)
+matrix.rs       (standalone, f64 linear algebra: LU, Cholesky, SVD, power iteration,
+                 symmetric eigenvalue decomposition via QR algorithm,
+                 Hessenberg + real Schur decomposition)
 stats.rs        (standalone, descriptive statistics)
 numtheory.rs    (standalone, integer number theory + Miller–Rabin, CRT,
                  Jacobi symbol, continued fractions, Diophantine, discrete log)
@@ -42,9 +44,9 @@ error.rs ──used by──▶ all modules
 2. **Evaluate**: `eval(&Expr, &Context) → f64` — tree-walking with variable/function context
 3. **Symbolic**: `differentiate(&Expr, var) → Expr` and `integrate(&Expr, var) → Expr` — apply calculus rules, then simplify
 4. **Numerical**: `calculus::derivative/integrate_trap/integrate_simpson/integrate_adaptive/integrate_romberg` — operate on closures `F: Fn(f64) → f64`
-5. **Solve**: `solver::bisect/newton/secant/polynomial_roots` (single-variable) and `solver::newton_system` (`n`-dimensional with central-difference Jacobian)
+5. **Solve**: `solver::bisect/newton/secant/polynomial_roots` (single-variable), `solver::newton_system` (`n`-dimensional with central-difference Jacobian), and `solver::isolate_real_roots` (VAS root isolation with i128 exact arithmetic)
 6. **FFT**: `fft::fft/ifft/rfft` — operates on `Vec<Complex<f64>>` or `Vec<f64>`
-7. **Matrix**: `Matrix` — row-major `Vec<f64>`. Gaussian elimination for det/solve/inverse; **LU** with partial pivoting, **Cholesky** `A = L·Lᵀ` for SPD, **SVD** `A = U·Σ·Vᵀ` via Jacobi rotations, **power iteration** for the dominant eigenpair
+7. **Matrix**: `Matrix` — row-major `Vec<f64>`. Gaussian elimination for det/solve/inverse; **LU** with partial pivoting, **Cholesky** `A = L·Lᵀ` for SPD, **SVD** `A = U·Σ·Vᵀ` via Jacobi rotations, **power iteration** for the dominant eigenpair, **symmetric eigenvalue decomposition** via Householder tridiagonalisation + Wilkinson-shift QR iteration, **Hessenberg decomposition** via Householder reflections, **real Schur decomposition** via shifted QR on Hessenberg form
 8. **Stats**: Functions on `&[f64]` slices
 9. **Number theory**: Functions on `u64` integers (gcd, sieve, totient, Miller–Rabin, CRT, modular inverse, **discrete logarithm**) and on `i64` (extended GCD, **Jacobi symbol**, **continued fractions**, **linear Diophantine solver**)
 10. **ODE**: `ode::euler/rk4/rkf45` — operate on closures `F: Fn(f64, f64) → f64`
@@ -63,7 +65,7 @@ error.rs ──used by──▶ all modules
 - **Error handling**: `MathError` (via `thiserror`) in the library, `anyhow` in the binary.
 - **Prelude**: `mathr::prelude` re-exports the most common types for ergonomic `use mathr::prelude::*;`.
 - **Numerical recipes**: Where possible (Gamma, sinc, Bessel, incomplete gamma) we use well-tested A&S or NR polynomial approximations; otherwise we use direct series / closed-form recurrences.
-- **Matrix decomposition family**: Gaussian elimination for inverse/determinant; LU with partial pivoting for fast solves; Cholesky for symmetric positive-definite matrices; SVD via Jacobi rotations for rank/reconditioning; power iteration for the dominant eigenpair.
+- **Matrix decomposition family**: Gaussian elimination for inverse/determinant; LU with partial pivoting for fast solves; Cholesky for symmetric positive-definite matrices; SVD via Jacobi rotations for rank/reconditioning; power iteration for the dominant eigenpair; symmetric eigenvalue decomposition via Householder tridiagonalisation + Wilkinson-shift QR iteration; Hessenberg decomposition via Householder reflections; real Schur decomposition via shifted QR on Hessenberg form with 2×2 block handling for complex conjugate eigenvalue pairs.
 
 ## Deployment
 
