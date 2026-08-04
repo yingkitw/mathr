@@ -1,0 +1,64 @@
+{
+  "cells": [
+    {
+      "id": 0,
+      "input": "gamma(0.5)",
+      "output": "= 1.7724538509"
+    },
+    {
+      "id": 1,
+      "input": "gamma(5)",
+      "output": "= 24"
+    },
+    {
+      "id": 2,
+      "input": "erf(1)",
+      "output": "= 0.8427007929"
+    },
+    {
+      "id": 3,
+      "input": "erfc(1)",
+      "output": "= 0.1572992071"
+    },
+    {
+      "id": 4,
+      "input": "bessel_j(0, 5)",
+      "output": "= -0.1775967713"
+    },
+    {
+      "id": 5,
+      "input": "bessel_j(1, 5)",
+      "output": "= -0.3275791376"
+    },
+    {
+      "id": 6,
+      "input": "bessel_j(2, 5)",
+      "output": "= 0.046565"
+    },
+    {
+      "id": 7,
+      "input": "sinc(0)",
+      "output": "= 1"
+    },
+    {
+      "id": 8,
+      "input": "sinc(pi)",
+      "output": "= 0"
+    },
+    {
+      "id": 9,
+      "input": "exp(1)",
+      "output": "= 2.7182818285"
+    },
+    {
+      "id": 10,
+      "input": "ln(exp(1))",
+      "output": "= 1"
+    },
+    {
+      "id": 11,
+      "input": "sqrt(2)",
+      "output": "= 1.4142135624"
+    }
+  ]
+}

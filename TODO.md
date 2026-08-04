@@ -8,6 +8,7 @@
 
 ### Symbolic algebra
 - [x] Symbolic differentiation (product, quotient, chain rules)
+- [x] **Multi-variable symbolic differentiation** (partial derivatives and gradients)
 - [x] Algebraic simplification (constant folding, identities)
 - [x] **Symbolic integration** for polynomial, exponential, trigonometric, and inverse-trigonometric primitives
 
@@ -15,6 +16,11 @@
 - [x] Numerical derivatives (high-order finite difference) and gradients
 - [x] Trapezoidal, Simpson's, and adaptive quadrature
 - [x] **Romberg with Richardson extrapolation**
+- [x] **Fourier series** (numerical coefficient computation via Simpson's rule, evaluation)
+- [x] **Monte Carlo integration** (1-D and N-D, reproducible LCG, standard error)
+- [x] **Stochastic primitives** (Rng, uniform/normal/exponential sampling, normal/exp PDF/CDF)
+- [x] **Moment / cumulant helpers** (skewness, excess kurtosis, cumulants up to order 4)
+- [x] **Hilbert-matrix-aware solvers** (Tikhonov regularisation, Hilbert matrix construction, least-squares for rectangular systems)
 
 ### Equation solving
 - [x] Bisection, Newton–Raphson, secant
@@ -39,6 +45,7 @@
 - [x] **QR algorithm** for full symmetric eigenvalue decomposition (Householder tridiagonalisation + Wilkinson-shift QR iteration)
 - [x] **Hessenberg decomposition** `A = Q·H·Qᵀ` via Householder reflections
 - [x] **Real Schur decomposition** `A = Q·T·Qᵀ` via shifted QR on Hessenberg form
+- [x] **`det` REPL command** for matrix determinant
 
 ### Statistics
 - [x] Mean, median, variance, standard deviation
@@ -77,6 +84,19 @@
 
 ### Taylor series
 - [x] Symbolic expansion around any point
+- [x] **Laurent series** (expansion around poles, negative powers, principal + analytic parts)
+
+### Rational arithmetic
+- [x] **Rational number type** (exact arithmetic, GCD reduction, i128 intermediate, parsing, REPL)
+
+### Web notebook
+- [x] **Math notebook** (`.mnb` file format, JSON cells with TeX/math input + output)
+- [x] **Web notebook server** (minimal HTTP server, Jupyter-like UI with KaTeX rendering, cell eval, save/load)
+- [x] **Step-by-step solving** (`dispatch_steps` — shows intermediate steps for diff, solve, taylor, integrate, simplify, rat, laurent)
+- [x] **Exact rational evaluation in notebook** (fraction expressions evaluated as `Rational`, returning exact fractions instead of decimals)
+- [x] **KaTeX math rendering** (input preview + output rendering, plain-to-LaTeX converter, decimal-to-fraction display)
+- [x] **Fallback to simplify on unbound variables** (expressions with variables that can't be evaluated are simplified instead of erroring)
+- [x] **`det` command in notebook/REPL** (matrix determinant via `det <rows>`)
 
 ### Other
 - [x] Complex number type with arithmetic, polar conversion, powers
@@ -84,7 +104,7 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **209 inline unit tests** + 53 integration tests — all passing
+- [x] **341 inline unit tests** + 112 integration tests — all passing
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
 
 ## Brainstorming
@@ -93,15 +113,8 @@
 (none currently)
 
 ### Medium Priority
-- [ ] Multi-variable symbolic differentiation (partial derivatives and gradients)
-- [ ] Series expansion (Laurent series, Fourier series)
-- [ ] Rational number type (exact arithmetic)
 - [ ] Big integer support for number theory (arbitrary precision)
 - [ ] Chebyshev-based fast math library (e.g., `cos`/`sin` via Padé approximation)
-- [ ] Monte Carlo integration
-- [ ] Stochastic / probabilistic primitives (random sampling, distributions)
-- [ ] Moment / cumulant helpers for distributions
-- [ ] Hilbert-matrix-aware solvers (regularisation, pre-conditioners)
 
 ### Low Priority
 - [ ] Arbitrary-precision arithmetic (BigDecimal)

@@ -1,0 +1,69 @@
+{
+  "cells": [
+    {
+      "id": 0,
+      "input": "gcd 48 36",
+      "output": "12"
+    },
+    {
+      "id": 1,
+      "input": "lcm 12 18",
+      "output": "36"
+    },
+    {
+      "id": 2,
+      "input": "is-prime 97",
+      "output": "true"
+    },
+    {
+      "id": 3,
+      "input": "is-prime 100",
+      "output": "false"
+    },
+    {
+      "id": 4,
+      "input": "factor 360",
+      "output": "2^3 * 3^2 * 5"
+    },
+    {
+      "id": 5,
+      "input": "fib 20",
+      "output": "6765"
+    },
+    {
+      "id": 6,
+      "input": "fact 10",
+      "output": "3628800"
+    },
+    {
+      "id": 7,
+      "input": "binom 10 3",
+      "output": "120"
+    },
+    {
+      "id": 8,
+      "input": "mr-prime 2305843009213693951",
+      "output": "true"
+    },
+    {
+      "id": 9,
+      "input": "jacobi 5 7",
+      "output": "-1"
+    },
+    {
+      "id": 10,
+      "input": "cf 22 7",
+      "output": "[3; 7]"
+    },
+    {
+      "id": 11,
+      "input": "diophantine 3 5 7",
+      "output": "x = 14, y = -7"
+    },
+    {
+      "id": 12,
+      "input": "dlog 2 27 101",
+      "output": "7"
+    }
+  ]
+}

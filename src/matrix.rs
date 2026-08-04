@@ -1422,6 +1422,53 @@ impl SwapWithin for Vec<f64> {
     }
 }
 
+// --- Hilbert matrix and regularised solvers ---------------------------------
+
+impl Matrix {
+    /// Construct an `n × n` Hilbert matrix with entries `H[i][j] = 1/(i+j+1)`.
+    pub fn hilbert(n: usize) -> Self {
+        let mut data = vec![0.0; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                data[i * n + j] = 1.0 / ((i + j + 1) as f64);
+            }
+        }
+        Self { rows: n, cols: n, data }
+    }
+
+    /// Solve `Ax = b` with Tikhonov (L2) regularisation: minimise
+    /// `||Ax - b||² + λ||x||²`, which gives `(AᵀA + λI)x = Aᵀb`.
+    ///
+    /// Useful for ill-conditioned systems (e.g. Hilbert matrices) where
+    /// the plain solve amplifies noise.
+    pub fn solve_tikhonov(&self, b: &[f64], lambda: f64) -> Result<Vec<f64>> {
+        if self.rows != b.len() {
+            return Err(MathError::InvalidArgument(format!(
+                "solve_tikhonov: b length {} != rows {}",
+                b.len(),
+                self.rows
+            )));
+        }
+        if lambda < 0.0 {
+            return Err(MathError::InvalidArgument(
+                "solve_tikhonov: lambda must be non-negative".into(),
+            ));
+        }
+        let n = self.cols;
+        let at = self.transpose();
+        // AᵀA
+        let ata = (&at * self)?;
+        // Aᵀb
+        let atb = at.mul_vec(b)?;
+        // (AᵀA + λI)
+        let mut reg = ata;
+        for i in 0..n {
+            reg[(i, i)] += lambda;
+        }
+        reg.solve(&atb)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1990,5 +2037,96 @@ mod tests {
         assert!((trace - 2.0 * theta.cos()).abs() < 1e-8, "trace = {} expected {}", trace, 2.0 * theta.cos());
         let det = t[(0, 0)] * t[(1, 1)] - t[(0, 1)] * t[(1, 0)];
         assert!((det - 1.0).abs() < 1e-8, "det = {} expected 1", det);
+    }
+
+    // --- Hilbert matrix tests ---
+
+    #[test]
+    fn hilbert_construction() {
+        let h = Matrix::hilbert(3);
+        assert!(close(h[(0, 0)], 1.0));
+        assert!(close(h[(0, 1)], 0.5));
+        assert!(close(h[(0, 2)], 1.0 / 3.0));
+        assert!(close(h[(1, 0)], 0.5));
+        assert!(close(h[(1, 1)], 1.0 / 3.0));
+        assert!(close(h[(2, 2)], 1.0 / 5.0));
+    }
+
+    #[test]
+    fn hilbert_symmetric() {
+        let h = Matrix::hilbert(5);
+        for i in 0..5 {
+            for j in 0..5 {
+                assert!(close(h[(i, j)], h[(j, i)]));
+            }
+        }
+    }
+
+    #[test]
+    fn tikhonov_well_conditioned() {
+        // For a well-conditioned system, Tikhonov with λ=0 should match plain solve
+        let a = Matrix::from_rows(&[
+            vec![4.0, 3.0, 2.0],
+            vec![1.0, 5.0, 3.0],
+            vec![2.0, 1.0, 6.0],
+        ]).unwrap();
+        let b = vec![20.0, 14.0, 15.0];
+        let x_plain = a.solve(&b).unwrap();
+        let x_tikh = a.solve_tikhonov(&b, 0.0).unwrap();
+        assert!(vec_close(&x_plain, &x_tikh));
+    }
+
+    #[test]
+    fn tikhonov_hilbert_stable() {
+        // Hilbert matrix is notoriously ill-conditioned. Tikhonov regularisation
+        // should produce a solution with smaller norm than the unregularised solve.
+        let h = Matrix::hilbert(5);
+        let x_true = vec![1.0, 1.0, 1.0, 1.0, 1.0];
+        let b = h.mul_vec(&x_true).unwrap();
+
+        // Plain solve on 5×5 Hilbert amplifies rounding — check regularisation
+        // produces a bounded solution
+        let x_reg = h.solve_tikhonov(&b, 1e-2).unwrap();
+        let norm_reg: f64 = x_reg.iter().map(|x| x * x).sum::<f64>().sqrt();
+        assert!(norm_reg < 10.0, "regularised solution should be bounded: ||x|| = {}", norm_reg);
+        // Each component should be within a reasonable range
+        for &xi in &x_reg {
+            assert!(xi.abs() < 5.0, "component {} too large", xi);
+        }
+    }
+
+    #[test]
+    fn tikhonov_shrinks_solution() {
+        // Larger λ should produce smaller ||x||
+        let h = Matrix::hilbert(4);
+        let b = vec![1.0, 0.5, 0.333, 0.25];
+        let x_small = h.solve_tikhonov(&b, 1e-10).unwrap();
+        let x_large = h.solve_tikhonov(&b, 1.0).unwrap();
+        let norm_small: f64 = x_small.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let norm_large: f64 = x_large.iter().map(|x| x * x).sum::<f64>().sqrt();
+        assert!(norm_large < norm_small,
+            "larger λ should shrink ||x||: {} vs {}", norm_large, norm_small);
+    }
+
+    #[test]
+    fn tikhonov_invalid_args() {
+        let a = Matrix::from_rows(&[vec![1.0, 2.0], vec![3.0, 4.0]]).unwrap();
+        assert!(a.solve_tikhonov(&[1.0], 0.0).is_err()); // b length mismatch
+        assert!(a.solve_tikhonov(&[1.0, 2.0], -1.0).is_err()); // negative lambda
+    }
+
+    #[test]
+    fn tikhonov_rectangular() {
+        // Overdetermined least-squares: A is 3×2, solve via Tikhonov with λ=0
+        let a = Matrix::from_rows(&[
+            vec![1.0, 1.0],
+            vec![1.0, 2.0],
+            vec![1.0, 3.0],
+        ]).unwrap();
+        // Data: y = 1 + 2x → b = [3, 5, 7]
+        let b = vec![3.0, 5.0, 7.0];
+        let x = a.solve_tikhonov(&b, 0.0).unwrap();
+        assert!(close(x[0], 1.0), "intercept should be 1, got {}", x[0]);
+        assert!(close(x[1], 2.0), "slope should be 2, got {}", x[1]);
     }
 }

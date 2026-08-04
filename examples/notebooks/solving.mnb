@@ -1,0 +1,54 @@
+{
+  "cells": [
+    {
+      "id": 0,
+      "input": "solve x^2 - 4",
+      "output": "root: x \u2248 2"
+    },
+    {
+      "id": 1,
+      "input": "solve x^3 - 2*x - 5",
+      "output": "root: x \u2248 2.0945514815"
+    },
+    {
+      "id": 2,
+      "input": "solve cos(x) - x 0.5",
+      "output": "root: x \u2248 0.7390851332"
+    },
+    {
+      "id": 3,
+      "input": "poly-roots 1 -5 6",
+      "output": "roots: 3, 2"
+    },
+    {
+      "id": 4,
+      "input": "poly-roots 1 0 -2",
+      "output": "roots: 1.4142135624, -1.4142135624"
+    },
+    {
+      "id": 5,
+      "input": "isolate-roots 1 0 -2",
+      "output": "root intervals: [1, 2], [-2, -1]"
+    },
+    {
+      "id": 6,
+      "input": "simplify (x^2 - 1) / (x - 1)",
+      "output": "= x + 1"
+    },
+    {
+      "id": 7,
+      "input": "simplify 2*x + 3*x + 0",
+      "output": "= 5*x"
+    },
+    {
+      "id": 8,
+      "input": "diff x^2 + 3*x + 2",
+      "output": "simplified = 2*x + 3"
+    },
+    {
+      "id": 9,
+      "input": "integrate 2*x + 3",
+      "output": "= x^2 + 3*x + C"
+    }
+  ]
+}

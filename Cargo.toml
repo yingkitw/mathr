@@ -1,16 +1,23 @@
 [package]
 name = "mathr"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
-description = "Pure-Rust math library & CLI: symbolic differentiation and integration, numerical integration, FFT, equation solving (1D + systems), matrix operations (LU, Cholesky, SVD, eigensolvers), statistics, number theory (gcd, primality, Jacobi, Diophantine, discrete log), ODE solvers, Taylor series, interpolation (spline, Chebyshev, Legendre, Gauss–Legendre), special functions (Bessel, Gamma, erf), LaTeX/TeX input, and plotting."
+description = "Rust math library and CLI calculator for symbolic differentiation, integration, FFT, linear algebra (LU, Cholesky, SVD), equation solving, ODE solvers, number theory, special functions, LaTeX input, plotting, and a Jupyter-like web notebook with KaTeX rendering."
 license = "Apache-2.0"
 repository = "https://github.com/yingkitw/mathr"
 documentation = "https://docs.rs/mathr"
 homepage = "https://github.com/yingkitw/mathr"
 authors = ["Ying Kit WONG"]
 readme = "README.md"
-keywords = ["math", "fft", "calculus", "symbolic", "numerical"]
-categories = ["mathematics", "science", "command-line-utilities"]
+keywords = [
+    "math",
+    "calculus",
+    "symbolic",
+    "linear-algebra",
+    "numerical",
+]
+categories = ["mathematics", "science", "command-line-utilities", "visualization"]
+
 
 [lib]
 name = "mathr"

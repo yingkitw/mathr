@@ -33,6 +33,10 @@
 //!   continued fractions, linear Diophantine solver.
 //! - **ODE solvers** ([`ode`]): Euler, RK4, RK4 systems, adaptive RKF45.
 //! - **Taylor series** ([`taylor`]): symbolic Taylor expansion around a point.
+//! - **Laurent series** ([`laurent`]): expansion around poles with negative powers.
+//! - **Rational arithmetic** ([`rational`]): exact `Rational` type with GCD reduction, arithmetic, parsing.
+//! - **Notebook** ([`notebook`]): `.mnb` file format with cells of TeX/math expressions and results.
+//! - **Web notebook server** ([`server`]): minimal HTTP server serving a Jupyter-like web UI.
 //! - **Interpolation** ([`interpolate`]): Lagrange, Newton divided-difference,
 //!   linear interpolation, and natural / clamped cubic splines.
 //! - **Special functions** ([`special`]): Gamma, log-Gamma, Beta, erf, erfc,
@@ -61,6 +65,10 @@ pub mod special;
 pub mod stats;
 pub mod symbolic;
 pub mod taylor;
+pub mod laurent;
+pub mod rational;
+pub mod notebook;
+pub mod server;
 
 pub use error::{MathError, Result};
 
@@ -89,8 +97,19 @@ pub mod prelude {
         bisect, isolate_real_roots, newton_central, newton_system, polynomial_roots, secant, SolveOptions,
     };
     pub use crate::special::{bessel_j0, bessel_j1, bessel_jn, beta, erfc, erf, gamma, log_gamma, sinc};
-    pub use crate::symbolic::integrate;
-    pub use crate::stats::{correlation, linear_regression, mean, median, stddev, variance, Summary};
-    pub use crate::symbolic::differentiate;
+    pub use crate::calculus::{
+        derivative, fourier_eval, fourier_series, integrate_adaptive, integrate_romberg,
+        integrate_simpson, integrate_trap, monte_carlo_integrate_1d, monte_carlo_integrate_nd,
+        partial, second_derivative, FourierSeries,
+    };
+    pub use crate::stats::{
+        correlation, cumulants, exp_cdf, exp_pdf, linear_regression, mean, median, moments,
+        normal_cdf, normal_pdf, Rng, stddev, variance, Summary,
+    };
+    pub use crate::symbolic::{differentiate, gradient, integrate};
     pub use crate::taylor::taylor_series;
+    pub use crate::laurent::{laurent_series, laurent_series_str, LaurentSeries};
+    pub use crate::rational::{parse_rational, Rational};
+    pub use crate::notebook::{Notebook, NotebookCell};
+    pub use crate::server::NotebookServer;
 }

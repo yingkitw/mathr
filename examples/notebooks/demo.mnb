@@ -1,0 +1,24 @@
+{
+  "cells": [
+    {
+      "id": 0,
+      "input": "sin(pi/4)",
+      "output": "= 0.7071067812"
+    },
+    {
+      "id": 1,
+      "input": "\\frac{1}{2} + \\frac{3}{4}",
+      "output": "= 5/4"
+    },
+    {
+      "id": 2,
+      "input": "diff x^3",
+      "output": "simplified = 3*x^2"
+    },
+    {
+      "id": 3,
+      "input": "taylor exp(x) 0 5",
+      "output": "f(x) \u2248 1 + x + 0.5*x^2 + 0.16666666666666666*x^3 + 0.041666666666666664*x^4"
+    }
+  ]
+}

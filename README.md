@@ -1,29 +1,67 @@
-# mathr — Pure-Rust Math Library & CLI
+# mathr — Rust Math Library, CLI Calculator & Web Notebook
 
 [![crates.io](https://img.shields.io/crates/v/mathr.svg)](https://crates.io/crates/mathr)
 [![docs.rs](https://docs.rs/mathr/badge.svg)](https://docs.rs/mathr)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A pure-Rust mathematics library and command-line tool for **symbolic and numerical computation** — built from scratch with zero external math dependencies.
+**mathr** is a pure-Rust mathematics library and command-line calculator for symbolic and numerical computation — built from scratch with zero external math dependencies. It includes a Jupyter-like web notebook with KaTeX math rendering, step-by-step solving, and exact fraction arithmetic.
+
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [CLI Usage](#cli-usage)
+- [LaTeX / TeX Input](#latex--tex-input)
+- [REPL](#repl)
+- [Web Notebook](#web-notebook)
+- [Crate API](#crate-api)
+- [Modules](#modules)
+- [Dependencies](#dependencies)
+- [License](#license)
 
 ## Features
 
-- **Symbolic algebra** — differentiation (product, quotient, chain rules) and **symbolic integration** (polynomial, exponential, trigonometric, and inverse-trigonometric primitives) with automatic simplification
-- **Numerical calculus** — high-order finite-difference derivatives, trapezoidal / Simpson's / adaptive quadrature, **Romberg with Richardson extrapolation**, partial derivatives and gradients
-- **FFT** — Cooley–Tukey radix-2 from scratch: forward, inverse, 2D, real-input, magnitude / power spectra, convolution, cross-correlation, window functions (Hann, Hamming, Blackman, Rectangular)
-- **Equation solving** — bisection, Newton–Raphson, secant, Durand–Kerner polynomial root finding, and **Newton's method for nonlinear systems**
-- **Matrix operations** — arithmetic, determinant, inverse, linear-system solver, trace, transpose, **rank** estimation, **LU decomposition** with partial pivoting, **Cholesky decomposition** `A = L·Lᵀ` for SPD matrices, **SVD** `A = U · Σ · Vᵀ`, **dominant eigenvalue/eigenvector** via power iteration
-- **Statistics** — mean, median, variance, standard deviation, quartiles, IQR, correlation, linear regression
-- **Number theory** — GCD, LCM, primality (trial + Miller–Rabin), factorization, sieve of Eratosthenes, binomial coefficients, factorial, Fibonacci, Euler's totient, Chinese Remainder Theorem, modular exponentiation, **Jacobi symbol**, **continued fractions**, **linear Diophantine solver**, **discrete logarithm** (baby-step giant-step)
-- **ODE solvers** — Euler, RK4, RK4 systems, adaptive RKF45
+### Symbolic Computation
+- **Symbolic differentiation** — product, quotient, chain rules; partial derivatives and gradients
+- **Symbolic integration** — polynomial, exponential, trigonometric, and inverse-trigonometric primitives
+- **Algebraic simplification** — constant folding and algebraic identity simplification
 - **Taylor series** — symbolic expansion around any point
-- **Interpolation** — Lagrange, Newton divided-difference, linear, **natural / clamped cubic spline**, **Chebyshev polynomials** and series approximation, **Legendre polynomials** and associated, **Gauss–Legendre quadrature**
+- **Laurent series** — expansion around poles with negative powers
+- **Exact rational arithmetic** — `Rational` type with GCD reduction; expressions with integer fractions evaluate exactly (e.g. `\frac{1}{2} + \frac{3}{4}` → `5/4`)
+
+### Numerical Computation
+- **Numerical calculus** — high-order finite-difference derivatives, trapezoidal / Simpson's / adaptive quadrature, **Romberg with Richardson extrapolation**
+- **FFT** — Cooley–Tukey radix-2: forward, inverse, 2D, real-input, magnitude / power spectra, convolution, cross-correlation, window functions (Hann, Hamming, Blackman, Rectangular)
+- **Equation solving** — bisection, Newton–Raphson, secant, Durand–Kerner polynomial roots, **Newton's method for nonlinear systems**, VAS root isolation
+- **ODE solvers** — Euler, RK4, RK4 systems, adaptive RKF45
+- **Monte Carlo integration** — 1-D and N-D with reproducible LCG and standard error
+- **Fourier series** — numerical coefficient computation via Simpson's rule
+
+### Linear Algebra
+- **Matrix operations** — arithmetic, determinant, inverse, linear-system solver, trace, transpose, rank
+- **LU decomposition** with partial pivoting
+- **Cholesky decomposition** `A = L·Lᵀ` for SPD matrices
+- **SVD** `A = U · Σ · Vᵀ` via one-sided Jacobi rotations
+- **Eigenvalue solvers** — power iteration, symmetric QR algorithm (Householder + Wilkinson shift)
+- **Hessenberg** and **real Schur decomposition**
+- **Tikhonov regularisation** for ill-conditioned and rectangular systems
+
+### Number Theory
+- GCD, LCM, primality (trial + **Miller–Rabin**), factorization, sieve of Eratosthenes
+- Binomial coefficients, factorial, Fibonacci (fast doubling), Euler's totient
+- **Chinese Remainder Theorem**, modular exponentiation, modular inverse
+- **Jacobi symbol**, **continued fractions**, **linear Diophantine solver**, **discrete logarithm** (baby-step giant-step)
+
+### Interpolation & Special Functions
+- **Interpolation** — Lagrange, Newton, linear, **cubic spline**, **Chebyshev** polynomials and series, **Legendre** polynomials, **Gauss–Legendre quadrature**
 - **Special functions** — Gamma, log-Gamma, Beta, erf, erfc, sinc, incomplete gamma P, **Bessel functions** `J_0`, `J_1`, `J_n`
-- **Complex numbers** — generic `Complex<T>` with arithmetic, polar conversion, powers
-- **Plotting** — PNG output via `plotters` (line, multi-series, scatter)
+
+### Input & Output
 - **LaTeX / TeX input** — parse `\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, and more; supports `$...$`, `$$...$$`, `\[...\]`, `\(...\)` delimiters
-- **Interactive REPL** — rustyline-powered with history, bracket matching, variable/function bindings
+- **Interactive REPL** — rustyline-powered with history, variable/function bindings
 - **Expression parser** — recursive-descent, implicit multiplication, scientific notation, 30+ built-in functions
+- **PNG plotting** — line, multi-series, scatter via `plotters`
+- **Web notebook** — Jupyter-like UI with KaTeX math rendering, step-by-step solving, exact fraction arithmetic, `.mnb` file format, cell-based evaluation
 
 ## Quick Start
 
@@ -63,6 +101,7 @@ mathr "lu 1 2 3 | 4 -6 0 | -2 7 2"                    # LU decomposition
 mathr "cholesky 4 12 -16 | 12 37 -43 | -16 -43 98"    # Cholesky decomposition
 mathr "eig 2 1 | 1 2"                                 # dominant eigenpair
 mathr "svd 1 2 | 3 4 | 5 6"                           # SVD (rectangular OK)
+mathr "det 1 2 | 3 4"                                # matrix determinant
 
 # Interpolation
 mathr "spline 0 0 1 1 2 4 3 9 1.5"    # cubic spline at x=1.5
@@ -88,6 +127,11 @@ mathr "plot sin(x) -6.28 6.28 wave.png"
 
 echo "sin(pi/2)" | mathr       # read from stdin
 mathr                         # interactive REPL
+
+# Web notebook (Jupyter-like UI)
+mathr notebook                 # open web UI at http://127.0.0.1:3000
+mathr notebook examples/notebooks/demo.mnb   # load a notebook file
+mathr notebook examples/notebooks/demo.mnb 8080  # custom port
 ```
 
 ## LaTeX / TeX Input
@@ -95,7 +139,7 @@ mathr                         # interactive REPL
 `mathr` accepts LaTeX math formulas — with or without Markdown delimiters:
 
 ```bash
-mathr "\frac{1}{2} + \frac{3}{4}"           # → 1.25
+mathr "\frac{1}{2} + \frac{3}{4}"           # → 5/4 (exact fraction)
 mathr "$\sin(\pi / 4)$"                     # → 0.7071...  (inline $...$)
 mathr "$$\sqrt{16} + \cos(\pi)$$"           # → 3          (display $$...$$)
 mathr "\[\frac{x^2 - 4}{1}\]"               # → evaluate with \[...\]
@@ -105,6 +149,7 @@ mathr "\left( 1 + 2 \right) \cdot 3"        # → 9
 mathr "\Gamma{0.5}"                         # → 1.7724...  (√π)
 mathr "diff \sin(x^2)"                      # → cos(x^2)*2*x
 mathr "solve $\frac{x^2 - 4}{1}$"           # → root ≈ 2
+mathr "\frac{x^2 - 1}{x - 1}"              # → (x^2 - 1)/(x - 1) (simplify on unbound vars)
 ```
 
 **Supported delimiters**: `$...$`, `$$...$$`, `\[...\]`, `\(...\)`, or raw TeX with no delimiters.
@@ -112,6 +157,8 @@ mathr "solve $\frac{x^2 - 4}{1}$"           # → root ≈ 2
 **Supported TeX commands**: `\frac`, `\sqrt`, `\pi`, `\tau`, `\infty`, `\cdot`, `\times`, `\left(`, `\right)`, `^{...}`, `\sin`, `\cos`, `\tan`, `\arcsin`, `\arccos`, `\arctan`, `\sinh`, `\cosh`, `\tanh`, `\exp`, `\ln`, `\log`, `\log_2`, `\log_{10}`, `\Gamma`, `\operatorname{...}`, `\text{...}`.
 
 ## REPL
+
+The interactive REPL supports variable bindings, function definitions, and all commands:
 
 ```
 mathr> sin(pi/4)
@@ -132,8 +179,65 @@ mathr> romberg sin(x) 0 3.14159
 2
 mathr> svd 1 2 | 3 4 | 5 6
 σ = [9.525518, 0.514301]
+mathr> det 1 2 | 3 4
+det = -2
 mathr> quit
 ```
+
+## Web Notebook
+
+Launch a Jupyter-like web notebook with KaTeX math rendering:
+
+```bash
+mathr notebook                        # open web UI at http://127.0.0.1:3000
+mathr notebook examples/notebooks/demo.mnb      # load a notebook file
+mathr notebook examples/notebooks/demo.mnb 8080 # custom port
+```
+
+### Example Notebooks
+
+| File | Topics |
+|------|--------|
+| `examples/notebooks/demo.mnb` | General overview |
+| `examples/notebooks/calculus.mnb` | Differentiation, integration, Taylor series, gradients |
+| `examples/notebooks/fractions.mnb` | Exact fraction arithmetic with `\frac` and `rat` |
+| `examples/notebooks/solving.mnb` | Root finding, polynomial roots, simplification |
+| `examples/notebooks/linear_algebra.mnb` | LU, Cholesky, SVD, eigenvalues, FFT, stats |
+| `examples/notebooks/number_theory.mnb` | GCD, primality, factorization, Diophantine, discrete log |
+| `examples/notebooks/special_functions.mnb` | Gamma, erf, Bessel, sinc |
+| `examples/notebooks/latex_demo.mnb` | LaTeX/TeX input with `\sin`, `\frac`, `\Gamma` |
+| `examples/notebooks/series_interp.mnb` | Taylor/Laurent series, splines, Chebyshev, Legendre |
+
+### Notebook Features
+
+- **KaTeX math rendering** — input expressions and output results rendered as math notation
+- **Step-by-step solving** — shows intermediate steps for `diff`, `solve`, `taylor`, `integrate`, `simplify`, `rat`, `laurent`
+- **Exact fraction arithmetic** — `\frac{1}{2} + \frac{3}{4}` evaluates to `5/4`, not `1.25`
+- **Live input preview** — each cell shows a rendered math preview as you type
+- **Save / load** — `.mnb` JSON file format with cells of TeX/math input and evaluated output
+- **Keyboard shortcut** — Shift/Cmd/Ctrl+Enter to run a cell
+
+### `.mnb` File Format
+
+```json
+{
+  "cells": [
+    { "id": 0, "input": "sin(pi/4)", "output": "= 0.7071067812" },
+    { "id": 1, "input": "\\frac{1}{2} + \\frac{3}{4}", "output": "= 5/4" },
+    { "id": 2, "input": "diff x^3", "output": "simplified = 3*x^2" }
+  ]
+}
+```
+
+### REST API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Serve web UI HTML |
+| `POST` | `/api/eval` | Evaluate expression; returns `{input, output, steps}` |
+| `GET` | `/api/notebook` | Get current notebook as JSON |
+| `POST` | `/api/notebook` | Replace notebook state (auto-saves to file) |
+| `POST` | `/api/save` | Save notebook to file |
 
 ## Crate API
 
@@ -216,17 +320,21 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `eval` | Tree-walking evaluator with `Context` (variables, functions) |
 | `simplify` | Constant folding and algebraic identity simplification |
 | `symbolic` | Symbolic differentiation and integration |
-| `calculus` | Numerical derivatives, quadrature, gradients, Romberg |
-| `solver` | Bisection, Newton, secant, polynomial roots, **Newton for systems** |
+| `calculus` | Numerical derivatives, quadrature, gradients, Romberg, Monte Carlo, Fourier series |
+| `solver` | Bisection, Newton, secant, polynomial roots, **Newton for systems**, VAS root isolation |
 | `fft` | Cooley–Tukey FFT, convolution, cross-correlation, windows |
 | `complex` | Generic complex number type |
-| `matrix` | Matrix arithmetic, determinant, inverse, solve, **LU**, **Cholesky**, **SVD**, **power iteration**, rank |
-| `stats` | Descriptive statistics, correlation, regression |
+| `matrix` | Matrix arithmetic, determinant, inverse, solve, **LU**, **Cholesky**, **SVD**, **eigenvalues**, rank |
+| `stats` | Descriptive statistics, correlation, regression, stochastic primitives |
 | `numtheory` | GCD, LCM, primality, factorization, sieve, CRT, totient, **Jacobi**, **Diophantine**, **continued fractions**, **discrete log** |
 | `ode` | Euler, RK4, RK4 systems, adaptive RKF45 |
 | `taylor` | Symbolic Taylor series expansion |
+| `laurent` | Laurent series expansion around poles |
 | `interpolate` | Lagrange, Newton, linear, **cubic spline**, **Chebyshev**, **Legendre**, **Gauss–Legendre** |
 | `special` | Gamma, Beta, erf, erfc, sinc, incomplete gamma, **Bessel J_0/J_1/J_n** |
+| `rational` | Exact rational arithmetic (`Rational` type), `eval_rational` for exact AST evaluation |
+| `notebook` | `.mnb` notebook format, JSON cells with TeX/math input + output |
+| `server` | Minimal HTTP server for web notebook UI (KaTeX rendering, step-by-step solving) |
 | `plot` | PNG plotting via `plotters` |
 
 ## Dependencies
@@ -244,3 +352,10 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 ## License
 
 Apache-2.0
+
+## Links
+
+- [crates.io](https://crates.io/crates/mathr)
+- [docs.rs](https://docs.rs/mathr)
+- [GitHub](https://github.com/yingkitw/mathr)
+- [Report an issue](https://github.com/yingkitw/mathr/issues)

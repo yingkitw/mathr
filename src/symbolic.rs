@@ -154,6 +154,20 @@ fn derivative_of_builtin(name: &str, arg: &Expr) -> Result<Expr> {
     })
 }
 
+/// Compute the gradient of a multivariate expression.
+///
+/// Returns a vector of `(variable_name, partial_derivative)` pairs, one for
+/// each free variable in `expr` (sorted alphabetically). Each partial
+/// derivative is simplified.
+pub fn gradient(expr: &Expr) -> Result<Vec<(String, Expr)>> {
+    let vars = expr.variables();
+    let mut result = Vec::with_capacity(vars.len());
+    for v in &vars {
+        result.push((v.clone(), differentiate(expr, v)?));
+    }
+    Ok(result)
+}
+
 /// Symbolic indefinite integration for the common elementary rules.
 ///
 /// Handles:
@@ -447,5 +461,94 @@ mod tests {
     fn integrate_atan_arcsin() {
         integrate_agrees("1/(1+x^2)", "1/(1+x^2)", &[0.5, 1.0, 2.0]);
         integrate_agrees("1/sqrt(1-x^2)", "1/sqrt(1-x^2)", &[0.0, 0.3, 0.5]);
+    }
+
+    #[test]
+    fn partial_derivative() {
+        // ∂/∂x (x^2 * y + y^3) = 2*x*y
+        let e = Parser::parse("x^2 * y + y^3").unwrap();
+        let got = differentiate(&e, "x").unwrap();
+        let want = Parser::parse("2*x*y").unwrap();
+        let mut ctx = Context::standard();
+        for &(x, y) in &[(1.0, 2.0), (0.5, -1.0), (3.0, 0.7)] {
+            ctx.set("x", x);
+            ctx.set("y", y);
+            let g = eval(&got, &ctx).unwrap();
+            let w = eval(&want, &ctx).unwrap();
+            assert!((g - w).abs() < 1e-9, "at x={},y={}: got {} want {}", x, y, g, w);
+        }
+    }
+
+    #[test]
+    fn partial_derivative_other_var() {
+        // ∂/∂y (x^2 * y + y^3) = x^2 + 3*y^2
+        let e = Parser::parse("x^2 * y + y^3").unwrap();
+        let got = differentiate(&e, "y").unwrap();
+        let want = Parser::parse("x^2 + 3*y^2").unwrap();
+        let mut ctx = Context::standard();
+        for &(x, y) in &[(1.0, 2.0), (0.5, -1.0), (3.0, 0.7)] {
+            ctx.set("x", x);
+            ctx.set("y", y);
+            let g = eval(&got, &ctx).unwrap();
+            let w = eval(&want, &ctx).unwrap();
+            assert!((g - w).abs() < 1e-9, "at x={},y={}: got {} want {}", x, y, g, w);
+        }
+    }
+
+    #[test]
+    fn gradient_multivariate() {
+        // ∇(x^2 + x*y + y^2) = [∂/∂x = 2*x + y, ∂/∂y = x + 2*y]
+        let e = Parser::parse("x^2 + x*y + y^2").unwrap();
+        let grad = gradient(&e).unwrap();
+        assert_eq!(grad.len(), 2);
+        assert_eq!(grad[0].0, "x");
+        assert_eq!(grad[1].0, "y");
+
+        let want_dx = Parser::parse("2*x + y").unwrap();
+        let want_dy = Parser::parse("x + 2*y").unwrap();
+        let mut ctx = Context::standard();
+        for &(x, y) in &[(1.0, 2.0), (0.5, -1.0), (3.0, 0.7)] {
+            ctx.set("x", x);
+            ctx.set("y", y);
+            let gdx = eval(&grad[0].1, &ctx).unwrap();
+            let wdx = eval(&want_dx, &ctx).unwrap();
+            assert!((gdx - wdx).abs() < 1e-9, "dx at x={},y={}: got {} want {}", x, y, gdx, wdx);
+            let gdy = eval(&grad[1].1, &ctx).unwrap();
+            let wdy = eval(&want_dy, &ctx).unwrap();
+            assert!((gdy - wdy).abs() < 1e-9, "dy at x={},y={}: got {} want {}", x, y, gdy, wdy);
+        }
+    }
+
+    #[test]
+    fn gradient_three_vars() {
+        // ∇(x*y*z) = [∂/∂x = y*z, ∂/∂y = x*z, ∂/∂z = x*y]
+        let e = Parser::parse("x*y*z").unwrap();
+        let grad = gradient(&e).unwrap();
+        assert_eq!(grad.len(), 3);
+
+        let wants = [
+            Parser::parse("y*z").unwrap(),
+            Parser::parse("x*z").unwrap(),
+            Parser::parse("x*y").unwrap(),
+        ];
+        let mut ctx = Context::standard();
+        for &(x, y, z) in &[(1.0, 2.0, 3.0), (0.5, -1.0, 2.0)] {
+            ctx.set("x", x);
+            ctx.set("y", y);
+            ctx.set("z", z);
+            for (i, want) in wants.iter().enumerate() {
+                let g = eval(&grad[i].1, &ctx).unwrap();
+                let w = eval(want, &ctx).unwrap();
+                assert!((g - w).abs() < 1e-9, "var {} at ({},{},{}): got {} want {}", grad[i].0, x, y, z, g, w);
+            }
+        }
+    }
+
+    #[test]
+    fn gradient_constant() {
+        // ∇(42) = [] (no variables)
+        let e = Parser::parse("42").unwrap();
+        let grad = gradient(&e).unwrap();
+        assert!(grad.is_empty());
     }
 }

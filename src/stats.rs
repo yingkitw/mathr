@@ -191,6 +191,156 @@ pub fn summary(data: &[f64]) -> Result<Summary> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Stochastic primitives: reproducible RNG, sampling, distributions
+// ---------------------------------------------------------------------------
+
+/// Reproducible pseudo-random number generator (LCG with PCG-style constants).
+pub struct Rng {
+    state: u64,
+}
+
+impl Rng {
+    pub fn new(seed: u64) -> Self {
+        Rng {
+            state: seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407),
+        }
+    }
+
+    /// Uniform sample in `[0, 1)`.
+    pub fn next_f64(&mut self) -> f64 {
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.state >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Uniform sample in `[lo, hi)`.
+    pub fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + self.next_f64() * (hi - lo)
+    }
+
+    /// Standard normal sample via Box–Muller transform.
+    pub fn standard_normal(&mut self) -> f64 {
+        let u1 = self.next_f64().max(1e-300);
+        let u2 = self.next_f64();
+        let r = (-2.0 * u1.ln()).sqrt();
+        let theta = 2.0 * std::f64::consts::PI * u2;
+        r * theta.cos()
+    }
+
+    /// Normal sample with given `mean` and `sigma`.
+    pub fn normal(&mut self, mean: f64, sigma: f64) -> f64 {
+        mean + sigma * self.standard_normal()
+    }
+
+    /// Exponential sample with rate `lambda` via inverse-CDF method.
+    pub fn exponential(&mut self, lambda: f64) -> f64 {
+        let u = self.next_f64().max(1e-300);
+        -u.ln() / lambda
+    }
+}
+
+// --- Distribution PDFs / CDFs ---
+
+/// Normal probability density function.
+pub fn normal_pdf(x: f64, mean: f64, sigma: f64) -> f64 {
+    let z = (x - mean) / sigma;
+    (-0.5 * z * z).exp() / (sigma * (2.0 * std::f64::consts::PI).sqrt())
+}
+
+/// Normal cumulative distribution function via the error function.
+pub fn normal_cdf(x: f64, mean: f64, sigma: f64) -> f64 {
+    let z = (x - mean) / (sigma * std::f64::consts::SQRT_2);
+    0.5 * (1.0 + crate::special::erf(z))
+}
+
+/// Exponential probability density function with rate `lambda`.
+pub fn exp_pdf(x: f64, lambda: f64) -> f64 {
+    if x < 0.0 {
+        0.0
+    } else {
+        lambda * (-lambda * x).exp()
+    }
+}
+
+/// Exponential cumulative distribution function with rate `lambda`.
+pub fn exp_cdf(x: f64, lambda: f64) -> f64 {
+    if x < 0.0 {
+        0.0
+    } else {
+        1.0 - (-lambda * x).exp()
+    }
+}
+
+// --- Moments and cumulants ---
+
+/// Raw moments up to order 4: returns (mean, variance, skewness, excess kurtosis).
+///
+/// - **Skewness**: `E[(X-μ)³] / σ³` — measures asymmetry
+/// - **Excess kurtosis**: `E[(X-μ)⁴] / σ⁴ - 3` — measures tail heaviness (0 for normal)
+pub fn moments(data: &[f64]) -> Result<(f64, f64, f64, f64)> {
+    let n = data.len();
+    if n < 2 {
+        return Err(MathError::InvalidArgument(
+            "moments: need at least 2 data points".into(),
+        ));
+    }
+    let m1 = mean(data)?;
+    let mut m2 = 0.0;
+    let mut m3 = 0.0;
+    let mut m4 = 0.0;
+    for &x in data {
+        let d = x - m1;
+        let d2 = d * d;
+        m2 += d2;
+        m3 += d2 * d;
+        m4 += d2 * d2;
+    }
+    let nf = n as f64;
+    let var = m2 / nf;
+    let sigma = var.sqrt();
+    if sigma < 1e-30 {
+        return Err(MathError::InvalidArgument("moments: zero variance".into()));
+    }
+    let skew = (m3 / nf) / (sigma * sigma * sigma);
+    let kurt = (m4 / nf) / (var * var) - 3.0;
+    Ok((m1, var, skew, kurt))
+}
+
+/// Cumulants up to order 4 from central moments.
+///
+/// Returns (κ1=mean, κ2=variance, κ3, κ4) where:
+/// - `κ3 = E[(X-μ)³]`
+/// - `κ4 = E[(X-μ)⁴] - 3·Var²`
+pub fn cumulants(data: &[f64]) -> Result<(f64, f64, f64, f64)> {
+    let n = data.len();
+    if n < 2 {
+        return Err(MathError::InvalidArgument(
+            "cumulants: need at least 2 data points".into(),
+        ));
+    }
+    let m1 = mean(data)?;
+    let mut m2 = 0.0;
+    let mut m3 = 0.0;
+    let mut m4 = 0.0;
+    for &x in data {
+        let d = x - m1;
+        let d2 = d * d;
+        m2 += d2;
+        m3 += d2 * d;
+        m4 += d2 * d2;
+    }
+    let nf = n as f64;
+    let var = m2 / nf;
+    let k3 = m3 / nf;
+    let k4 = m4 / nf - 3.0 * var * var;
+    Ok((m1, var, k3, k4))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +429,137 @@ mod tests {
         assert!(close(s.median, 3.0));
         assert!(close(s.min, 1.0));
         assert!(close(s.max, 5.0));
+    }
+
+    // --- Stochastic primitive tests ---
+
+    #[test]
+    fn rng_uniform_range() {
+        let mut rng = Rng::new(42);
+        for _ in 0..1000 {
+            let x = rng.next_f64();
+            assert!(x >= 0.0 && x < 1.0, "out of range: {}", x);
+        }
+    }
+
+    #[test]
+    fn rng_uniform_bounds() {
+        let mut rng = Rng::new(42);
+        for _ in 0..1000 {
+            let x = rng.uniform(-5.0, 5.0);
+            assert!(x >= -5.0 && x < 5.0, "out of range: {}", x);
+        }
+    }
+
+    #[test]
+    fn rng_reproducible() {
+        let mut a = Rng::new(123);
+        let mut b = Rng::new(123);
+        for _ in 0..100 {
+            assert_eq!(a.next_f64(), b.next_f64());
+        }
+    }
+
+    #[test]
+    fn rng_normal_mean() {
+        let mut rng = Rng::new(42);
+        let n = 100000;
+        let samples: Vec<f64> = (0..n).map(|_| rng.standard_normal()).collect();
+        let m = mean(&samples).unwrap();
+        assert!(m.abs() < 0.02, "mean should be ~0, got {}", m);
+        let v = variance(&samples).unwrap();
+        assert!((v - 1.0).abs() < 0.03, "variance should be ~1, got {}", v);
+    }
+
+    #[test]
+    fn rng_normal_shifted() {
+        let mut rng = Rng::new(42);
+        let n = 100000;
+        let samples: Vec<f64> = (0..n).map(|_| rng.normal(5.0, 2.0)).collect();
+        let m = mean(&samples).unwrap();
+        assert!((m - 5.0).abs() < 0.03, "mean should be ~5, got {}", m);
+        let v = variance(&samples).unwrap();
+        assert!((v - 4.0).abs() < 0.1, "variance should be ~4, got {}", v);
+    }
+
+    #[test]
+    fn rng_exponential_mean() {
+        let mut rng = Rng::new(42);
+        let n = 100000;
+        let lambda = 2.0;
+        let samples: Vec<f64> = (0..n).map(|_| rng.exponential(lambda)).collect();
+        let m = mean(&samples).unwrap();
+        // E[Exp(λ)] = 1/λ = 0.5
+        assert!((m - 0.5).abs() < 0.01, "mean should be ~0.5, got {}", m);
+    }
+
+    #[test]
+    fn normal_pdf_peak() {
+        // PDF at mean = 1/(sigma * sqrt(2*pi))
+        let p = normal_pdf(0.0, 0.0, 1.0);
+        let expected = 1.0 / (2.0 * std::f64::consts::PI).sqrt();
+        assert!(close(p, expected));
+    }
+
+    #[test]
+    fn normal_pdf_symmetry() {
+        let p1 = normal_pdf(1.0, 0.0, 1.0);
+        let p2 = normal_pdf(-1.0, 0.0, 1.0);
+        assert!(close(p1, p2));
+    }
+
+    #[test]
+    fn normal_cdf_bounds() {
+        assert!(close(normal_cdf(-100.0, 0.0, 1.0), 0.0));
+        assert!(close(normal_cdf(100.0, 0.0, 1.0), 1.0));
+        assert!(close(normal_cdf(0.0, 0.0, 1.0), 0.5));
+    }
+
+    #[test]
+    fn exp_pdf_cdf() {
+        let lambda = 2.0;
+        assert!(close(exp_pdf(0.0, lambda), lambda));
+        assert!(close(exp_pdf(-1.0, lambda), 0.0));
+        assert!(close(exp_cdf(0.0, lambda), 0.0));
+        assert!(close(exp_cdf(-1.0, lambda), 0.0));
+        // CDF at 1/lambda should be 1 - e^{-1} ≈ 0.6321
+        let c = exp_cdf(1.0 / lambda, lambda);
+        assert!((c - (1.0 - std::f64::consts::E.powi(-1))).abs() < 1e-9);
+    }
+
+    #[test]
+    fn moments_symmetric() {
+        // Symmetric data → skewness ≈ 0
+        let data = vec![-2.0, -1.0, 0.0, 1.0, 2.0];
+        let (m, v, skew, kurt) = moments(&data).unwrap();
+        assert!(close(m, 0.0));
+        assert!(close(v, 2.0));
+        assert!(skew.abs() < 1e-10, "skew should be 0, got {}", skew);
+        // Excess kurtosis for uniform-like = -1.3
+        assert!((kurt - (-1.3)).abs() < 0.01, "kurt should be ~-1.3, got {}", kurt);
+    }
+
+    #[test]
+    fn moments_skewed() {
+        // Right-skewed data → positive skewness
+        let data = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0];
+        let (_, _, skew, _) = moments(&data).unwrap();
+        assert!(skew > 0.0, "skew should be positive, got {}", skew);
+    }
+
+    #[test]
+    fn cumulants_basic() {
+        // For normal-like data: κ4 ≈ 0
+        let mut rng = Rng::new(42);
+        let data: Vec<f64> = (0..50000).map(|_| rng.standard_normal()).collect();
+        let (_, var, _, k4) = cumulants(&data).unwrap();
+        assert!((var - 1.0).abs() < 0.05, "var should be ~1, got {}", var);
+        assert!(k4.abs() < 0.1, "k4 should be ~0 for normal, got {}", k4);
+    }
+
+    #[test]
+    fn moments_zero_variance() {
+        let data = vec![5.0, 5.0, 5.0];
+        assert!(moments(&data).is_err());
     }
 }

@@ -1,0 +1,54 @@
+{
+  "cells": [
+    {
+      "id": 0,
+      "input": "diff sin(x^2)",
+      "output": "simplified = 2*x*cos(x^2)"
+    },
+    {
+      "id": 1,
+      "input": "diff x^3 + 2*x^2 - 5*x + 1",
+      "output": "simplified = 3*x^2 + 4*x - 5"
+    },
+    {
+      "id": 2,
+      "input": "integrate x^2",
+      "output": "= x^3/3 + C"
+    },
+    {
+      "id": 3,
+      "input": "integrate sin(x)",
+      "output": "= -cos(x) + C"
+    },
+    {
+      "id": 4,
+      "input": "integrate exp(x)",
+      "output": "= exp(x) + C"
+    },
+    {
+      "id": 5,
+      "input": "int sin(x) 0 pi",
+      "output": "2"
+    },
+    {
+      "id": 6,
+      "input": "romberg exp(x) 0 1 10",
+      "output": "1.7182818284590455"
+    },
+    {
+      "id": 7,
+      "input": "taylor sin(x) 0 7",
+      "output": "f(x) \u2248 x - 0.16666666666666666*x^3 + 0.008333333333333333*x^5 - 0.0001984126984126984*x^7"
+    },
+    {
+      "id": 8,
+      "input": "taylor cos(x) 0 6",
+      "output": "f(x) \u2248 1 - 0.5*x^2 + 0.041666666666666664*x^4 - 0.001388888888888889*x^6"
+    },
+    {
+      "id": 9,
+      "input": "gradient x^2 + y^2 + x*y",
+      "output": "d/dx = 2*x + y\nd/dy = 2*y + x"
+    }
+  ]
+}

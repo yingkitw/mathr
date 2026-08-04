@@ -5,10 +5,13 @@ use mathr::eval::{eval, Context};
 use mathr::expr::Expr;
 use mathr::fft;
 use mathr::interpolate;
+use mathr::laurent;
 use mathr::matrix::Matrix;
+use mathr::notebook::{Notebook, NotebookCell};
 use mathr::numtheory;
 use mathr::parser::Parser;
 use mathr::ode;
+use mathr::rational::{parse_rational, Rational};
 use mathr::simplify;
 use mathr::special;
 use mathr::solver;
@@ -544,6 +547,119 @@ fn isolate_roots_api() {
 }
 
 #[test]
+fn gradient_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("gradient x^2 + x*y + y^2", ctx).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("d/dx"), "output should contain d/dx: {}", output);
+    assert!(output.contains("d/dy"), "output should contain d/dy: {}", output);
+}
+
+#[test]
+fn pdiff_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("pdiff x^2 * y + y^3 y", ctx).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    // ∂/∂y (x^2*y + y^3) = x^2 + 3*y^2
+    let ctx2 = mathr::eval::Context::standard();
+    let mut ctx2 = ctx2;
+    ctx2.set("x", 2.0);
+    ctx2.set("y", 3.0);
+    let e = mathr::parser::Parser::parse(&output).unwrap();
+    let val = mathr::eval::eval(&e, &ctx2).unwrap();
+    // x^2 + 3*y^2 = 4 + 27 = 31
+    assert!((val - 31.0).abs() < 1e-9, "pdiff result evaluated to {} expected 31", val);
+}
+
+#[test]
+fn fourier_repl() {
+    let ctx = mathr::eval::Context::standard();
+    // Fourier series of cos(x) on [-pi, pi] with 5 terms, eval at 0
+    let result = mathr::repl::dispatch_str("fourier cos(x) 3.14159265358979 5 0", ctx).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("a0"), "output should contain a0: {}", output);
+    assert!(output.contains("a1"), "output should contain a1: {}", output);
+    // cos(x) is a pure Fourier mode, so a1 ≈ 1 and eval at 0 ≈ 1
+    assert!(output.contains("f("), "output should contain evaluation: {}", output);
+}
+
+#[test]
+fn mc_repl() {
+    let ctx = mathr::eval::Context::standard();
+    // Monte Carlo integral of x over [0, 1] = 0.5
+    let result = mathr::repl::dispatch_str("mc x 0 1 100000 42", ctx).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("estimate"), "output should contain estimate: {}", output);
+    assert!(output.contains("std_error"), "output should contain std_error: {}", output);
+}
+
+#[test]
+fn sample_repl() {
+    let result = mathr::repl::dispatch_str("sample normal 0 1 10000 42", mathr::eval::Context::standard()).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("n=10000"), "output should contain n=10000: {}", output);
+    assert!(output.contains("mean="), "output should contain mean: {}", output);
+}
+
+#[test]
+fn dist_repl() {
+    let result = mathr::repl::dispatch_str("dist normal 0 0 1", mathr::eval::Context::standard()).unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("pdf"), "output should contain pdf: {}", output);
+    assert!(output.contains("cdf"), "output should contain cdf: {}", output);
+    // Normal(0,0,1): pdf = 1/sqrt(2pi), cdf = 0.5
+    assert!(output.contains("0.3989"), "pdf should be ~0.3989: {}", output);
+    assert!(output.contains("0.5"), "cdf should be 0.5: {}", output);
+}
+
+#[test]
+fn tikhonov_repl() {
+    // Solve a simple 2x2 system with Tikhonov, lambda=0 → same as plain solve
+    // A = [[2, 1], [1, 3]], b = [3, 4], x = [1, 1]
+    let result = mathr::repl::dispatch_str(
+        "tikhonov 2 1 | 1 3 | 3 4 0",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("x = ["), "output should contain x = [...]: {}", output);
+    assert!(output.contains("1"), "output should contain solution: {}", output);
+}
+
+#[test]
+fn laurent_repl() {
+    // Laurent series of 1/x around x=0, pole order 1, 3 positive terms
+    let result = mathr::repl::dispatch_str(
+        "laurent 1/x 0 1 3",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("1/x"), "output should contain 1/x: {}", output);
+}
+
+#[test]
+fn rat_repl() {
+    // 1/2 + 1/3 = 5/6
+    let result = mathr::repl::dispatch_str(
+        "rat 1/2 + 1/3",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("5/6"), "output should contain 5/6: {}", output);
+}
+
+#[test]
 fn next_pow2_correctness() {
     assert_eq!(fft::next_pow2(0), 1);
     assert_eq!(fft::next_pow2(1), 1);
@@ -797,4 +913,445 @@ fn tex_text_variable_eval() {
     ctx.set("alpha", 2.0);
     let v = eval(&e, &ctx).unwrap();
     assert!(close(v, 3.0, 1e-10));
+}
+
+// =========================================================================
+// Laurent series: parse → expand → evaluate
+// =========================================================================
+
+#[test]
+fn laurent_simple_pole_eval() {
+    // f(x) = 1/x, Laurent series should give c_-1 = 1, rest = 0
+    let ls = laurent::laurent_series_str("1/x", "x", 0.0, 1, 3).unwrap();
+    assert!(close(ls.coeff(-1), 1.0, 1e-6));
+    assert!(close(ls.coeff(0), 0.0, 1e-6));
+    // eval at x=5: 1/5 = 0.2
+    assert!(close(ls.eval(5.0), 0.2, 1e-6));
+}
+
+#[test]
+fn laurent_double_pole_eval() {
+    // f(x) = 1/x^2, c_-2 = 1, rest = 0
+    let ls = laurent::laurent_series_str("1/x^2", "x", 0.0, 2, 3).unwrap();
+    assert!(close(ls.coeff(-2), 1.0, 1e-4));
+    // eval at x=4: 1/16 = 0.0625
+    assert!(close(ls.eval(4.0), 0.0625, 1e-4));
+}
+
+#[test]
+fn laurent_exp_over_x_pipeline() {
+    // f(x) = exp(x)/x = 1/x + 1 + x/2 + x^2/6 + ...
+    let ls = laurent::laurent_series_str("exp(x)/x", "x", 0.0, 1, 6).unwrap();
+    assert!(close(ls.coeff(-1), 1.0, 1e-6));
+    assert!(close(ls.coeff(0), 1.0, 1e-6));
+    assert!(close(ls.coeff(1), 0.5, 1e-6));
+    assert!(close(ls.coeff(2), 1.0 / 6.0, 1e-6));
+    // eval at x=1: e ≈ 2.71828
+    assert!(close(ls.eval(1.0), std::f64::consts::E, 1e-2));
+}
+
+#[test]
+fn laurent_around_nonzero_eval() {
+    // f(x) = 1/(x-2), pole at x=2
+    let ls = laurent::laurent_series_str("1/(x-2)", "x", 2.0, 1, 3).unwrap();
+    assert!(close(ls.coeff(-1), 1.0, 1e-6));
+    // eval at x=5: 1/3
+    assert!(close(ls.eval(5.0), 1.0 / 3.0, 1e-4));
+}
+
+#[test]
+fn laurent_no_pole_matches_taylor() {
+    // f(x) = exp(x), no pole → Laurent with pole_order=0 should match Taylor
+    let ls = laurent::laurent_series_str("exp(x)", "x", 0.0, 0, 5).unwrap();
+    assert_eq!(ls.pole_order, 0);
+    assert!(close(ls.coeff(0), 1.0, 1e-6));
+    assert!(close(ls.coeff(1), 1.0, 1e-6));
+    assert!(close(ls.coeff(2), 0.5, 1e-6));
+}
+
+#[test]
+fn laurent_rational_function() {
+    // f(x) = 1/(x(1-x)) = 1/x + 1 + x + x^2 + ...
+    let ls = laurent::laurent_series_str("1/(x*(1-x))", "x", 0.0, 1, 5).unwrap();
+    assert!(close(ls.coeff(-1), 1.0, 1e-6));
+    assert!(close(ls.coeff(0), 1.0, 1e-6));
+    assert!(close(ls.coeff(1), 1.0, 1e-6));
+    assert!(close(ls.coeff(2), 1.0, 1e-6));
+}
+
+#[test]
+fn laurent_to_string_contains_principal() {
+    let ls = laurent::laurent_series_str("1/x + 2 + x", "x", 0.0, 1, 2).unwrap();
+    let s = ls.to_string();
+    assert!(s.contains("1/x"), "string should contain 1/x: {}", s);
+}
+
+// =========================================================================
+// Rational arithmetic: parse → arithmetic → verify exactness
+// =========================================================================
+
+#[test]
+fn rational_add_exact() {
+    let a = parse_rational("1/2").unwrap();
+    let b = parse_rational("1/3").unwrap();
+    let c = a + b;
+    assert_eq!(c.num(), 5);
+    assert_eq!(c.den(), 6);
+}
+
+#[test]
+fn rational_sub_exact() {
+    let a = parse_rational("1/2").unwrap();
+    let b = parse_rational("1/3").unwrap();
+    let c = a - b;
+    assert_eq!(c.num(), 1);
+    assert_eq!(c.den(), 6);
+}
+
+#[test]
+fn rational_mul_exact() {
+    let a = Rational::new(2, 3).unwrap();
+    let b = Rational::new(3, 4).unwrap();
+    let c = a * b;
+    assert_eq!(c.num(), 1);
+    assert_eq!(c.den(), 2);
+}
+
+#[test]
+fn rational_div_exact() {
+    let a = Rational::new(2, 3).unwrap();
+    let b = Rational::new(4, 5).unwrap();
+    let c = a / b;
+    assert_eq!(c.num(), 5);
+    assert_eq!(c.den(), 6);
+}
+
+#[test]
+fn rational_powi_exact() {
+    let a = Rational::new(2, 3).unwrap();
+    assert_eq!(a.powi(3), Rational::new(8, 27).unwrap());
+    assert_eq!(a.powi(-2), Rational::new(9, 4).unwrap());
+    assert_eq!(a.powi(0), Rational::from_int(1));
+}
+
+#[test]
+fn rational_parse_decimal() {
+    let r = parse_rational("0.5").unwrap();
+    assert_eq!(r.num(), 1);
+    assert_eq!(r.den(), 2);
+
+    let r = parse_rational("-1.25").unwrap();
+    assert_eq!(r.num(), -5);
+    assert_eq!(r.den(), 4);
+}
+
+#[test]
+fn rational_parse_fraction() {
+    let r = parse_rational("3/4").unwrap();
+    assert_eq!(r.num(), 3);
+    assert_eq!(r.den(), 4);
+
+    let r = parse_rational("-3/4").unwrap();
+    assert_eq!(r.num(), -3);
+    assert_eq!(r.den(), 4);
+}
+
+#[test]
+fn rational_reduction() {
+    let r = Rational::new(6, 8).unwrap();
+    assert_eq!(r.num(), 3);
+    assert_eq!(r.den(), 4);
+}
+
+#[test]
+fn rational_equality_after_reduction() {
+    let a = Rational::new(1, 2).unwrap();
+    let b = Rational::new(2, 4).unwrap();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn rational_ordering() {
+    let a = Rational::new(1, 3).unwrap();
+    let b = Rational::new(1, 2).unwrap();
+    assert!(a < b);
+    assert!(b > a);
+}
+
+#[test]
+fn rational_large_arithmetic() {
+    // i128 intermediates should handle large denominators
+    let a = Rational::new(1, 1_000_000_000).unwrap();
+    let b = Rational::new(1, 1_000_000_000).unwrap();
+    let c = a + b;
+    assert_eq!(c.num(), 1);
+    assert_eq!(c.den(), 500_000_000);
+}
+
+#[test]
+fn rational_chained_arithmetic() {
+    // (1/2 + 1/3) * (1/4) = (5/6) * (1/4) = 5/24
+    let result = (parse_rational("1/2").unwrap() + parse_rational("1/3").unwrap())
+        * parse_rational("1/4").unwrap();
+    assert_eq!(result.num(), 5);
+    assert_eq!(result.den(), 24);
+}
+
+#[test]
+fn rational_to_f64_accuracy() {
+    let r = Rational::new(22, 7).unwrap();
+    assert!((r.to_f64() - 22.0 / 7.0).abs() < 1e-15);
+}
+
+#[test]
+fn rational_reciprocal() {
+    let a = Rational::new(3, 4).unwrap();
+    let r = a.recip().unwrap();
+    assert_eq!(r.num(), 4);
+    assert_eq!(r.den(), 3);
+}
+
+#[test]
+fn rational_abs_and_neg() {
+    let a = Rational::new(-3, 4).unwrap();
+    assert_eq!(a.abs(), Rational::new(3, 4).unwrap());
+    assert_eq!(-a, Rational::new(3, 4).unwrap());
+}
+
+#[test]
+fn rational_display() {
+    assert_eq!(Rational::from_int(5).to_string(), "5");
+    assert_eq!(Rational::new(3, 4).unwrap().to_string(), "3/4");
+    assert_eq!(Rational::new(-3, 4).unwrap().to_string(), "-3/4");
+}
+
+#[test]
+fn rational_zero_den_errors() {
+    assert!(Rational::new(1, 0).is_err());
+    assert!(parse_rational("1/0").is_err());
+}
+
+// =========================================================================
+// Cross-module pipelines
+// =========================================================================
+
+#[test]
+fn rational_to_f64_then_eval() {
+    // Convert rational to f64 and use in expression evaluation
+    let r = Rational::new(1, 4).unwrap();
+    let val = r.to_f64();
+    let mut ctx = Context::standard();
+    ctx.set("x", val);
+    let expr = Parser::parse("x * 4 + 1").unwrap();
+    let result = eval(&expr, &ctx).unwrap();
+    assert!(close(result, 2.0, 1e-15));
+}
+
+#[test]
+fn laurent_then_solve_near_pole() {
+    // Compute Laurent series of 1/(x-1), then use solver to find root of f(x) - 0.5
+    // 1/(x-1) = 0.5 → x = 3
+    let ls = laurent::laurent_series_str("1/(x-1)", "x", 1.0, 1, 3).unwrap();
+    // The series evaluated at x=3 should be close to 0.5
+    let val = ls.eval(3.0);
+    assert!(close(val, 0.5, 1e-4));
+}
+
+#[test]
+fn taylor_then_laurent_consistency() {
+    // For a function with no pole, Taylor and Laurent(pole_order=0) should agree
+    let taylor_series = taylor::taylor_series_str("cos(x)", "x", 0.0, 5).unwrap();
+    let laurent_series = laurent::laurent_series_str("cos(x)", "x", 0.0, 0, 5).unwrap();
+    // Compare first few coefficients
+    assert!(close(laurent_series.coeff(0), 1.0, 1e-6));
+    // Taylor c_0 should also be 1
+    let mut ctx = Context::standard();
+    ctx.set("x", 0.0);
+    let t0 = eval(&taylor_series, &ctx).unwrap();
+    assert!(close(t0, 1.0, 1e-10));
+    // Both should agree at x=0.5
+    ctx.set("x", 0.5);
+    let tv = eval(&taylor_series, &ctx).unwrap();
+    let lv = laurent_series.eval(0.5);
+    assert!(close(tv, lv, 1e-3));
+}
+
+#[test]
+fn rational_arithmetic_repl_all_ops() {
+    // Test all four operators via REPL
+    let ctx = mathr::eval::Context::standard();
+
+    let r1 = mathr::repl::dispatch_str("rat 1/2 + 1/4", ctx.clone()).unwrap().unwrap();
+    assert!(r1.contains("3/4"), "1/2 + 1/4 should give 3/4: {}", r1);
+
+    let r2 = mathr::repl::dispatch_str("rat 1/2 - 1/4", ctx.clone()).unwrap().unwrap();
+    assert!(r2.contains("1/4"), "1/2 - 1/4 should give 1/4: {}", r2);
+
+    let r3 = mathr::repl::dispatch_str("rat 2/3 * 3/4", ctx.clone()).unwrap().unwrap();
+    assert!(r3.contains("1/2"), "2/3 * 3/4 should give 1/2: {}", r3);
+
+    let r4 = mathr::repl::dispatch_str("rat 2/3 / 4/5", ctx.clone()).unwrap().unwrap();
+    assert!(r4.contains("5/6"), "2/3 / 4/5 should give 5/6: {}", r4);
+}
+
+#[test]
+fn rational_decimal_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("rat 0.5 + 0.25", ctx).unwrap().unwrap();
+    assert!(r.contains("3/4"), "0.5 + 0.25 should give 3/4: {}", r);
+}
+
+#[test]
+fn laurent_repl_nonzero_center() {
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("laurent 1/(x-2) 2 1 3", ctx).unwrap().unwrap();
+    assert!(r.contains("1/(x - 2)"), "output should contain 1/(x - 2): {}", r);
+}
+
+// =========================================================================
+// Notebook: .mnb file format, cell evaluation, save/load
+// =========================================================================
+
+#[test]
+fn notebook_create_eval_cell() {
+    let mut nb = Notebook::new();
+    let id = nb.add_cell("sin(pi/4)");
+    nb.eval_cell(id, &Context::standard()).unwrap();
+    assert!(nb.cells[id].output.contains("0.707"), "output: {}", nb.cells[id].output);
+}
+
+#[test]
+fn notebook_eval_tex_cell() {
+    let mut nb = Notebook::new();
+    let id = nb.add_cell(r"\frac{1}{2} + \frac{3}{4}");
+    nb.eval_cell(id, &Context::standard()).unwrap();
+    assert!(nb.cells[id].output.contains("1.25"), "output: {}", nb.cells[id].output);
+}
+
+#[test]
+fn notebook_eval_all_cells() {
+    let mut nb = Notebook::new();
+    nb.add_cell("1 + 2");
+    nb.add_cell("3 * 4");
+    nb.add_cell("sin(0)");
+    nb.eval_all(&Context::standard()).unwrap();
+    assert!(nb.cells[0].output.contains("3"));
+    assert!(nb.cells[1].output.contains("12"));
+    assert!(nb.cells[2].output.contains("0"));
+}
+
+#[test]
+fn notebook_eval_diff_cell() {
+    let mut nb = Notebook::new();
+    let id = nb.add_cell("diff x^3");
+    nb.eval_cell(id, &Context::standard()).unwrap();
+    assert!(nb.cells[id].output.contains("3") && nb.cells[id].output.contains("x"),
+        "output should contain derivative: {}", nb.cells[id].output);
+}
+
+#[test]
+fn notebook_eval_solve_cell() {
+    let mut nb = Notebook::new();
+    let id = nb.add_cell("solve x^2 - 4");
+    nb.eval_cell(id, &Context::standard()).unwrap();
+    assert!(nb.cells[id].output.contains("2") || nb.cells[id].output.contains("root"),
+        "output should contain root: {}", nb.cells[id].output);
+}
+
+#[test]
+fn notebook_json_roundtrip() {
+    let mut nb = Notebook::new();
+    nb.add_cell("sin(pi/4)");
+    nb.add_cell(r"\frac{1}{2}");
+    nb.cells[0].output = "0.707...".to_string();
+    nb.cells[1].output = "0.5".to_string();
+    let json = nb.to_json();
+    let nb2 = mathr::notebook::parse_notebook_json(&json).unwrap();
+    assert_eq!(nb2.cells.len(), 2);
+    assert_eq!(nb2.cells[0].input, "sin(pi/4)");
+    assert_eq!(nb2.cells[0].output, "0.707...");
+    assert_eq!(nb2.cells[1].input, r"\frac{1}{2}");
+    assert_eq!(nb2.cells[1].output, "0.5");
+}
+
+#[test]
+fn notebook_save_load_file() {
+    let path = std::env::temp_dir().join("mathr_integration_test.mnb");
+    let mut nb = Notebook::new();
+    nb.add_cell("1 + 2");
+    nb.add_cell("sin(pi/4)");
+    nb.cells[0].output = "3".to_string();
+    nb.save(&path).unwrap();
+    let nb2 = Notebook::load(&path).unwrap();
+    assert_eq!(nb2.cells.len(), 2);
+    assert_eq!(nb2.cells[0].input, "1 + 2");
+    assert_eq!(nb2.cells[0].output, "3");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn notebook_set_input_clears_output() {
+    let mut nb = Notebook::new();
+    let id = nb.add_cell("1 + 1");
+    nb.eval_cell(id, &Context::standard()).unwrap();
+    assert!(!nb.cells[id].output.is_empty());
+    nb.set_input(id, "2 + 2").unwrap();
+    assert_eq!(nb.cells[id].input, "2 + 2");
+    assert!(nb.cells[id].output.is_empty());
+}
+
+#[test]
+fn notebook_remove_cell_reindexes() {
+    let mut nb = Notebook::new();
+    nb.add_cell("a");
+    nb.add_cell("b");
+    nb.add_cell("c");
+    nb.remove_cell(1).unwrap();
+    assert_eq!(nb.cells.len(), 2);
+    assert_eq!(nb.cells[0].id, 0);
+    assert_eq!(nb.cells[1].id, 1);
+    assert_eq!(nb.cells[1].input, "c");
+}
+
+#[test]
+fn notebook_parse_empty_cells() {
+    let json = r#"{"cells": []}"#;
+    let nb = mathr::notebook::parse_notebook_json(json).unwrap();
+    assert_eq!(nb.cells.len(), 0);
+}
+
+#[test]
+fn notebook_parse_bad_json_errors() {
+    assert!(mathr::notebook::parse_notebook_json(r#"{"foo": "bar"}"#).is_err());
+}
+
+#[test]
+fn notebook_json_escape_special_chars() {
+    let mut nb = Notebook::new();
+    nb.add_cell("a\nb\tc");
+    let json = nb.to_json();
+    assert!(json.contains("\\n"));
+    assert!(json.contains("\\t"));
+    let nb2 = mathr::notebook::parse_notebook_json(&json).unwrap();
+    assert_eq!(nb2.cells[0].input, "a\nb\tc");
+}
+
+#[test]
+fn notebook_load_example_file() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/notebooks/demo.mnb");
+    let nb = Notebook::load(&path).unwrap();
+    assert_eq!(nb.cells.len(), 4);
+    assert_eq!(nb.cells[0].input, "sin(pi/4)");
+    assert_eq!(nb.cells[1].input, r"\frac{1}{2} + \frac{3}{4}");
+    assert_eq!(nb.cells[2].input, "diff x^3");
+}
+
+#[test]
+fn notebook_eval_loaded_example() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/notebooks/demo.mnb");
+    let mut nb = Notebook::load(&path).unwrap();
+    nb.eval_all(&Context::standard()).unwrap();
+    assert!(nb.cells[0].output.contains("0.707"));
+    assert!(nb.cells[1].output.contains("1.25"));
+    assert!(nb.cells[2].output.contains("3"));
 }

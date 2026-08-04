@@ -35,10 +35,16 @@ This document defines the continuous improvement cycle for the **mathr** crate �
 │   ├── special.rs      # Gamma, Beta, erf, erfc, sinc, incomplete gamma P,
 │   │                   # Bessel functions J_0, J_1, J_n
 │   ├── plot.rs         # PNG plotting via plotters (single, multi, scatter)
-│   ├── repl.rs         # interactive REPL (rustyline) + REPL dispatch
+│   ├── repl.rs         # interactive REPL (rustyline) + REPL dispatch + dispatch_steps
+│   ├── notebook.rs     # .mnb notebook format, JSON parse/serialize, cell eval
+│   ├── server.rs       # minimal HTTP server for web notebook UI
+│   ├── webui.html      # single-page web UI (KaTeX rendering, step-by-step solving)
+│   ├── rational.rs     # exact rational arithmetic + eval_rational for AST evaluation
 │   └── error.rs        # MathError + Result alias
 ├── examples/
-│   └── debug_solve.rs  # example: using the solver API programmatically
+│   ├── *.rs            # Rust API examples (calculus, fft, matrix, numtheory, etc.)
+│   └── notebooks/
+│       └── *.mnb       # math notebook files (demo, calculus, fractions, solving, etc.)
 ├── tests/
 │   └── integration.rs  # end-to-end CLI smoke tests (parse, dispatch, output)
 ├── Cargo.toml          # package metadata, deps (clap, anyhow, thiserror, rustyline,

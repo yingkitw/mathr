@@ -103,6 +103,315 @@ pub fn dispatch_str(line: &str, mut ctx: Context) -> Result<Option<String>> {
     dispatch_inner(line, &mut ctx)
 }
 
+/// Dispatch a single input and return step-by-step output.
+/// Each element of the returned Vec is one step (rendered as a separate line in the UI).
+pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // diff: show original, derivative (unsimplified), simplified
+    if let Some(rest) = line.strip_prefix("diff ") {
+        return diff_steps(rest.trim(), ctx);
+    }
+
+    // simplify: show original and result
+    if let Some(rest) = line.strip_prefix("simplify ") {
+        let e = Parser::parse(rest.trim())?;
+        let s = simplify(&e);
+        return Ok(vec![
+            format!("simplify: {}", e),
+            format!("= {}", s),
+        ]);
+    }
+
+    // solve: show equation, method, root
+    if let Some(rest) = line.strip_prefix("solve ") {
+        return solve_steps(rest.trim(), ctx);
+    }
+
+    // taylor: show expression, expansion point, order, series
+    if let Some(rest) = line.strip_prefix("taylor ") {
+        return taylor_steps(rest.trim());
+    }
+
+    // integrate (symbolic): show integral and result
+    if let Some(rest) = line.strip_prefix("integrate ") {
+        return integrate_sym_steps(rest.trim());
+    }
+
+    // rat: show operands, operation, result
+    if let Some(rest) = line.strip_prefix("rat ") {
+        return rat_steps(rest.trim());
+    }
+
+    // laurent: show expression, center, pole order, series
+    if let Some(rest) = line.strip_prefix("laurent ") {
+        return laurent_steps(rest.trim());
+    }
+
+    // For all other REPL commands (int, romberg, fft, plot, stats, etc.),
+    // fall back to dispatch_inner and wrap the result as a single step.
+    let cmd_keywords = [
+        "int ", "romberg ", "fft ", "conv ", "plot ", "stats ",
+        "poly-roots ", "isolate-roots ", "lu ", "cholesky ", "svd ",
+        "eig ", "symlig ", "hessenberg ", "schur ", "rank ", "tikhonov ",
+        "spline ", "chebyshev ", "legendre ", "fourier ", "mc ",
+        "sample ", "dist ", "pdiff ", "gradient ", "let ", "fn ",
+        "gcd ", "lcm ", "is-prime ", "factor ", "fib ", "binom ",
+        "fact ", "mr-prime ", "jacobi ", "cf ", "diophantine ", "dlog ",
+        "det ",
+    ];
+    if cmd_keywords.iter().any(|kw| line.starts_with(kw)) || line == "vars" || line == "funcs" {
+        let result = dispatch_inner(line, &mut ctx.clone())?;
+        return Ok(match result {
+            Some(s) if !s.is_empty() => vec![s],
+            _ => vec![],
+        });
+    }
+
+    // Default: try exact rational evaluation first, fall back to f64, then simplify
+    let e = Parser::parse(line)?;
+    if let Some(r) = crate::rational::eval_rational(&e) {
+        return Ok(vec![format!("= {}", r)]);
+    }
+    match eval(&e, &ctx) {
+        Ok(v) => Ok(vec![format!("= {}", format_value(v))]),
+        Err(_) => {
+            // Evaluation failed (e.g. unbound variables) — try simplification
+            let s = simplify(&e);
+            Ok(vec![format!("= {}", s)])
+        }
+    }
+}
+
+fn diff_steps(rest: &str, ctx: Context) -> Result<Vec<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("`diff` needs an expression".into()));
+    }
+    let mut wrt = "x".to_string();
+    let mut expr_end = tokens.len();
+    if expr_end > 1 {
+        let candidate = tokens[expr_end - 1];
+        if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+            wrt = candidate.to_string();
+            expr_end -= 1;
+        }
+    }
+    let expr_src = tokens[..expr_end].join(" ");
+    let e = Parser::parse(&expr_src)?;
+    let bound: Vec<(String, Expr)> = ctx
+        .vars
+        .iter()
+        .filter(|(k, _)| **k != wrt && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), Expr::num(*v)))
+        .collect();
+    let mut e = e;
+    for (k, v) in &bound {
+        e = e.substitute(k, v);
+    }
+    let d = differentiate(&e, &wrt)?;
+    let s = simplify(&d);
+    Ok(vec![
+        format!("f({}) = {}", wrt, e),
+        format!("d/d{} f({})", wrt, wrt),
+        format!("= {}", d),
+        format!("simplified = {}", s),
+    ])
+}
+
+fn solve_steps(rest: &str, ctx: Context) -> Result<Vec<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("`solve` needs an expression".into()));
+    }
+    for consume in [2usize, 1, 0] {
+        if tokens.len() <= consume {
+            continue;
+        }
+        let mut guess = 1.0;
+        let mut wrt = "x".to_string();
+        let mut expr_end = tokens.len();
+        if consume >= 1 {
+            if let Ok(g) = tokens[expr_end - 1].parse::<f64>() {
+                guess = g;
+                expr_end -= 1;
+            } else {
+                continue;
+            }
+        }
+        if consume >= 2 {
+            let candidate = tokens[expr_end - 1];
+            if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+                wrt = candidate.to_string();
+                expr_end -= 1;
+            } else {
+                continue;
+            }
+        }
+        let expr_src = tokens[..expr_end].join(" ");
+        let e = match Parser::parse(&expr_src) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let ctx2 = ctx.clone();
+        let wrt_clone = wrt.clone();
+        let f = move |x: f64| {
+            let mut cx = ctx2.clone();
+            cx.set(&wrt_clone, x);
+            crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
+        };
+        let (root, fval) = crate::solver::newton_central(f, guess, crate::solver::SolveOptions::default())?;
+        return Ok(vec![
+            format!("solve: {}({}) = 0", expr_src, wrt),
+            format!("method: Newton-Raphson, initial guess = {}", format_value(guess)),
+            format!("root: {} ≈ {}", wrt, format_value(root)),
+            format!("residual: f({}) = {}", format_value(root), format_value(fval)),
+        ]);
+    }
+    Err(crate::error::MathError::Eval(format!("could not parse: {}", rest)))
+}
+
+fn taylor_steps(rest: &str) -> Result<Vec<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("`taylor` needs an expression".into()));
+    }
+    let mut around = 0.0;
+    let mut order = 5usize;
+    let mut expr_end = tokens.len();
+    if expr_end > 1 {
+        if let Ok(o) = tokens[expr_end - 1].parse::<usize>() {
+            order = o;
+            expr_end -= 1;
+        }
+    }
+    if expr_end > 1 {
+        if let Ok(a) = tokens[expr_end - 1].parse::<f64>() {
+            around = a;
+            expr_end -= 1;
+        }
+    }
+    let expr_src = tokens[..expr_end].join(" ");
+    let series = crate::taylor::taylor_series_str(&expr_src, "x", around, order)?;
+    Ok(vec![
+        format!("f(x) = {}", expr_src),
+        format!("Taylor expansion around a = {}", format_value(around)),
+        format!("order = {}", order),
+        format!("f(x) ≈ {}", series),
+    ])
+}
+
+fn integrate_sym_steps(rest: &str) -> Result<Vec<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval("integrate needs: <expr> [var]".into()));
+    }
+    let var = if tokens.len() >= 2
+        && tokens[tokens.len() - 1].len() == 1
+        && tokens[tokens.len() - 1].chars().all(|c| c.is_ascii_alphabetic())
+    {
+        tokens[tokens.len() - 1].to_string()
+    } else {
+        "x".to_string()
+    };
+    let expr_end = if tokens.len() >= 2
+        && tokens[tokens.len() - 1].len() == 1
+        && tokens[tokens.len() - 1].chars().all(|c| c.is_ascii_alphabetic())
+    {
+        tokens.len() - 1
+    } else {
+        tokens.len()
+    };
+    let expr_src = tokens[..expr_end].join(" ");
+    let e = Parser::parse(&expr_src)?;
+    let result = crate::symbolic::integrate(&e, &var)?;
+    Ok(vec![
+        format!("integrate: {}", expr_src),
+        format!("∫ {} d{}", expr_src, var),
+        format!("= {} + C", result),
+    ])
+}
+
+fn rat_steps(rest: &str) -> Result<Vec<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return Err(crate::error::MathError::Eval(
+            "`rat` needs: <a> <op> <b>  (e.g. rat 1/2 + 1/3)".into(),
+        ));
+    }
+    let a = crate::rational::parse_rational(tokens[0])?;
+    let b = crate::rational::parse_rational(tokens[2])?;
+    let op = tokens[1];
+    let result = match op {
+        "+" => a + b,
+        "-" => a - b,
+        "*" => a * b,
+        "/" => {
+            if b.num() == 0 {
+                return Err(crate::error::MathError::Eval(
+                    "`rat`: division by zero".into(),
+                ));
+            }
+            a / b
+        }
+        _ => {
+            return Err(crate::error::MathError::Eval(
+                format!("`rat`: unknown operator '{}', use + - * /", op),
+            ));
+        }
+    };
+    Ok(vec![
+        format!("{} {} {} = {}", a, op, b, result),
+    ])
+}
+
+fn laurent_steps(rest: &str) -> Result<Vec<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "`laurent` needs: <expr> [center] [pole_order] [n_positive]".into(),
+        ));
+    }
+    let mut n_positive = 5usize;
+    let mut pole_order = 1usize;
+    let mut center = 0.0f64;
+    let mut expr_end = tokens.len();
+    if expr_end > 1 {
+        if let Ok(n) = tokens[expr_end - 1].parse::<usize>() {
+            n_positive = n;
+            expr_end -= 1;
+        }
+    }
+    if expr_end > 1 {
+        if let Ok(k) = tokens[expr_end - 1].parse::<usize>() {
+            pole_order = k;
+            expr_end -= 1;
+        }
+    }
+    if expr_end > 1 {
+        if let Ok(c) = tokens[expr_end - 1].parse::<f64>() {
+            center = c;
+            expr_end -= 1;
+        }
+    }
+    if expr_end == 0 {
+        return Err(crate::error::MathError::Eval(
+            "`laurent` needs: <expr> [center] [pole_order] [n_positive]".into(),
+        ));
+    }
+    let expr_src = tokens[..expr_end].join(" ");
+    let ls = crate::laurent::laurent_series_str(&expr_src, "x", center, pole_order, n_positive)?;
+    Ok(vec![
+        format!("f(x) = {}", expr_src),
+        format!("Laurent expansion around a = {}", format_value(center)),
+        format!("pole order = {}, positive terms = {}", pole_order, n_positive),
+        format!("f(x) = {}", ls.to_string()),
+    ])
+}
+
 fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     let line = line.trim();
     if line == "quit" || line == "exit" {
@@ -131,6 +440,12 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("diff ") {
         return do_diff(rest.trim(), ctx);
     }
+    if let Some(rest) = line.strip_prefix("pdiff ") {
+        return do_pdiff(rest.trim(), ctx);
+    }
+    if let Some(rest) = line.strip_prefix("gradient ") {
+        return do_gradient(rest.trim(), ctx);
+    }
     if let Some(rest) = line.strip_prefix("simplify ") {
         let e = Parser::parse(rest.trim())?;
         return Ok(Some(simplify(&e).to_string()));
@@ -149,6 +464,24 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("taylor ") {
         return do_taylor(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("laurent ") {
+        return do_laurent(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("rat ") {
+        return do_rat(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("fourier ") {
+        return do_fourier(rest.trim(), ctx);
+    }
+    if let Some(rest) = line.strip_prefix("mc ") {
+        return do_mc(rest.trim(), ctx);
+    }
+    if let Some(rest) = line.strip_prefix("sample ") {
+        return do_sample(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("dist ") {
+        return do_dist(rest.trim());
     }
     if let Some(rest) = line.strip_prefix("gcd ") {
         return do_numtheory(rest.trim(), "gcd");
@@ -188,6 +521,9 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("lu ") {
         return do_lu(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("tikhonov ") {
+        return do_tikhonov(rest.trim());
     }
     if let Some(rest) = line.strip_prefix("rank ") {
         return do_rank(rest.trim());
@@ -236,6 +572,9 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("integrate ") {
         return do_integrate_sym(rest.trim(), ctx);
+    }
+    if let Some(rest) = line.strip_prefix("det ") {
+        return do_det(rest.trim());
     }
 
     // Default: evaluate the expression and print the value
@@ -311,6 +650,52 @@ fn do_diff(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
     let d = differentiate(&e, &wrt)?;
     let s = simplify(&d);
     Ok(Some(s.to_string()))
+}
+
+fn do_pdiff(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return Err(crate::error::MathError::Eval("`pdiff` needs: <expr> <var>".into()));
+    }
+    let wrt = tokens[tokens.len() - 1];
+    let expr_src = tokens[..tokens.len() - 1].join(" ");
+    let e = Parser::parse(&expr_src)?;
+    let bound: Vec<(String, Expr)> = ctx
+        .vars
+        .iter()
+        .filter(|(k, _)| *k != wrt && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), Expr::num(*v)))
+        .collect();
+    let mut e = e;
+    for (k, v) in &bound {
+        e = e.substitute(k, v);
+    }
+    let d = differentiate(&e, wrt)?;
+    let s = simplify(&d);
+    Ok(Some(s.to_string()))
+}
+
+fn do_gradient(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
+    if rest.is_empty() {
+        return Err(crate::error::MathError::Eval("`gradient` needs an expression".into()));
+    }
+    let e = Parser::parse(rest)?;
+    let bound: Vec<(String, Expr)> = ctx
+        .vars
+        .iter()
+        .filter(|(k, _)| !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), Expr::num(*v)))
+        .collect();
+    let mut e = e;
+    for (k, v) in &bound {
+        e = e.substitute(k, v);
+    }
+    let grad = crate::symbolic::gradient(&e)?;
+    if grad.is_empty() {
+        return Ok(Some("(constant — no variables)".into()));
+    }
+    let lines: Vec<String> = grad.iter().map(|(v, d)| format!("d/d{} = {}", v, simplify(d))).collect();
+    Ok(Some(lines.join("\n")))
 }
 
 fn do_integrate(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
@@ -487,6 +872,300 @@ fn do_taylor(rest: &str) -> Result<Option<String>> {
     let expr_src = tokens[..expr_end].join(" ");
     let series = crate::taylor::taylor_series_str(&expr_src, "x", around, order)?;
     Ok(Some(series.to_string()))
+}
+
+fn do_laurent(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "`laurent` needs: <expr> [center] [pole_order] [n_positive]".into(),
+        ));
+    }
+    // Parse from the right: optional n_positive, optional pole_order, optional center
+    let mut n_positive = 5usize;
+    let mut pole_order = 1usize;
+    let mut center = 0.0f64;
+    let mut expr_end = tokens.len();
+    if expr_end > 1 {
+        if let Ok(n) = tokens[expr_end - 1].parse::<usize>() {
+            n_positive = n;
+            expr_end -= 1;
+        }
+    }
+    if expr_end > 1 {
+        if let Ok(k) = tokens[expr_end - 1].parse::<usize>() {
+            pole_order = k;
+            expr_end -= 1;
+        }
+    }
+    if expr_end > 1 {
+        if let Ok(c) = tokens[expr_end - 1].parse::<f64>() {
+            center = c;
+            expr_end -= 1;
+        }
+    }
+    if expr_end == 0 {
+        return Err(crate::error::MathError::Eval(
+            "`laurent` needs: <expr> [center] [pole_order] [n_positive]".into(),
+        ));
+    }
+    let expr_src = tokens[..expr_end].join(" ");
+    let ls = crate::laurent::laurent_series_str(&expr_src, "x", center, pole_order, n_positive)?;
+    Ok(Some(ls.to_string()))
+}
+
+fn do_rat(rest: &str) -> Result<Option<String>> {
+    // Format: rat <a> <op> <b>
+    // where a, b are rationals (integers, "n/d", or decimals) and op is +, -, *, /
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return Err(crate::error::MathError::Eval(
+            "`rat` needs: <a> <op> <b>  (e.g. rat 1/2 + 1/3)".into(),
+        ));
+    }
+    let a = crate::rational::parse_rational(tokens[0])?;
+    let b = crate::rational::parse_rational(tokens[2])?;
+    let result = match tokens[1] {
+        "+" => a + b,
+        "-" => a - b,
+        "*" => a * b,
+        "/" => {
+            if b.num() == 0 {
+                return Err(crate::error::MathError::Eval(
+                    "`rat`: division by zero".into(),
+                ));
+            }
+            a / b
+        }
+        _ => {
+            return Err(crate::error::MathError::Eval(
+                format!("`rat`: unknown operator '{}', use + - * /", tokens[1]),
+            ));
+        }
+    };
+    Ok(Some(result.to_string()))
+}
+
+fn do_fourier(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return Err(crate::error::MathError::Eval(
+            "`fourier` needs: <expr> <L> <n_terms> [x_eval]".into(),
+        ));
+    }
+    // Parse from the right: optional x_eval, then n_terms, then L
+    let mut x_eval: Option<f64> = None;
+    let mut expr_end = tokens.len();
+    if let Ok(xv) = tokens[expr_end - 1].parse::<f64>() {
+        x_eval = Some(xv);
+        expr_end -= 1;
+    }
+    if expr_end < 3 {
+        return Err(crate::error::MathError::Eval(
+            "`fourier` needs: <expr> <L> <n_terms> [x_eval]".into(),
+        ));
+    }
+    let n_terms: usize = tokens[expr_end - 1].parse::<usize>().map_err(|_| {
+        crate::error::MathError::Eval("n_terms must be a positive integer".into())
+    })?;
+    expr_end -= 1;
+    let l: f64 = tokens[expr_end - 1].parse::<f64>().map_err(|_| {
+        crate::error::MathError::Eval("L must be a number".into())
+    })?;
+    expr_end -= 1;
+    let expr_src = tokens[..expr_end].join(" ");
+    let e = Parser::parse(&expr_src)?;
+    let bound: Vec<(String, Expr)> = ctx
+        .vars
+        .iter()
+        .filter(|(k, _)| k.as_str() != "x" && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), Expr::num(*v)))
+        .collect();
+    let mut e = e;
+    for (k, v) in &bound {
+        e = e.substitute(k, v);
+    }
+    let eval_fn = |x: f64| -> f64 {
+        let mut local_ctx = ctx.clone();
+        local_ctx.set("x", x);
+        crate::eval::eval(&e, &local_ctx).unwrap_or(0.0)
+    };
+    let fs = crate::calculus::fourier_series(eval_fn, n_terms, l)?;
+    let mut lines = Vec::new();
+    lines.push(format!("a0 = {}", format_value(fs.a0)));
+    for (i, (a, b)) in fs.an.iter().zip(fs.bn.iter()).enumerate() {
+        lines.push(format!(
+            "a{} = {}  b{} = {}",
+            i + 1,
+            format_value(*a),
+            i + 1,
+            format_value(*b)
+        ));
+    }
+    if let Some(xv) = x_eval {
+        let val = crate::calculus::fourier_eval(&fs, xv);
+        lines.push(format!("f({}) ≈ {}", format_value(xv), format_value(val)));
+    }
+    Ok(Some(lines.join("\n")))
+}
+
+fn do_mc(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return Err(crate::error::MathError::Eval(
+            "`mc` needs: <expr> <a> <b> <n_samples> [seed]".into(),
+        ));
+    }
+    // Parse from the right: optional seed, then n_samples, then b, a, rest is expr
+    let mut seed: u64 = 42;
+    let mut expr_end = tokens.len();
+    if expr_end > 4 {
+        if let Ok(s) = tokens[expr_end - 1].parse::<u64>() {
+            seed = s;
+            expr_end -= 1;
+        }
+    }
+    if expr_end < 4 {
+        return Err(crate::error::MathError::Eval(
+            "`mc` needs: <expr> <a> <b> <n_samples> [seed]".into(),
+        ));
+    }
+    let n_samples: usize = tokens[expr_end - 1].parse::<usize>().map_err(|_| {
+        crate::error::MathError::Eval("n_samples must be a positive integer".into())
+    })?;
+    let b: f64 = tokens[expr_end - 2].parse::<f64>()
+        .map_err(|_| crate::error::MathError::Eval("b must be a number".into()))?;
+    let a: f64 = tokens[expr_end - 3].parse::<f64>()
+        .map_err(|_| crate::error::MathError::Eval("a must be a number".into()))?;
+    expr_end -= 3;
+    let expr_src = tokens[..expr_end].join(" ");
+    let e = Parser::parse(&expr_src)?;
+    let bound: Vec<(String, Expr)> = ctx
+        .vars
+        .iter()
+        .filter(|(k, _)| k.as_str() != "x" && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), Expr::num(*v)))
+        .collect();
+    let mut e = e;
+    for (k, v) in &bound {
+        e = e.substitute(k, v);
+    }
+    let eval_fn = |x: f64| -> f64 {
+        let mut local_ctx = ctx.clone();
+        local_ctx.set("x", x);
+        crate::eval::eval(&e, &local_ctx).unwrap_or(0.0)
+    };
+    let (est, se) = crate::calculus::monte_carlo_integrate_1d(eval_fn, a, b, n_samples, seed)?;
+    Ok(Some(format!(
+        "estimate = {}\nstd_error = {}",
+        format_value(est),
+        format_value(se)
+    )))
+}
+
+fn do_sample(rest: &str) -> Result<Option<String>> {
+    use crate::stats::Rng;
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "`sample` needs: <dist> <params...> <n> [seed]".into(),
+        ));
+    }
+    let dist = tokens[0];
+    // Parse from the right: optional seed, then n
+    let mut seed: u64 = 42;
+    let mut end = tokens.len();
+    if end > 2 {
+        if let Ok(s) = tokens[end - 1].parse::<u64>() {
+            seed = s;
+            end -= 1;
+        }
+    }
+    if end < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`sample` needs: <dist> <params...> <n> [seed]".into(),
+        ));
+    }
+    let n: usize = tokens[end - 1].parse::<usize>().map_err(|_| {
+        crate::error::MathError::Eval("n must be a positive integer".into())
+    })?;
+    let params = &tokens[1..end - 1];
+    let mut rng = Rng::new(seed);
+    let samples: Vec<f64> = match dist {
+        "uniform" => {
+            if params.len() != 2 {
+                return Err(crate::error::MathError::Eval("uniform needs: lo hi".into()));
+            }
+            let lo: f64 = params[0].parse().map_err(|_| crate::error::MathError::Eval("lo must be a number".into()))?;
+            let hi: f64 = params[1].parse().map_err(|_| crate::error::MathError::Eval("hi must be a number".into()))?;
+            (0..n).map(|_| rng.uniform(lo, hi)).collect()
+        }
+        "normal" => {
+            if params.len() != 2 {
+                return Err(crate::error::MathError::Eval("normal needs: mean sigma".into()));
+            }
+            let mu: f64 = params[0].parse().map_err(|_| crate::error::MathError::Eval("mean must be a number".into()))?;
+            let sigma: f64 = params[1].parse().map_err(|_| crate::error::MathError::Eval("sigma must be a number".into()))?;
+            (0..n).map(|_| rng.normal(mu, sigma)).collect()
+        }
+        "exponential" | "exp" => {
+            if params.len() != 1 {
+                return Err(crate::error::MathError::Eval("exponential needs: lambda".into()));
+            }
+            let lambda: f64 = params[0].parse().map_err(|_| crate::error::MathError::Eval("lambda must be a number".into()))?;
+            (0..n).map(|_| rng.exponential(lambda)).collect()
+        }
+        _ => {
+            return Err(crate::error::MathError::Eval(format!(
+                "unknown distribution '{}': use uniform, normal, or exponential",
+                dist
+            )));
+        }
+    };
+    let s = crate::stats::summary(&samples)?;
+    Ok(Some(format!(
+        "n={}\nmean={}\nstddev={}\nmin={}\nmax={}",
+        s.count, format_value(s.mean), format_value(s.stddev),
+        format_value(s.min), format_value(s.max)
+    )))
+}
+
+fn do_dist(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`dist` needs: <dist> <x> <params...>".into(),
+        ));
+    }
+    let dist = tokens[0];
+    let x: f64 = tokens[1].parse().map_err(|_| {
+        crate::error::MathError::Eval("x must be a number".into())
+    })?;
+    let params = &tokens[2..];
+    let (pdf, cdf) = match dist {
+        "normal" => {
+            if params.len() != 2 {
+                return Err(crate::error::MathError::Eval("normal needs: mean sigma".into()));
+            }
+            let mu: f64 = params[0].parse().map_err(|_| crate::error::MathError::Eval("mean must be a number".into()))?;
+            let sigma: f64 = params[1].parse().map_err(|_| crate::error::MathError::Eval("sigma must be a number".into()))?;
+            (crate::stats::normal_pdf(x, mu, sigma), crate::stats::normal_cdf(x, mu, sigma))
+        }
+        "exponential" | "exp" => {
+            if params.len() != 1 {
+                return Err(crate::error::MathError::Eval("exponential needs: lambda".into()));
+            }
+            let lambda: f64 = params[0].parse().map_err(|_| crate::error::MathError::Eval("lambda must be a number".into()))?;
+            (crate::stats::exp_pdf(x, lambda), crate::stats::exp_cdf(x, lambda))
+        }
+        _ => {
+            return Err(crate::error::MathError::Eval(format!(
+                "unknown distribution '{}': use normal or exponential",
+                dist
+            )));
+        }
+    };
+    Ok(Some(format!("pdf = {}\ncdf = {}", format_value(pdf), format_value(cdf))))
 }
 
 fn do_numtheory(rest: &str, op: &str) -> Result<Option<String>> {
@@ -880,10 +1559,60 @@ fn do_lu(rest: &str) -> Result<Option<String>> {
     )))
 }
 
+fn do_tikhonov(rest: &str) -> Result<Option<String>> {
+    // Format: <matrix rows separated by |> | <b vector> <lambda>
+    // The last token is lambda, the second-to-last starts the b vector.
+    // We split on '|' — the last group is "b1 b2 ... lambda", the rest are matrix rows.
+    let parts: Vec<&str> = rest.split('|').collect();
+    if parts.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`tikhonov` needs: <rows...> | <b...> <lambda>".into(),
+        ));
+    }
+    let b_lambda: Vec<&str> = parts[parts.len() - 1].split_whitespace().collect();
+    if b_lambda.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "need at least b values and lambda after last |".into(),
+        ));
+    }
+    let lambda: f64 = b_lambda[b_lambda.len() - 1]
+        .parse()
+        .map_err(|_| crate::error::MathError::Eval("lambda must be a number".into()))?;
+    let b: Vec<f64> = b_lambda[..b_lambda.len() - 1]
+        .iter()
+        .map(|s| {
+            s.parse::<f64>()
+                .map_err(|_| crate::error::MathError::Eval("b values must be numbers".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let rows: Vec<Vec<f64>> = parts[..parts.len() - 1]
+        .iter()
+        .map(|s| {
+            s.split_whitespace()
+                .map(|x| {
+                    x.parse::<f64>().map_err(|_| {
+                        crate::error::MathError::Eval("matrix entries must be numbers".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let m = crate::matrix::Matrix::from_rows(&rows)?;
+    let x = m.solve_tikhonov(&b, lambda)?;
+    let x_strs: Vec<String> = x.iter().map(|v| format_value(*v)).collect();
+    Ok(Some(format!("x = [{}]", x_strs.join(", "))))
+}
+
 fn do_rank(rest: &str) -> Result<Option<String>> {
     let m = parse_matrix(rest)?;
     let r = m.rank(1e-10);
     Ok(Some(format!("rank = {}", r)))
+}
+
+fn do_det(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let d = m.determinant()?;
+    Ok(Some(format!("det = {}", format_value(d))))
 }
 
 fn do_spline(rest: &str) -> Result<Option<String>> {
@@ -999,12 +1728,25 @@ commands:
   let x = <expr>      bind a variable
   fn f(x) = <expr>    define a function
   diff <expr> [var]   symbolic derivative
+  pdiff <expr> <var>  partial derivative
+  gradient <expr>     gradient (all partials)
   simplify <expr>     constant-fold & simplify
   int <expr> a b      numerical integral over [a, b]
   solve <expr> [var] [guess]
   plot <expr> a b [out.png]
   taylor <expr> [a] [order]
                       Taylor series around a (default 0, order 5)
+  laurent <expr> [a] [pole_order] [n_positive]
+                      Laurent series around a (default: a=0, k=1, N=5)
+  rat <a> <op> <b>   exact rational arithmetic (a, b: int or n/d or decimal)
+  fourier <expr> L N [x]
+                      Fourier series on [-L, L] with N terms (eval at x)
+  mc <expr> a b N [seed]
+                      Monte Carlo integral over [a, b] with N samples
+  sample <dist> <params...> N [seed]
+                      random sampling (uniform/normal/exponential)
+  dist <dist> <x> <params...>
+                      PDF and CDF (normal/exponential)
   fft <numbers...>    magnitude spectrum of a real signal
   conv <a...> x <b...>  convolution of two signals
   stats <numbers...>  descriptive statistics
@@ -1012,7 +1754,10 @@ commands:
   isolate-roots <ints...>  real root isolation (VAS, integer coefficients)
   lu <rows>           matrix LU decomposition (rows separated by '|')
                       computes determinant and inverse
+  tikhonov <rows> | <b...> <lambda>
+                      Tikhonov-regularised solve (Ax≈b with L2 penalty)
   rank <rows>         matrix rank
+  det <rows>          matrix determinant
   spline x1 y1 x2 y2 ... x_at
                       natural cubic spline interpolant at x_at
   cholesky <rows>     Cholesky decomposition of symmetric positive-definite
@@ -1050,3 +1795,80 @@ functions: sin, cos, tan, asin, acos, atan, sinh, cosh, tanh,
 /// rustc may otherwise complain; the type is used implicitly through Helper.
 #[allow(dead_code)]
 fn _cow_silence<'a>(_: Cow<'a, str>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_steps_diff() {
+        let steps = dispatch_steps("diff x^3", Context::standard()).unwrap();
+        assert!(steps.len() >= 3);
+        assert!(steps[0].contains("x^3"));
+        assert!(steps[steps.len() - 1].contains("3"));
+    }
+
+    #[test]
+    fn dispatch_steps_solve() {
+        let steps = dispatch_steps("solve x^2 - 4", Context::standard()).unwrap();
+        assert!(steps.len() >= 3);
+        assert!(steps[0].contains("x^2 - 4"));
+        assert!(steps[2].contains("x"));
+    }
+
+    #[test]
+    fn dispatch_steps_taylor() {
+        let steps = dispatch_steps("taylor exp(x) 0 3", Context::standard()).unwrap();
+        assert!(steps.len() >= 3);
+        assert!(steps[0].contains("exp(x)"));
+        assert!(steps[1].contains("a = 0"));
+        assert!(steps[2].contains("order = 3"));
+    }
+
+    #[test]
+    fn dispatch_steps_simplify() {
+        let steps = dispatch_steps("simplify x + x", Context::standard()).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert!(steps[0].contains("simplify"));
+    }
+
+    #[test]
+    fn dispatch_steps_rat() {
+        let steps = dispatch_steps("rat 1/2 + 1/3", Context::standard()).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert!(steps[0].contains("5/6"));
+    }
+
+    #[test]
+    fn dispatch_steps_laurent() {
+        let steps = dispatch_steps("laurent 1/x 0 1 3", Context::standard()).unwrap();
+        assert!(steps.len() >= 3);
+        assert!(steps[0].contains("1/x"));
+    }
+
+    #[test]
+    fn dispatch_steps_plain_eval() {
+        let steps = dispatch_steps("sin(pi/4)", Context::standard()).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert!(steps[0].contains("0.707"));
+    }
+
+    #[test]
+    fn dispatch_steps_integrate() {
+        let steps = dispatch_steps("integrate x^2", Context::standard()).unwrap();
+        assert!(steps.len() >= 2);
+        assert!(steps[0].contains("x^2"));
+    }
+
+    #[test]
+    fn dispatch_steps_empty() {
+        let steps = dispatch_steps("", Context::standard()).unwrap();
+        assert_eq!(steps.len(), 0);
+    }
+
+    #[test]
+    fn dispatch_steps_error() {
+        // Parse error should propagate
+        assert!(dispatch_steps("diff @@@@", Context::standard()).is_err());
+    }
+}

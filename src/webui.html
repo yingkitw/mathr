@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mathr notebook</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<style>
+:root {
+  --bg: #1e1e2e;
+  --surface: #313244;
+  --surface2: #45475a;
+  --text: #cdd6f4;
+  --text-dim: #a6adc8;
+  --accent: #89b4fa;
+  --accent2: #f9e2af;
+  --green: #a6e3a1;
+  --red: #f38ba8;
+  --border: #585b70;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+header {
+  background: var(--surface);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 2px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+header h1 {
+  font-size: 1.3rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+header .spacer { flex: 1; }
+button {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s;
+}
+button:hover { background: var(--accent); color: var(--bg); }
+button.danger:hover { background: var(--red); color: var(--bg); }
+button.success { background: var(--green); color: var(--bg); }
+button.success:hover { opacity: 0.85; }
+#notebook {
+  max-width: 900px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+.cell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.cell-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--surface2);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.cell-header .cell-id {
+  font-weight: 600;
+  color: var(--accent2);
+  min-width: 40px;
+}
+.cell-header .spacer { flex: 1; }
+.cell-header button {
+  padding: 3px 10px;
+  font-size: 0.75rem;
+}
+.cell-input {
+  padding: 12px 16px;
+}
+.cell-input textarea {
+  width: 100%;
+  min-height: 40px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.9rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.cell-input textarea:focus { border-color: var(--accent); }
+.cell-output {
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--border);
+  min-height: 32px;
+}
+.cell-input-preview {
+  padding: 8px 4px 0;
+  font-size: 1rem;
+  color: var(--accent2);
+  overflow-x: auto;
+}
+.cell-input-preview .preview-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.cell-output .output-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.cell-output .output-rendered {
+  font-size: 1.05rem;
+  color: var(--green);
+  overflow-x: auto;
+  padding: 2px 0;
+}
+.cell-output .step-text {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  margin-right: 4px;
+}
+.cell-output .output-raw {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 4px;
+}
+.cell-output .output-error {
+  color: var(--red);
+}
+.cell-output .output-placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 0.8rem;
+}
+.add-cell-bar {
+  text-align: center;
+  padding: 16px;
+}
+.add-cell-bar button {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 8px 24px;
+}
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+.empty-state h2 { font-size: 1.1rem; margin-bottom: 8px; }
+.empty-state p { font-size: 0.85rem; }
+.katex { font-size: 1.05em; }
+.katex-display { margin: 0.5em 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>mathr notebook</h1>
+  <span id="filename" style="color:var(--text-dim);font-size:0.8rem;"></span>
+  <span class="spacer"></span>
+  <button onclick="runAll()" class="success">Run All</button>
+  <button onclick="saveNotebook()">Save</button>
+  <button onclick="addCell()">+ Cell</button>
+</header>
+<div id="notebook">
+  <div id="cells"></div>
+  <div class="add-cell-bar">
+    <button onclick="addCell()">+ Add Cell</button>
+  </div>
+</div>
+
+<script>
+let notebook = { cells: [] };
+let nextId = 0;
+
+// Convert a decimal number to a LaTeX fraction if it's a clean rational.
+// Returns null if the number is irrational or denominator would be too large.
+function decimalToFraction(str) {
+  const n = parseFloat(str);
+  if (isNaN(n) || !isFinite(n)) return null;
+
+  // If it's already an integer, no fraction needed
+  if (Number.isInteger(n)) return null;
+
+  // Count decimal places
+  const dotIdx = str.indexOf('.');
+  if (dotIdx < 0) return null;
+  const decPlaces = str.length - dotIdx - 1;
+  // Limit to reasonable precision
+  if (decPlaces > 10) return null;
+
+  // Compute numerator and denominator
+  const denom = Math.pow(10, decPlaces);
+  let numer = Math.round(n * denom);
+
+  // Simplify by GCD
+  function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
+  const g = gcd(Math.abs(numer), denom);
+  numer = numer / g;
+  const d = denom / g;
+
+  // If denominator is too large, it's probably irrational — skip
+  if (d > 1000) return null;
+
+  // Check round-trip: does numer/d == n?
+  if (Math.abs(numer / d - n) > 1e-9) return null;
+
+  if (d === 1) return String(numer);
+  return '\\frac{' + numer + '}{' + d + '}';
+}
+
+// Convert plain math expression to LaTeX for KaTeX rendering
+function mathToLatex(expr) {
+  let s = expr.trim();
+  if (!s) return '';
+
+  // Strip $ delimiters
+  s = s.replace(/^\$+/, '').replace(/\$+$/, '');
+
+  // If already LaTeX (starts with \), pass through
+  if (s.startsWith('\\')) return s;
+
+  // Detect REPL command keywords at the start — wrap in \text{}
+  const commands = [
+    'diff', 'int', 'integrate', 'solve', 'simplify', 'plot',
+    'taylor', 'laurent', 'rat', 'fourier', 'mc', 'sample',
+    'dist', 'fft', 'conv', 'stats', 'poly-roots', 'isolate-roots',
+    'pdiff', 'gradient', 'romberg', 'let', 'fn',
+    'gcd', 'lcm', 'is-prime', 'factor', 'fib', 'binom', 'fact',
+    'mr-prime', 'jacobi', 'cf', 'diophantine', 'dlog',
+    'lu', 'cholesky', 'svd', 'eig', 'symlig', 'hessenberg',
+    'schur', 'rank', 'tikhonov', 'spline', 'chebyshev', 'legendre',
+    'det',
+  ];
+  const cmdMatch = s.match(/^([\w-]+)\s+/);
+  let prefix = '';
+  if (cmdMatch && commands.includes(cmdMatch[1])) {
+    prefix = '\\text{' + cmdMatch[1] + '}\\;';
+    s = s.slice(cmdMatch[1].length).trim();
+  }
+
+  // Fix + - to just - (e.g. "x + -0.5*x^3" → "x - 0.5*x^3")
+  // Must run BEFORE decimal-to-fraction so the - stays adjacent to the number
+  s = s.replace(/\s*\+\s*-/g, ' - ');
+
+  // Replace standalone decimals with fraction equivalents where possible
+  // e.g. 0.5 -> \frac{1}{2}, 1.25 -> \frac{5}{4}
+  s = s.replace(/(?:^|[^a-zA-Z_])(\d+\.\d+)(?![a-zA-Z_])/g, function(match, num, offset) {
+    const frac = decimalToFraction(num);
+    if (frac) {
+      // Preserve the leading non-digit character
+      const prefix = match.slice(0, match.length - num.length);
+      return prefix + frac;
+    }
+    return match;
+  });
+
+  // Replace constants and named functions (longer first)
+  const repls = [
+    [/\bpi\b/g, '\\pi'],
+    [/\binf\b/g, '\\infty'],
+    [/\binfinity\b/g, '\\infty'],
+    [/\btau\b/g, '\\tau'],
+    [/\bsqrt\s*\(([^)]+)\)/g, '\\sqrt{$1}'],
+    [/\bsin\s*\(/g, '\\sin('],
+    [/\bcos\s*\(/g, '\\cos('],
+    [/\btan\s*\(/g, '\\tan('],
+    [/\basin\s*\(/g, '\\arcsin('],
+    [/\bacos\s*\(/g, '\\arccos('],
+    [/\batan\s*\(/g, '\\arctan('],
+    [/\bsinh\s*\(/g, '\\sinh('],
+    [/\bcosh\s*\(/g, '\\cosh('],
+    [/\btanh\s*\(/g, '\\tanh('],
+    [/\bln\s*\(/g, '\\ln('],
+    [/\blog\s*\(/g, '\\log('],
+    [/\bexp\s*\(/g, '\\exp('],
+    [/\bgamma\s*\(/g, '\\Gamma('],
+    [/\bGamma\s*\(/g, '\\Gamma('],
+    [/\berf\s*\(/g, '\\operatorname{erf}('],
+    [/\berfc\s*\(/g, '\\operatorname{erfc}('],
+  ];
+  for (const [p, r] of repls) s = s.replace(p, r);
+
+  // Convert ^ to ^{} — handle ^ followed by word chars or (...)
+  s = s.replace(/\^(\w+)/g, '^{$1}');
+  s = s.replace(/\^\(([^)]+)\)/g, '^{$1}');
+
+  // Convert * to \cdot (with space)
+  s = s.replace(/\s*\*\s*/g, ' \\cdot ');
+
+  // Convert fractions: numeric a/b
+  s = s.replace(/(\d+)\/(\d+)/g, '\\frac{$1}{$2}');
+  // Convert fractions: simple term/term
+  s = s.replace(/([a-zA-Z]\w*)\/([a-zA-Z]\w*)/g, '\\frac{$1}{$2}');
+
+  return prefix + s;
+}
+
+// Render KaTeX into a DOM element
+function renderKatex(latex, element, displayMode) {
+  if (typeof katex === 'undefined') {
+    element.textContent = latex;
+    return;
+  }
+  try {
+    katex.render(latex, element, {
+      displayMode: displayMode !== false,
+      throwOnError: false,
+      strict: false
+    });
+  } catch(e) {
+    element.textContent = latex;
+  }
+}
+
+function init() {
+  fetch('/api/notebook')
+    .then(r => r.json())
+    .then(data => {
+      notebook = data;
+      nextId = data.cells.length;
+      if (data.cells.length === 0) { addCell(); }
+      else { renderAll(); }
+    })
+    .catch(() => { addCell(); });
+}
+
+function renderAll() {
+  const container = document.getElementById('cells');
+  container.innerHTML = '';
+  notebook.cells.forEach((cell, i) => {
+    container.appendChild(createCellElement(cell, i));
+  });
+  // Render all input previews
+  notebook.cells.forEach((_, i) => updateInputPreview(i));
+}
+
+function createCellElement(cell, index) {
+  const div = document.createElement('div');
+  div.className = 'cell';
+  div.dataset.index = index;
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'cell-header';
+  header.innerHTML = `
+    <span class="cell-id">[${cell.id}]</span>
+    <span class="spacer"></span>
+    <button onclick="runCell(${index})">Run</button>
+    <button onclick="deleteCell(${index})" class="danger">Del</button>
+  `;
+  div.appendChild(header);
+
+  // Input area
+  const inputDiv = document.createElement('div');
+  inputDiv.className = 'cell-input';
+
+  const textarea = document.createElement('textarea');
+  textarea.placeholder = 'Enter math (e.g. sin(pi/4), \\\\frac{1}{2}+1, diff x^3)';
+  textarea.value = cell.input;
+  textarea.onkeydown = (e) => cellKeydown(e, index);
+  textarea.oninput = () => updateInputPreview(index);
+  inputDiv.appendChild(textarea);
+
+  // Input preview (rendered math)
+  const previewDiv = document.createElement('div');
+  previewDiv.className = 'cell-input-preview';
+  previewDiv.innerHTML = '<span class="preview-label">Rendered:</span><div class="preview-math"></div>';
+  inputDiv.appendChild(previewDiv);
+  div.appendChild(inputDiv);
+
+  // Output area
+  const outputDiv = document.createElement('div');
+  outputDiv.className = 'cell-output';
+  outputDiv.id = `output-${index}`;
+  if (cell.output) {
+    renderOutputInto(cell.output, outputDiv);
+  } else {
+    outputDiv.innerHTML = '<span class="output-placeholder">Not yet evaluated</span>';
+  }
+  div.appendChild(outputDiv);
+
+  return div;
+}
+
+function updateInputPreview(index) {
+  const cellDiv = document.querySelector(`[data-index="${index}"]`);
+  if (!cellDiv) return;
+  const textarea = cellDiv.querySelector('textarea');
+  const previewMath = cellDiv.querySelector('.preview-math');
+  if (!previewMath) return;
+  const input = textarea.value.trim();
+  if (!input) { previewMath.innerHTML = ''; return; }
+  const latex = mathToLatex(input);
+  previewMath.innerHTML = '';
+  renderKatex(latex, previewMath, true);
+  notebook.cells[index].input = textarea.value;
+}
+
+// Determine if a step is a text label, a math expression, or mixed.
+// Returns {type: 'text'|'math', text: string, math: string}
+function renderStep(step) {
+  // Known label keywords that indicate a text step (not math)
+  const labelPatterns = [
+    /^(Taylor expansion around .*)$/i,
+    /^(Laurent expansion around .*)$/i,
+    /^(order\s*=\s*\d+)$/i,
+    /^(pole order\s*=.*)$/i,
+    /^(method:.*)$/i,
+    /^(initial guess\s*=.*)$/i,
+  ];
+
+  // Check if entire step is a text label
+  for (const pat of labelPatterns) {
+    if (pat.test(step)) {
+      return {type: 'text', text: step, math: ''};
+    }
+  }
+
+  // Check for "label: math" pattern (e.g. "root: x ≈ 2", "solve: x^2 = 0")
+  const colonMatch = step.match(/^(\w[\w\s]*):\s*(.+)$/);
+  if (colonMatch) {
+    const label = colonMatch[1];
+    const math = colonMatch[2];
+    // Only treat as text label if the label part has non-math words
+    const mathWords = new Set(['sin','cos','tan','exp','sqrt','log','ln','f']);
+    const labelWords = label.split(/\s+/).filter(w => w.length >= 4 && !mathWords.has(w.toLowerCase()));
+    if (labelWords.length > 0) {
+      return {type: 'text', text: label + ': ', math: mathToLatex(math)};
+    }
+  }
+
+  // Check for "keyword = math" pattern (e.g. "simplified = 3*x^2")
+  const eqMatch = step.match(/^(\w[\w\s]*)\s*=\s*(.+)$/);
+  if (eqMatch) {
+    const label = eqMatch[1].trim();
+    const math = eqMatch[2];
+    const mathWords = new Set(['sin','cos','tan','exp','sqrt','log','ln','f','x','y','z']);
+    const labelWords = label.split(/\s+/).filter(w => w.length >= 4 && !mathWords.has(w.toLowerCase()));
+    if (labelWords.length > 0 && label.toLowerCase() !== 'f') {
+      return {type: 'text', text: label + ' = ', math: mathToLatex(math)};
+    }
+  }
+
+  // Default: render as math
+  return {type: 'math', math: mathToLatex(step), text: ''};
+}
+
+function renderOutputInto(output, outputDiv) {
+  // For stored outputs (no steps), just render as single step
+  renderOutputWithSteps([output], outputDiv);
+}
+
+function renderOutputWithSteps(steps, outputDiv) {
+  if (!steps || steps.length === 0 || (steps.length === 1 && !steps[0].trim())) {
+    outputDiv.innerHTML = '<span class="output-placeholder">Empty result</span>';
+    return;
+  }
+
+  // Check for errors
+  if (steps[0].startsWith('Error:') || steps[0].startsWith('error')) {
+    outputDiv.innerHTML = `<span class="output-error">${escapeHtml(steps[0])}</span>`;
+    return;
+  }
+
+  outputDiv.innerHTML = '';
+
+  const label = document.createElement('div');
+  label.className = 'output-label';
+  label.textContent = steps.length > 1 ? 'Steps:' : 'Result:';
+  outputDiv.appendChild(label);
+
+  steps.forEach((step, i) => {
+    const trimmed = step.trim();
+    if (!trimmed) return;
+
+    const stepDiv = document.createElement('div');
+    stepDiv.className = 'output-rendered';
+
+    // For multi-step, add a step number prefix
+    if (steps.length > 1) {
+      const numSpan = document.createElement('span');
+      numSpan.style.cssText = 'color:var(--text-dim);font-size:0.75rem;margin-right:6px;';
+      numSpan.textContent = `${i + 1}.`;
+      stepDiv.appendChild(numSpan);
+    }
+
+    // Determine if this step is a text label or a math expression
+    const renderResult = renderStep(trimmed);
+    if (renderResult.type === 'text') {
+      const textSpan = document.createElement('span');
+      textSpan.className = 'step-text';
+      textSpan.textContent = renderResult.text;
+      stepDiv.appendChild(textSpan);
+      if (renderResult.math) {
+        const mathSpan = document.createElement('span');
+        stepDiv.appendChild(mathSpan);
+        renderKatex(renderResult.math, mathSpan, false);
+      }
+    } else {
+      const mathDiv = document.createElement('span');
+      stepDiv.appendChild(mathDiv);
+      renderKatex(renderResult.math, mathDiv, false);
+    }
+
+    outputDiv.appendChild(stepDiv);
+  });
+
+  // Raw text at the bottom
+  const rawDiv = document.createElement('div');
+  rawDiv.className = 'output-raw';
+  rawDiv.textContent = steps.join('\n');
+  outputDiv.appendChild(rawDiv);
+}
+
+function cellKeydown(event, index) {
+  if (event.key === 'Enter' && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    runCell(index);
+  }
+}
+
+async function runCell(index) {
+  const cellDiv = document.querySelector(`[data-index="${index}"]`);
+  const textarea = cellDiv.querySelector('textarea');
+  const input = textarea.value;
+  notebook.cells[index].input = input;
+  const outputDiv = document.getElementById(`output-${index}`);
+  outputDiv.innerHTML = '<span class="output-placeholder">Evaluating...</span>';
+  try {
+    const resp = await fetch('/api/eval', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({input: input})
+    });
+    const data = await resp.json();
+    notebook.cells[index].output = data.output;
+    renderOutputWithSteps(data.steps || [data.output], outputDiv);
+  } catch(e) {
+    outputDiv.innerHTML = `<span class="output-error">Request failed: ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+async function runAll() {
+  for (let i = 0; i < notebook.cells.length; i++) {
+    await runCell(i);
+  }
+}
+
+function addCell() {
+  const cell = { id: nextId++, input: '', output: '' };
+  notebook.cells.push(cell);
+  const container = document.getElementById('cells');
+  container.appendChild(createCellElement(cell, notebook.cells.length - 1));
+}
+
+function deleteCell(index) {
+  notebook.cells.splice(index, 1);
+  notebook.cells.forEach((c, i) => c.id = i);
+  renderAll();
+}
+
+async function saveNotebook() {
+  const cellDivs = document.querySelectorAll('[data-index]');
+  cellDivs.forEach(div => {
+    const index = parseInt(div.dataset.index);
+    const textarea = div.querySelector('textarea');
+    if (textarea) notebook.cells[index].input = textarea.value;
+  });
+  try {
+    await fetch('/api/notebook', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(notebook)
+    });
+    showStatus('Saved');
+  } catch(e) {
+    showStatus('Save failed: ' + e.message, true);
+  }
+}
+
+function showStatus(msg, isError) {
+  const el = document.createElement('div');
+  el.style.cssText = `position:fixed;top:60px;right:20px;padding:8px 16px;border-radius:6px;z-index:200;${isError ? 'background:var(--red);color:var(--bg)' : 'background:var(--green);color:var(--bg)'}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2000);
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Wait for KaTeX to load before init
+function waitForKatex(cb, n) {
+  n = n || 0;
+  if (typeof katex !== 'undefined' || n > 50) cb();
+  else setTimeout(() => waitForKatex(cb, n + 1), 100);
+}
+waitForKatex(init);
+</script>
+</body>
+</html>
