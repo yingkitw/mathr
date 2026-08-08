@@ -51,10 +51,13 @@
 - Binomial coefficients, factorial, Fibonacci (fast doubling), Euler's totient
 - **Chinese Remainder Theorem**, modular exponentiation, modular inverse
 - **Jacobi symbol**, **continued fractions**, **linear Diophantine solver**, **discrete logarithm** (baby-step giant-step)
+- **Big integers** — arbitrary-precision primality, factorization (Pollard's rho), factorial, Fibonacci, binomial, modular exponentiation, totient via `num-bigint`. REPL commands `fact`, `fib`, `binom` auto-upgrade to BigInt on overflow (no separate "big" command needed for these)
+- **Automatic differentiation** — dual numbers for exact forward-mode AD; derivatives, gradients, and Jacobians of arbitrary compositions
 
 ### Interpolation & Special Functions
 - **Interpolation** — Lagrange, Newton, linear, **cubic spline**, **Chebyshev** polynomials and series, **Legendre** polynomials, **Gauss–Legendre quadrature**
 - **Special functions** — Gamma, log-Gamma, Beta, erf, erfc, sinc, incomplete gamma P, **Bessel functions** `J_0`, `J_1`, `J_n`
+- **Fast math** — Chebyshev-based approximations of `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `pow` with argument reduction (~1e-12 accuracy)
 
 ### Input & Output
 - **LaTeX / TeX input** — parse `\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, and more; supports `$...$`, `$$...$$`, `\[...\]`, `\(...\)` delimiters
@@ -181,6 +184,42 @@ mathr> svd 1 2 | 3 4 | 5 6
 σ = [9.525518, 0.514301]
 mathr> det 1 2 | 3 4
 det = -2
+mathr> fast sin 1.5
+fast sin(1.5) = 0.997495  (exact: 0.997495, err: 0e0)
+mathr> big prime 1000000007
+1000000007 is prime
+mathr> big fact 25
+25! = 15511210043330985984000000
+mathr> big fib 100
+F_100 = 354224848179261915075
+mathr> fact 25
+15511210043330985984000000
+mathr> fib 100
+354224848179261915075
+mathr> binom 100 50
+100891344545564193334812497256
+mathr> factor 360
+2^3 · 3^2 · 5
+mathr> 5!
+120
+mathr> 20!
+2432902008176640000
+mathr> |-5|
+5
+mathr> 7 mod 3
+1
+mathr> gcd(12, 8)
+4
+mathr> C(5, 2)
+10
+mathr> \binom{5}{2}
+10
+mathr> ad sin(x^2) at x=1.5
+f(x) = 0.997495,  f'(x) = -0.313312
+mathr> ad grad x^2 + y^3 with x=2,y=3
+∇f = [∂f/∂x = 4, ∂f/∂y = 27]
+mathr> big modpow 2 100 1000000007
+2^100 ≡ 97637128 (mod 1000000007)
 mathr> quit
 ```
 
@@ -207,24 +246,33 @@ mathr notebook examples/notebooks/demo.mnb 8080 # custom port
 | `examples/notebooks/special_functions.mnb` | Gamma, erf, Bessel, sinc |
 | `examples/notebooks/latex_demo.mnb` | LaTeX/TeX input with `\sin`, `\frac`, `\Gamma` |
 | `examples/notebooks/series_interp.mnb` | Taylor/Laurent series, splines, Chebyshev, Legendre |
+| `examples/notebooks/notebook_features.mnb` | Shared context, text cells, inline plots, Markdown, execution counters |
 
 ### Notebook Features
 
+- **Shared context across cells** — variables and functions defined in one cell (via `let`/`fn`) are available in subsequent cells, just like Jupyter
+- **Cell types** — Math cells (evaluated with KaTeX rendering) and Text cells (Markdown-rendered documentation)
+- **Inline plots** — `plot` commands render PNG images directly in the notebook (no file management)
+- **Cell management** — add, delete, duplicate, move up/down, and toggle cell type
+- **Execution status** — each cell shows running/done/error status with `In [n]:` execution counters
+- **Context panel** — collapsible panel showing all bound variables and user functions
+- **Reset & Run All** — resets the shared context and re-evaluates all cells in order
+- **Markdown rendering** — text cells render Markdown (headings, lists, code, blockquotes) via marked.js
 - **KaTeX math rendering** — input expressions and output results rendered as math notation
 - **Step-by-step solving** — shows intermediate steps for `diff`, `solve`, `taylor`, `integrate`, `simplify`, `rat`, `laurent`
 - **Exact fraction arithmetic** — `\frac{1}{2} + \frac{3}{4}` evaluates to `5/4`, not `1.25`
-- **Live input preview** — each cell shows a rendered math preview as you type
+- **Live input preview** — each cell shows a rendered math/Markdown preview as you type
 - **Save / load** — `.mnb` JSON file format with cells of TeX/math input and evaluated output
-- **Keyboard shortcut** — Shift/Cmd/Ctrl+Enter to run a cell
+- **Keyboard shortcuts** — Shift/Cmd/Ctrl+Enter to run a cell, Alt+Enter to run and add a new cell
 
 ### `.mnb` File Format
 
 ```json
 {
   "cells": [
-    { "id": 0, "input": "sin(pi/4)", "output": "= 0.7071067812" },
-    { "id": 1, "input": "\\frac{1}{2} + \\frac{3}{4}", "output": "= 5/4" },
-    { "id": 2, "input": "diff x^3", "output": "simplified = 3*x^2" }
+    { "id": 0, "input": "let x = 5", "output": "x = 5", "cell_type": "math" },
+    { "id": 1, "input": "x * 3", "output": "= 15", "cell_type": "math" },
+    { "id": 2, "input": "# My Notes", "output": "# My Notes", "cell_type": "text" }
   ]
 }
 ```
@@ -234,10 +282,12 @@ mathr notebook examples/notebooks/demo.mnb 8080 # custom port
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Serve web UI HTML |
-| `POST` | `/api/eval` | Evaluate expression; returns `{input, output, steps}` |
+| `POST` | `/api/eval` | Evaluate expression (updates shared context); returns `{input, output, steps}` |
 | `GET` | `/api/notebook` | Get current notebook as JSON |
 | `POST` | `/api/notebook` | Replace notebook state (auto-saves to file) |
 | `POST` | `/api/save` | Save notebook to file |
+| `POST` | `/api/reset` | Reset the shared evaluation context |
+| `GET` | `/api/context` | Get current variables and user functions |
 
 ## Crate API
 
@@ -327,13 +377,16 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `matrix` | Matrix arithmetic, determinant, inverse, solve, **LU**, **Cholesky**, **SVD**, **eigenvalues**, rank |
 | `stats` | Descriptive statistics, correlation, regression, stochastic primitives |
 | `numtheory` | GCD, LCM, primality, factorization, sieve, CRT, totient, **Jacobi**, **Diophantine**, **continued fractions**, **discrete log** |
+| `bigint` | Arbitrary-precision integers: primality (Miller–Rabin), factorization (Pollard's rho), GCD, LCM, factorial, Fibonacci, binomial, mod_pow, totient |
+| `autodiff` | Automatic differentiation via dual numbers: `derivative`, `gradient`, `jacobian`, `Dual` type with full arithmetic |
 | `ode` | Euler, RK4, RK4 systems, adaptive RKF45 |
 | `taylor` | Symbolic Taylor series expansion |
 | `laurent` | Laurent series expansion around poles |
 | `interpolate` | Lagrange, Newton, linear, **cubic spline**, **Chebyshev**, **Legendre**, **Gauss–Legendre** |
 | `special` | Gamma, Beta, erf, erfc, sinc, incomplete gamma, **Bessel J_0/J_1/J_n** |
+| `fastmath` | Chebyshev-based fast approximations of `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `pow` |
 | `rational` | Exact rational arithmetic (`Rational` type), `eval_rational` for exact AST evaluation |
-| `notebook` | `.mnb` notebook format, JSON cells with TeX/math input + output |
+| `notebook` | `.mnb` notebook format, JSON cells with TeX/math input + output, **cell types** (math/text), **cell reordering**, **shared context** |
 | `server` | Minimal HTTP server for web notebook UI (KaTeX rendering, step-by-step solving) |
 | `plot` | PNG plotting via `plotters` |
 
@@ -347,6 +400,8 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `rustyline` | REPL line editing with history |
 | `plotters` | PNG plot rendering |
 | `num-traits` | Numeric trait bounds |
+| `num-bigint` | Arbitrary-precision integers |
+| `num-integer` | Integer trait methods (mod_floor, is_even) |
 | `approx` (dev) | Float comparison in tests |
 
 ## License

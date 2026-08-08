@@ -533,7 +533,7 @@ pub fn gauss_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
     let nodes: Vec<f64> = eig_pairs.iter().map(|(v, _)| *v).collect();
     let mut weights = vec![0.0_f64; n];
     for (new_i, (_, old_i)) in eig_pairs.iter().enumerate() {
-        let v0 = v[0 * n + *old_i];
+        let v0 = v[*old_i];
         weights[new_i] = 2.0 * v0 * v0;
     }
     (nodes, weights)

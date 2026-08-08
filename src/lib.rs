@@ -55,6 +55,8 @@ pub mod fft;
 pub mod interpolate;
 pub mod matrix;
 pub mod numtheory;
+pub mod bigint;
+pub mod autodiff;
 pub mod ode;
 pub mod parser;
 pub mod plot;
@@ -67,6 +69,7 @@ pub mod symbolic;
 pub mod taylor;
 pub mod laurent;
 pub mod rational;
+pub mod fastmath;
 pub mod notebook;
 pub mod server;
 
@@ -92,6 +95,10 @@ pub mod prelude {
         is_prime_miller_rabin, jacobi_symbol, lcm, mod_inverse, mod_pow, prime_factors,
         sieve_primes,
     };
+    pub use crate::autodiff::{
+        derivative as ad_derivative, eval as dual_eval, gradient as ad_gradient,
+        jacobian as ad_jacobian, Dual,
+    };
     pub use crate::ode::{euler, rk4, rk4_system, rkf45};
     pub use crate::solver::{
         bisect, isolate_real_roots, newton_central, newton_system, polynomial_roots, secant, SolveOptions,
@@ -110,6 +117,7 @@ pub mod prelude {
     pub use crate::taylor::taylor_series;
     pub use crate::laurent::{laurent_series, laurent_series_str, LaurentSeries};
     pub use crate::rational::{parse_rational, Rational};
-    pub use crate::notebook::{Notebook, NotebookCell};
+    pub use crate::notebook::{CellType, Notebook, NotebookCell};
     pub use crate::server::NotebookServer;
+    pub use crate::fastmath::{fast_cos, fast_exp, fast_log, fast_pow, fast_sin, fast_sqrt, fast_tan, ChebyshevApprox};
 }

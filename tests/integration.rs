@@ -1216,7 +1216,7 @@ fn laurent_repl_nonzero_center() {
 fn notebook_create_eval_cell() {
     let mut nb = Notebook::new();
     let id = nb.add_cell("sin(pi/4)");
-    nb.eval_cell(id, &Context::standard()).unwrap();
+    nb.eval_cell(id, &mut Context::standard()).unwrap();
     assert!(nb.cells[id].output.contains("0.707"), "output: {}", nb.cells[id].output);
 }
 
@@ -1224,7 +1224,7 @@ fn notebook_create_eval_cell() {
 fn notebook_eval_tex_cell() {
     let mut nb = Notebook::new();
     let id = nb.add_cell(r"\frac{1}{2} + \frac{3}{4}");
-    nb.eval_cell(id, &Context::standard()).unwrap();
+    nb.eval_cell(id, &mut Context::standard()).unwrap();
     assert!(nb.cells[id].output.contains("1.25"), "output: {}", nb.cells[id].output);
 }
 
@@ -1234,7 +1234,8 @@ fn notebook_eval_all_cells() {
     nb.add_cell("1 + 2");
     nb.add_cell("3 * 4");
     nb.add_cell("sin(0)");
-    nb.eval_all(&Context::standard()).unwrap();
+    let mut ctx = Context::standard();
+    nb.eval_all(&mut ctx).unwrap();
     assert!(nb.cells[0].output.contains("3"));
     assert!(nb.cells[1].output.contains("12"));
     assert!(nb.cells[2].output.contains("0"));
@@ -1244,7 +1245,7 @@ fn notebook_eval_all_cells() {
 fn notebook_eval_diff_cell() {
     let mut nb = Notebook::new();
     let id = nb.add_cell("diff x^3");
-    nb.eval_cell(id, &Context::standard()).unwrap();
+    nb.eval_cell(id, &mut Context::standard()).unwrap();
     assert!(nb.cells[id].output.contains("3") && nb.cells[id].output.contains("x"),
         "output should contain derivative: {}", nb.cells[id].output);
 }
@@ -1253,7 +1254,7 @@ fn notebook_eval_diff_cell() {
 fn notebook_eval_solve_cell() {
     let mut nb = Notebook::new();
     let id = nb.add_cell("solve x^2 - 4");
-    nb.eval_cell(id, &Context::standard()).unwrap();
+    nb.eval_cell(id, &mut Context::standard()).unwrap();
     assert!(nb.cells[id].output.contains("2") || nb.cells[id].output.contains("root"),
         "output should contain root: {}", nb.cells[id].output);
 }
@@ -1293,7 +1294,7 @@ fn notebook_save_load_file() {
 fn notebook_set_input_clears_output() {
     let mut nb = Notebook::new();
     let id = nb.add_cell("1 + 1");
-    nb.eval_cell(id, &Context::standard()).unwrap();
+    nb.eval_cell(id, &mut Context::standard()).unwrap();
     assert!(!nb.cells[id].output.is_empty());
     nb.set_input(id, "2 + 2").unwrap();
     assert_eq!(nb.cells[id].input, "2 + 2");
@@ -1350,8 +1351,472 @@ fn notebook_load_example_file() {
 fn notebook_eval_loaded_example() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/notebooks/demo.mnb");
     let mut nb = Notebook::load(&path).unwrap();
-    nb.eval_all(&Context::standard()).unwrap();
+    let mut ctx = Context::standard();
+    nb.eval_all(&mut ctx).unwrap();
     assert!(nb.cells[0].output.contains("0.707"));
     assert!(nb.cells[1].output.contains("1.25"));
     assert!(nb.cells[2].output.contains("3"));
 }
+
+// =========================================================================
+// Notebook: cell types, reordering, shared context
+// =========================================================================
+
+#[test]
+fn notebook_cell_types_and_reordering() {
+    use mathr::notebook::{CellType, Notebook};
+    let mut nb = Notebook::new();
+    nb.add_cell("1 + 2");
+    nb.add_cell_with_type("# Notes", CellType::Text);
+    nb.add_cell("sin(0)");
+
+    // Move the text cell up
+    nb.move_cell_up(1).unwrap();
+    assert_eq!(nb.cells[0].cell_type, CellType::Text);
+    assert_eq!(nb.cells[1].cell_type, CellType::Math);
+
+    // Duplicate
+    let new_id = nb.duplicate_cell(0).unwrap();
+    assert_eq!(nb.cells.len(), 4);
+    assert_eq!(nb.cells[new_id].cell_type, CellType::Text);
+}
+
+#[test]
+fn notebook_shared_context_across_cells() {
+    use mathr::notebook::Notebook;
+    let mut nb = Notebook::new();
+    nb.add_cell("let x = 7");
+    nb.add_cell("x * 3");
+    let mut ctx = Context::standard();
+    nb.eval_all(&mut ctx).unwrap();
+    // Second cell should see x=7 from the first cell
+    assert!(nb.cells[1].output.contains("21"), "output: {}", nb.cells[1].output);
+}
+
+#[test]
+fn notebook_text_cell_skipped_in_eval() {
+    use mathr::notebook::{CellType, Notebook};
+    let mut nb = Notebook::new();
+    nb.add_cell_with_type("This is a note", CellType::Text);
+    nb.add_cell("1 + 1");
+    let mut ctx = Context::standard();
+    nb.eval_all(&mut ctx).unwrap();
+    // Text cell output is the input itself
+    assert_eq!(nb.cells[0].output, "This is a note");
+    // Math cell still evaluates
+    assert!(nb.cells[1].output.contains("2"));
+}
+
+#[test]
+fn notebook_json_roundtrip_with_cell_types() {
+    use mathr::notebook::{CellType, Notebook, parse_notebook_json};
+    let mut nb = Notebook::new();
+    nb.add_cell("sin(pi/4)");
+    nb.add_cell_with_type("# Markdown note", CellType::Text);
+    let json = nb.to_json();
+    let nb2 = parse_notebook_json(&json).unwrap();
+    assert_eq!(nb2.cells[0].cell_type, CellType::Math);
+    assert_eq!(nb2.cells[1].cell_type, CellType::Text);
+}
+
+// =========================================================================
+// Fast math: Chebyshev-based approximations
+// =========================================================================
+
+#[test]
+fn fastmath_chebyshev_approx_custom_function() {
+    use mathr::fastmath::ChebyshevApprox;
+    let approx = ChebyshevApprox::new(|x| x * x + 1.0, -5.0, 5.0, 8);
+    for x in [-5.0, -2.0, 0.0, 1.5, 5.0] {
+        assert!(close(approx.eval(x), x * x + 1.0, 1e-10), "at x={}", x);
+    }
+}
+
+#[test]
+fn fastmath_sin_cos_accuracy() {
+    use mathr::fastmath::{fast_cos, fast_sin};
+    for x in (-500..=500).step_by(7) {
+        let x = x as f64 * 0.01;
+        assert!((fast_sin(x) - x.sin()).abs() < 1e-13, "sin({})", x);
+        assert!((fast_cos(x) - x.cos()).abs() < 1e-13, "cos({})", x);
+    }
+}
+
+#[test]
+fn fastmath_exp_log_accuracy() {
+    use mathr::fastmath::{fast_exp, fast_log};
+    for x in (-50..=50).step_by(3) {
+        let x = x as f64 * 0.1;
+        let rel = (fast_exp(x) - x.exp()).abs() / x.exp().abs();
+        assert!(rel < 1e-13, "exp({})", x);
+    }
+    for i in 1..=100_000 {
+        let x = i as f64 * 0.001;
+        assert!((fast_log(x) - x.ln()).abs() < 1e-13, "log({})", x);
+    }
+}
+
+#[test]
+fn fastmath_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("fast sin 1.5", ctx).unwrap().unwrap();
+    assert!(result.contains("fast sin(1.5)"));
+    assert!(result.contains("err:"));
+
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("fast exp 2.0", ctx).unwrap().unwrap();
+    assert!(result.contains("fast exp(2)"));
+}
+
+// =========================================================================
+// Inline plot rendering (in-memory PNG bytes)
+// =========================================================================
+
+#[test]
+fn plot_function_to_bytes_produces_valid_png() {
+    use mathr::plot::plot_function_to_bytes;
+    let expr = Parser::parse("sin(x)").unwrap();
+    let bytes = plot_function_to_bytes(&expr, "x", 0.0, 3.14159, 100, "y = sin(x)").unwrap();
+    // PNG magic bytes
+    assert_eq!(&bytes[..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
+    assert!(bytes.len() > 1000, "PNG should be substantial: {} bytes", bytes.len());
+}
+
+#[test]
+fn plot_scatter_to_bytes_produces_valid_png() {
+    use mathr::plot::plot_scatter_to_bytes;
+    let points = vec![(0.0, 0.0), (1.0, 1.0), (2.0, 4.0), (3.0, 9.0)];
+    let bytes = plot_scatter_to_bytes(&points, "quadratic", "x", "y").unwrap();
+    assert_eq!(&bytes[..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
+}
+
+#[test]
+fn plot_function_to_bytes_bad_range_errors() {
+    use mathr::plot::plot_function_to_bytes;
+    let expr = Parser::parse("x").unwrap();
+    let result = plot_function_to_bytes(&expr, "x", 5.0, 1.0, 100, "y = x");
+    assert!(result.is_err());
+}
+
+#[test]
+fn notebook_features_example_loads() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/notebooks/notebook_features.mnb");
+    let nb = Notebook::load(&path).unwrap();
+    assert!(nb.cells.len() > 10, "should have many cells");
+    // First cell should be a text cell
+    assert_eq!(nb.cells[0].cell_type, mathr::notebook::CellType::Text);
+    // Should have math cells too
+    assert!(nb.cells.iter().any(|c| c.cell_type == mathr::notebook::CellType::Math));
+}
+
+// =========================================================================
+// Big integer arithmetic (arbitrary precision)
+// =========================================================================
+
+#[test]
+fn bigint_repl_prime() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("big prime 1000000007", ctx).unwrap().unwrap();
+    assert!(result.contains("prime"), "result: {}", result);
+
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("big prime 1000000008", ctx).unwrap().unwrap();
+    assert!(result.contains("composite"), "result: {}", result);
+}
+
+#[test]
+fn bigint_repl_factor() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("big factor 360", ctx).unwrap().unwrap();
+    assert!(result.contains("2^3"), "result: {}", result);
+    assert!(result.contains("3^2"), "result: {}", result);
+    assert!(result.contains("·"), "result: {}", result); // middle dot notation
+}
+
+#[test]
+fn bigint_repl_factorial() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("fact 25", ctx).unwrap().unwrap();
+    // 25! = 15511210043330985984000000 — auto-upgraded to BigInt
+    assert!(result.contains("15511210043330985984000000"), "result: {}", result);
+}
+
+#[test]
+fn bigint_repl_fibonacci() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("fib 100", ctx).unwrap().unwrap();
+    // F_100 = 354224848179261915075 — auto-upgraded to BigInt
+    assert!(result.contains("354224848179261915075"), "result: {}", result);
+}
+
+#[test]
+fn bigint_repl_binomial() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("binom 100 50", ctx).unwrap().unwrap();
+    // C(100,50) = 100891344545564193334812497256 — auto-upgraded to BigInt
+    assert!(result.contains("100891344545564193334812497256"), "result: {}", result);
+}
+
+#[test]
+fn bigint_repl_gcd() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("big gcd 1234567890123456 987654321098765", ctx)
+        .unwrap().unwrap();
+    assert!(result.contains("gcd("), "result: {}", result);
+}
+
+#[test]
+fn bigint_repl_modpow() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("big modpow 2 100 1000000007", ctx)
+        .unwrap().unwrap();
+    assert!(result.contains("≡"), "result: {}", result);
+    assert!(result.contains("(mod"), "result: {}", result);
+}
+
+#[test]
+fn bigint_repl_totient() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("big totient 360", ctx).unwrap().unwrap();
+    assert!(result.contains("φ("), "result: {}", result);
+    assert!(result.contains("96"), "result: {}", result); // φ(360) = 96
+}
+
+#[test]
+fn bigint_factorize_large_semiprime() {
+    use mathr::bigint;
+    let n = num_bigint::BigInt::from(1000000007u64) * num_bigint::BigInt::from(1000000009u64);
+    let factors = bigint::factorize(&n);
+    assert_eq!(factors.len(), 2);
+    assert_eq!(factors[0].0, num_bigint::BigInt::from(1000000007u64));
+    assert_eq!(factors[1].0, num_bigint::BigInt::from(1000000009u64));
+}
+
+#[test]
+fn bigint_is_prime_mersenne() {
+    use mathr::bigint;
+    use num_traits::One;
+    // 2^61 - 1 is a Mersenne prime
+    let m = num_bigint::BigInt::from(1u64 << 61) - num_bigint::BigInt::one();
+    assert!(bigint::is_prime(&m, 20));
+}
+
+// =========================================================================
+// Automatic differentiation (dual numbers)
+// =========================================================================
+
+#[test]
+fn autodiff_repl_derivative() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("ad x^3 + 2*x^2 - x + 5 at x=2", ctx)
+        .unwrap().unwrap();
+    // f(2) = 8 + 8 - 2 + 5 = 19, f'(2) = 12 + 8 - 1 = 19
+    assert!(result.contains("19"), "result: {}", result);
+    assert!(result.contains("f'"), "result: {}", result);
+}
+
+#[test]
+fn autodiff_repl_trig() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("ad sin(x) at x=0", ctx)
+        .unwrap().unwrap();
+    // f(0) = 0, f'(0) = cos(0) = 1
+    assert!(result.contains("f(x) = 0"), "result: {}", result);
+    assert!(result.contains("f'(x) = 1"), "result: {}", result);
+}
+
+#[test]
+fn autodiff_repl_gradient() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("ad grad x^2 + y^3 with x=2,y=3", ctx)
+        .unwrap().unwrap();
+    // df/dx = 2x = 4, df/dy = 3y^2 = 27
+    assert!(result.contains("4"), "result: {}", result);
+    assert!(result.contains("27"), "result: {}", result);
+}
+
+#[test]
+fn autodiff_repl_jacobian() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "ad jacobian x^2 + y, x * y^2 with x=2,y=3",
+        ctx,
+    ).unwrap().unwrap();
+    // J = [[4, 1], [9, 12]]
+    assert!(result.contains("4"), "result: {}", result);
+    assert!(result.contains("9"), "result: {}", result);
+    assert!(result.contains("12"), "result: {}", result);
+}
+
+#[test]
+fn autodiff_derivative_polynomial() {
+    use mathr::autodiff;
+    use mathr::parser::Parser;
+    use mathr::eval::Context;
+    let expr = Parser::parse("x^3 + 2*x^2 - x + 5").unwrap();
+    let ctx = Context::standard();
+    let d = autodiff::derivative(&expr, "x", 2.0, &ctx).unwrap();
+    assert!((d.val - 19.0).abs() < 1e-10);
+    assert!((d.deriv - 19.0).abs() < 1e-10);
+}
+
+#[test]
+fn autodiff_gradient_multivariate() {
+    use mathr::autodiff;
+    use mathr::parser::Parser;
+    use mathr::eval::Context;
+    let expr = Parser::parse("x^2 + y^3").unwrap();
+    let mut ctx = Context::standard();
+    ctx.set("x", 2.0);
+    ctx.set("y", 3.0);
+    let grad = autodiff::gradient(&expr, &ctx).unwrap();
+    let x_grad = grad.iter().find(|(n, _)| n == "x").unwrap().1;
+    let y_grad = grad.iter().find(|(n, _)| n == "y").unwrap().1;
+    assert!((x_grad - 4.0).abs() < 1e-10);
+    assert!((y_grad - 27.0).abs() < 1e-10);
+}
+
+#[test]
+fn autodiff_jacobian_matrix() {
+    use mathr::autodiff;
+    use mathr::parser::Parser;
+    use mathr::eval::Context;
+    let f1 = Parser::parse("x^2 + y").unwrap();
+    let f2 = Parser::parse("x * y^2").unwrap();
+    let mut ctx = Context::standard();
+    ctx.set("x", 2.0);
+    ctx.set("y", 3.0);
+    let jac = autodiff::jacobian(&[f1, f2], &ctx).unwrap();
+    assert!((jac[0][0] - 4.0).abs() < 1e-10); // 2x = 4
+    assert!((jac[0][1] - 1.0).abs() < 1e-10);
+    assert!((jac[1][0] - 9.0).abs() < 1e-10); // y^2 = 9
+    assert!((jac[1][1] - 12.0).abs() < 1e-10); // 2xy = 12
+}
+
+// =========================================================================
+// Auto-upgrade: REPL commands that auto-use BigInt on overflow
+// =========================================================================
+
+#[test]
+fn autoupgrade_factorial() {
+    // 25! overflows u64 — should auto-upgrade to BigInt
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("fact 25", ctx).unwrap().unwrap();
+    assert_eq!(result, "15511210043330985984000000");
+}
+
+#[test]
+fn autoupgrade_fibonacci() {
+    // F(100) overflows u64 — should auto-upgrade to BigInt
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("fib 100", ctx).unwrap().unwrap();
+    assert_eq!(result, "354224848179261915075");
+}
+
+#[test]
+fn autoupgrade_binomial() {
+    // C(100, 50) overflows u64 — should auto-upgrade to BigInt
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("binom 100 50", ctx).unwrap().unwrap();
+    assert_eq!(result, "100891344545564193334812497256");
+}
+
+#[test]
+fn autoupgrade_factorial_small_stays_u64() {
+    // 10! fits in u64 — should use the fast u64 path
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("fact 10", ctx).unwrap().unwrap();
+    assert_eq!(result, "3628800");
+}
+
+// =========================================================================
+// Postfix factorial notation (n!)
+// =========================================================================
+
+#[test]
+fn postfix_factorial_eval() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("5!", ctx).unwrap().unwrap();
+    assert_eq!(result, "120");
+}
+
+#[test]
+fn postfix_factorial_large() {
+    // 20! = 2432902008176640000 — largest factorial exact in f64
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("20!", ctx).unwrap().unwrap();
+    assert_eq!(result, "2432902008176640000");
+}
+
+#[test]
+fn postfix_factorial_in_expression() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("2 * 3!", ctx).unwrap().unwrap();
+    assert_eq!(result, "12");
+}
+
+#[test]
+fn postfix_factorial_parens() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("(2+3)!", ctx).unwrap().unwrap();
+    assert_eq!(result, "120");
+}
+
+// =========================================================================
+// Standard math notation: |x|, a mod b, gcd(a,b), lcm(a,b), C(n,k), \binom
+// =========================================================================
+
+#[test]
+fn abs_bars_eval() {
+    let ctx = mathr::eval::Context::standard();
+    assert_eq!(mathr::repl::dispatch_str("|-5|", ctx.clone()).unwrap().unwrap(), "5");
+    assert_eq!(mathr::repl::dispatch_str("|3|", ctx.clone()).unwrap().unwrap(), "3");
+    assert_eq!(mathr::repl::dispatch_str("|-3|", ctx).unwrap().unwrap(), "3");
+}
+
+#[test]
+fn abs_bars_expression() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("|sin(pi)|", ctx).unwrap().unwrap();
+    let v: f64 = result.parse().unwrap();
+    assert!(v.abs() < 1e-10);
+}
+
+#[test]
+fn infix_mod_eval() {
+    let ctx = mathr::eval::Context::standard();
+    assert_eq!(mathr::repl::dispatch_str("7 mod 3", ctx.clone()).unwrap().unwrap(), "1");
+    assert_eq!(mathr::repl::dispatch_str("10 mod 4", ctx).unwrap().unwrap(), "2");
+}
+
+#[test]
+fn gcd_lcm_as_functions_eval() {
+    let ctx = mathr::eval::Context::standard();
+    assert_eq!(mathr::repl::dispatch_str("gcd(12, 8)", ctx.clone()).unwrap().unwrap(), "4");
+    assert_eq!(mathr::repl::dispatch_str("lcm(4, 6)", ctx).unwrap().unwrap(), "12");
+}
+
+#[test]
+fn binomial_C_function_eval() {
+    let ctx = mathr::eval::Context::standard();
+    assert_eq!(mathr::repl::dispatch_str("C(5, 2)", ctx.clone()).unwrap().unwrap(), "10");
+    assert_eq!(mathr::repl::dispatch_str("C(10, 3)", ctx).unwrap().unwrap(), "120");
+}
+
+#[test]
+fn tex_binom_eval() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("\\binom{5}{2}", ctx).unwrap().unwrap();
+    assert_eq!(result, "10");
+}
+
+#[test]
+fn tex_gcd_lcm_eval() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("\\gcd(12, 8)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(result, "4");
+    let result = mathr::repl::dispatch_str("\\lcm(4, 6)", ctx).unwrap().unwrap();
+    assert_eq!(result, "12");
+}
+

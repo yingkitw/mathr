@@ -1,0 +1,88 @@
+{
+  "cells": [
+    {
+      "id": 0,
+      "input": "# Notebook Features Demo\n\nThis notebook demonstrates the enhanced notebook capabilities:\n- **Shared context** across cells (variables persist)\n- **Text cells** with Markdown rendering\n- **Inline plots** rendered directly in the notebook\n- **Cell management** (reorder, duplicate, toggle type)\n\nTry `Reset & Run All` to see the full pipeline!",
+      "output": "",
+      "cell_type": "text"
+    },
+    {
+      "id": 1,
+      "input": "let a = 3",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 2,
+      "input": "let b = 4",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 3,
+      "input": "sqrt(a^2 + b^2)",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 4,
+      "input": "## Function Definitions\n\nDefine a function in one cell and use it in the next. The `fn` binding persists in the shared context.",
+      "output": "",
+      "cell_type": "text"
+    },
+    {
+      "id": 5,
+      "input": "fn f(x) = x^3 - 2*x^2 + x - 1",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 6,
+      "input": "f(5)",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 7,
+      "input": "diff f(x)",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 8,
+      "input": "## Inline Plotting\n\nThe `plot` command renders inline in the notebook — no file management needed!",
+      "output": "",
+      "cell_type": "text"
+    },
+    {
+      "id": 9,
+      "input": "plot sin(x) 0 6.28318",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 10,
+      "input": "plot sin(x) * exp(-0.1*x) 0 20",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 11,
+      "input": "## Symbolic Computation\n\nAll REPL commands work in the notebook, including symbolic differentiation, integration, and Taylor series.",
+      "output": "",
+      "cell_type": "text"
+    },
+    {
+      "id": 12,
+      "input": "integrate sin(x)",
+      "output": "",
+      "cell_type": "math"
+    },
+    {
+      "id": 13,
+      "input": "taylor exp(x) 0 5",
+      "output": "",
+      "cell_type": "math"
+    }
+  ]
+}

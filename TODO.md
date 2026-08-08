@@ -97,6 +97,12 @@
 - [x] **KaTeX math rendering** (input preview + output rendering, plain-to-LaTeX converter, decimal-to-fraction display)
 - [x] **Fallback to simplify on unbound variables** (expressions with variables that can't be evaluated are simplified instead of erroring)
 - [x] **`det` command in notebook/REPL** (matrix determinant via `det <rows>`)
+- [x] **Shared context across cells** (`let`/`fn` bindings persist across cells, `/api/reset` + `/api/context` endpoints, `dispatch_with_ctx` API)
+- [x] **Cell types** (Math cells evaluated with KaTeX, Text cells for documentation — `CellType` enum, JSON `cell_type` field)
+- [x] **Cell management** (move up/down, duplicate, toggle type, execution status indicators, context panel, Reset & Run All)
+- [x] **Inline plots** (`plot` commands render PNG images directly in the notebook via base64, `plot_function_to_bytes`/`plot_multi_to_bytes`/`plot_scatter_to_bytes`)
+- [x] **Markdown text cells** (text cells render Markdown via marked.js — headings, lists, code, blockquotes)
+- [x] **Execution counters** (`In [n]:` indicators like Jupyter, Alt+Enter to run + add cell)
 
 ### Other
 - [x] Complex number type with arithmetic, polar conversion, powers
@@ -104,8 +110,17 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **341 inline unit tests** + 112 integration tests — all passing
+- [x] **406 inline unit tests** + 156 integration tests — all passing
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
+
+### Fast math
+- [x] **Chebyshev-based fast math library** — `ChebyshevApprox` struct, `fast_sin`/`fast_cos`/`fast_tan`/`fast_exp`/`fast_log`/`fast_sqrt`/`fast_pow` with argument reduction, `fast` REPL command
+
+### Big integers
+- [x] **Big integer support** — `bigint` module with arbitrary-precision primality (Miller–Rabin), factorization (trial division + Pollard's rho), GCD, LCM, factorial, Fibonacci (fast doubling), binomial, modular exponentiation, totient. REPL commands `fact`/`fib`/`binom` auto-upgrade to BigInt on u64 overflow (SymPy-style). `big` command for explicit big-integer ops on inputs > u64::MAX.
+
+### Automatic differentiation
+- [x] **Dual numbers** — `autodiff` module with `Dual` type (value + derivative), full arithmetic operator overloads, elementary functions (sin, cos, tan, exp, ln, log, sqrt, powf, pow_dual, asin, acos, atan, sinh, cosh, tanh, abs), `eval` for `Expr` AST, `derivative`, `gradient`, `jacobian`, `ad` REPL command. Naming follows AD literature conventions.
 
 ## Brainstorming
 
@@ -113,13 +128,12 @@
 (none currently)
 
 ### Medium Priority
-- [ ] Big integer support for number theory (arbitrary precision)
-- [ ] Chebyshev-based fast math library (e.g., `cos`/`sin` via Padé approximation)
+(none currently — big integer support completed)
 
 ### Low Priority
 - [ ] Arbitrary-precision arithmetic (BigDecimal)
 - [ ] Interval arithmetic for rigorous bounds
-- [ ] Automatic differentiation (dual numbers)
+- [x] **Automatic differentiation (dual numbers)** — `autodiff` module with `Dual` type, `derivative`, `gradient`, `jacobian`, `ad` REPL command
 - [ ] Expression serialization (S-expressions, JSON, RPN)
 - [ ] GPU-accelerated FFT (via `wgpu`)
 - [ ] 3D plotting (surface plots, contour plots)

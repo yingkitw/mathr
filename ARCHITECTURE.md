@@ -27,13 +27,25 @@ stats.rs        (standalone, descriptive statistics)
 numtheory.rs    (standalone, integer number theory + Miller–Rabin, CRT,
                  Jacobi symbol, continued fractions, Diophantine, discrete log)
 rational.rs     (standalone, exact rational arithmetic with GCD reduction)
-notebook.rs     (standalone, .mnb notebook format, JSON parse/serialize, cell eval)
-server.rs       (standalone, minimal HTTP server for web notebook UI)
+notebook.rs     (standalone, .mnb notebook format, JSON parse/serialize, cell eval,
+                 cell types Math/Text, cell reordering, shared context via &mut Context)
+server.rs       (standalone, minimal HTTP server for web notebook UI,
+                 shared context across cells, /api/reset, /api/context)
 ode.rs          (standalone, numerical ODE integration)
 interpolate.rs  (standalone, Lagrange, Newton, cubic spline, Chebyshev,
                  Legendre, Gauss–Legendre)
 special.rs      (standalone, Gamma, Beta, erf, sinc, incomplete gamma,
                  Bessel J_0/J_1/J_n)
+fastmath.rs     (standalone, Chebyshev-based fast approximations of sin, cos,
+                 tan, exp, log, sqrt, pow with argument reduction)
+bigint.rs       (standalone, arbitrary-precision integers via num-bigint:
+                 Miller–Rabin primality, Pollard's rho factorization, GCD,
+                 factorial, Fibonacci fast doubling, binomial, mod_pow, totient.
+                 REPL fact/fib/binom auto-upgrade on u64 overflow; `big` command
+                 for inputs > u64::MAX)
+autodiff.rs     (standalone, automatic differentiation via dual numbers:
+                 Dual type with arithmetic, elementary functions, Expr eval,
+                 derivative, gradient, jacobian)
 
 expr.rs ──canonicalize/equals──▶ expr.rs (canonical form comparison)
 
@@ -57,8 +69,8 @@ error.rs ──used by──▶ all modules
 11. **Taylor**: `taylor::taylor_series` — uses `symbolic::differentiate` + `eval::eval` to compute coefficients
 12. **Laurent**: `laurent::laurent_series` — expands `g(x) = (x-a)^k · f(x)` via Taylor, divides by `(x-a)^k` to get principal + analytic parts
 13. **Rational**: `rational::Rational` — exact `i64/i64` with GCD reduction, `i128` intermediate arithmetic, parsing from `"n/d"` or decimal strings. `rational::eval_rational` walks `Expr` AST and returns exact `Rational` when all leaves are integers (returns `None` for functions, variables, or non-integer constants)
-14. **Notebook**: `notebook::Notebook` — `.mnb` JSON format with cells of TeX/math expressions; `eval_cell`/`eval_all` dispatch through `repl::dispatch_str`
-15. **Web server**: `server::NotebookServer` — minimal HTTP server on `std::net::TcpListener`; serves single-page web UI at `GET /`, REST API at `/api/eval` (with step-by-step `steps` array) and `/api/notebook`
+14. **Notebook**: `notebook::Notebook` — `.mnb` JSON format with cells of TeX/math expressions; `eval_cell`/`eval_all` dispatch through `repl::dispatch_with_ctx` (mutating context for `let`/`fn` persistence); cells have types (`Math`/`Text`) and support reordering/duplication
+15. **Web server**: `server::NotebookServer` — minimal HTTP server on `std::net::TcpListener`; serves single-page web UI at `GET /`, REST API at `/api/eval` (with step-by-step `steps` array, shared context, inline plot images as base64), `/api/notebook`, `/api/reset`, `/api/context`
 16. **Step-by-step solving**: `repl::dispatch_steps` — returns `Vec<String>` of intermediate steps for `diff`, `solve`, `taylor`, `integrate`, `simplify`, `rat`, `laurent`, and plain eval; tries `rational::eval_rational` first for exact fraction results; falls back to `simplify` when evaluation fails on unbound variables; delegates all other REPL commands (`int`, `romberg`, `fft`, `det`, etc.) to `dispatch_inner`
 17. **Symbolic integration**: `symbolic::integrate` — pattern-matches common elementary rules (polynomial, exp, ln, sin/cos/tan/sec, atan, asin)
 18. **Gradient**: `symbolic::gradient` — collects all free variables and computes partial derivatives for each
@@ -79,4 +91,4 @@ error.rs ──used by──▶ all modules
 
 ## Deployment
 
-The crate produces both a library (`mathr`) and a binary (`mathr`). The binary is a thin CLI wrapper around library functions. The `notebook` subcommand starts a minimal HTTP server serving a Jupyter-like web UI with KaTeX math rendering, step-by-step solving, and exact fraction arithmetic.
+The crate produces both a library (`mathr`) and a binary (`mathr`). The binary is a thin CLI wrapper around library functions. The `notebook` subcommand starts a minimal HTTP server serving a Jupyter-like web UI with KaTeX math rendering, step-by-step solving, exact fraction arithmetic, shared context across cells (variables/functions persist), cell types (math/text with Markdown rendering), inline plots (base64 PNG), execution counters, and cell management (reorder, duplicate, toggle type).

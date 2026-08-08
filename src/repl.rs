@@ -103,6 +103,13 @@ pub fn dispatch_str(line: &str, mut ctx: Context) -> Result<Option<String>> {
     dispatch_inner(line, &mut ctx)
 }
 
+/// Dispatch a single input string against a mutable context.
+/// Unlike [`dispatch_str`], this mutates the context in-place so that
+/// `let` bindings and `fn` definitions persist across calls.
+pub fn dispatch_with_ctx(line: &str, ctx: &mut Context) -> Result<Option<String>> {
+    dispatch_inner(line, ctx)
+}
+
 /// Dispatch a single input and return step-by-step output.
 /// Each element of the returned Vec is one step (rendered as a separate line in the UI).
 pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
@@ -162,6 +169,9 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "gcd ", "lcm ", "is-prime ", "factor ", "fib ", "binom ",
         "fact ", "mr-prime ", "jacobi ", "cf ", "diophantine ", "dlog ",
         "det ",
+        "fast ",
+        "big ",
+        "ad ",
     ];
     if cmd_keywords.iter().any(|kw| line.starts_with(kw)) || line == "vars" || line == "funcs" {
         let result = dispatch_inner(line, &mut ctx.clone())?;
@@ -575,6 +585,15 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("det ") {
         return do_det(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("fast ") {
+        return do_fast(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("big ") {
+        return do_big(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("ad ") {
+        return do_ad(rest.trim(), &ctx.clone());
     }
 
     // Default: evaluate the expression and print the value
@@ -1194,25 +1213,49 @@ fn do_numtheory(rest: &str, op: &str) -> Result<Option<String>> {
             if factors.is_empty() {
                 Ok(Some("1".into()))
             } else {
-                let strs: Vec<String> = factors.iter().map(|f| f.to_string()).collect();
-                Ok(Some(strs.join(" * ")))
+                // Group repeated factors with exponents: 360 = 2^3 * 3^2 * 5
+                let mut grouped: Vec<(u64, u32)> = Vec::new();
+                for &p in &factors {
+                    if let Some(last) = grouped.last_mut() {
+                        if last.0 == p { last.1 += 1; continue; }
+                    }
+                    grouped.push((p, 1));
+                }
+                let strs: Vec<String> = grouped
+                    .iter()
+                    .map(|(p, e)| if *e == 1 { p.to_string() } else { format!("{}^{}", p, e) })
+                    .collect();
+                Ok(Some(strs.join(" · ")))
             }
         }
         "fib" => {
             let n = parse_u64_single(&tokens)?;
-            Ok(Some(numtheory::fibonacci(n).to_string()))
+            // F(90) ≈ 2.88e18 fits in u64; F(91) overflows. Auto-upgrade to BigInt.
+            if n <= 90 {
+                Ok(Some(numtheory::fibonacci(n).to_string()))
+            } else {
+                Ok(Some(crate::bigint::fibonacci(n).to_string()))
+            }
         }
         "binom" => {
             if tokens.len() < 2 { return Err(crate::error::MathError::Eval("binom needs n k".into())); }
             let n: u64 = tokens[0].parse().map_err(|_| crate::error::MathError::Eval("bad n".into()))?;
             let k: u64 = tokens[1].parse().map_err(|_| crate::error::MathError::Eval("bad k".into()))?;
-            let r = numtheory::binomial(n, k)?;
-            Ok(Some(r.to_string()))
+            // Try u64 first; fall back to BigInt on overflow (matching SymPy behavior).
+            match numtheory::binomial(n, k) {
+                Ok(r) => Ok(Some(r.to_string())),
+                Err(_) => Ok(Some(crate::bigint::binomial(n, k).to_string())),
+            }
         }
         "fact" => {
             let n = parse_u64_single(&tokens)?;
-            let r = numtheory::factorial(n)?;
-            Ok(Some(r.to_string()))
+            // 20! fits in u64; 21! overflows. Auto-upgrade to BigInt.
+            if n <= 20 {
+                let r = numtheory::factorial(n)?;
+                Ok(Some(r.to_string()))
+            } else {
+                Ok(Some(crate::bigint::factorial(n).to_string()))
+            }
         }
         "mr-prime" => {
             let n = parse_u64_single(&tokens)?;
@@ -1355,6 +1398,236 @@ fn do_chebyshev(rest: &str) -> Result<Option<String>> {
         "T_{}({}) = {}",
         n, x, format_value(crate::interpolate::chebyshev_t(n, x))
     )))
+}
+
+fn do_fast(rest: &str) -> Result<Option<String>> {
+    // Format: "func x" — e.g. "fast sin 1.5"
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "fast needs: <func> <x>  (func: sin, cos, tan, exp, log, sqrt, pow)".into(),
+        ));
+    }
+    let func = tokens[0];
+    let x: f64 = tokens[1]
+        .parse()
+        .map_err(|_| crate::error::MathError::Eval("bad x".into()))?;
+    let (fast_val, exact_val, name) = match func {
+        "sin" => (crate::fastmath::fast_sin(x), x.sin(), "sin"),
+        "cos" => (crate::fastmath::fast_cos(x), x.cos(), "cos"),
+        "tan" => (crate::fastmath::fast_tan(x), x.tan(), "tan"),
+        "exp" => (crate::fastmath::fast_exp(x), x.exp(), "exp"),
+        "log" | "ln" => (crate::fastmath::fast_log(x), x.ln(), "ln"),
+        "sqrt" => (crate::fastmath::fast_sqrt(x), x.sqrt(), "sqrt"),
+        "pow" => {
+            if tokens.len() < 3 {
+                return Err(crate::error::MathError::Eval("fast pow needs: <x> <y>".into()));
+            }
+            let y: f64 = tokens[2]
+                .parse()
+                .map_err(|_| crate::error::MathError::Eval("bad y".into()))?;
+            let fv = crate::fastmath::fast_pow(x, y);
+            let ev = x.powf(y);
+            return Ok(Some(format!(
+                "fast pow({}, {}) = {}  (exact: {}, err: {:e})",
+                x, y, format_value(fv), format_value(ev), (fv - ev).abs()
+            )));
+        }
+        _ => {
+            return Err(crate::error::MathError::Eval(format!(
+                "unknown fast func '{}' (try: sin, cos, tan, exp, log, sqrt, pow)",
+                func
+            )));
+        }
+    };
+    Ok(Some(format!(
+        "fast {}({}) = {}  (exact: {}, err: {:e})",
+        name,
+        x,
+        format_value(fast_val),
+        format_value(exact_val),
+        (fast_val - exact_val).abs()
+    )))
+}
+
+fn do_big(rest: &str) -> Result<Option<String>> {
+    use crate::bigint;
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "big needs: <op> <args>  (op: prime, factor, gcd, lcm, modpow, totient)".into(),
+        ));
+    }
+    let op = tokens[0];
+    match op {
+        "prime" | "is-prime" => {
+            if tokens.len() < 2 {
+                return Err(crate::error::MathError::Eval("big prime needs: <n>".into()));
+            }
+            let n = bigint::parse(tokens[1])?;
+            let result = bigint::is_prime(&n, 20);
+            Ok(Some(format!("{} is {}", n, if result { "prime" } else { "composite" })))
+        }
+        "factor" | "factorize" => {
+            if tokens.len() < 2 {
+                return Err(crate::error::MathError::Eval("big factor needs: <n>".into()));
+            }
+            let n = bigint::parse(tokens[1])?;
+            let factors = bigint::factorize(&n);
+            if factors.is_empty() {
+                return Ok(Some(format!("{} = 1", n)));
+            }
+            let parts: Vec<String> = factors
+                .iter()
+                .map(|(p, e)| {
+                    if *e == 1 {
+                        p.to_string()
+                    } else {
+                        format!("{}^{}", p, e)
+                    }
+                })
+                .collect();
+            Ok(Some(format!("{} = {}", n, parts.join(" · "))))
+        }
+        "gcd" => {
+            if tokens.len() < 3 {
+                return Err(crate::error::MathError::Eval("big gcd needs: <a> <b>".into()));
+            }
+            let a = bigint::parse(tokens[1])?;
+            let b = bigint::parse(tokens[2])?;
+            Ok(Some(format!("gcd({}, {}) = {}", a, b, bigint::gcd(&a, &b))))
+        }
+        "lcm" => {
+            if tokens.len() < 3 {
+                return Err(crate::error::MathError::Eval("big lcm needs: <a> <b>".into()));
+            }
+            let a = bigint::parse(tokens[1])?;
+            let b = bigint::parse(tokens[2])?;
+            Ok(Some(format!("lcm({}, {}) = {}", a, b, bigint::lcm(&a, &b))))
+        }
+        "modpow" => {
+            if tokens.len() < 4 {
+                return Err(crate::error::MathError::Eval("big modpow needs: <base> <exp> <mod>".into()));
+            }
+            let base = bigint::parse(tokens[1])?;
+            let exp = bigint::parse(tokens[2])?;
+            let m = bigint::parse(tokens[3])?;
+            let result = bigint::mod_pow(&base, &exp, &m)?;
+            Ok(Some(format!("{}^{} ≡ {} (mod {})", base, exp, result, m)))
+        }
+        "totient" | "phi" => {
+            if tokens.len() < 2 {
+                return Err(crate::error::MathError::Eval("big totient needs: <n>".into()));
+            }
+            let n = bigint::parse(tokens[1])?;
+            Ok(Some(format!("φ({}) = {}", n, bigint::totient(&n))))
+        }
+        _ => Err(crate::error::MathError::Eval(format!(
+            "unknown big op '{}' (try: prime, factor, gcd, lcm, modpow, totient)",
+            op
+        ))),
+    }
+}
+
+fn do_ad(rest: &str, ctx: &Context) -> Result<Option<String>> {
+    // Format: "ad <expr> at <var>=<val>" or "ad grad <expr> with <var>=<val>,..."
+    // or "ad jacobian <f1>, <f2>, ... with <var>=<val>,..."
+    let tokens: Vec<&str> = rest.splitn(2, " at ").collect();
+    if tokens.len() == 2 {
+        // Single-variable derivative: ad <expr> at <var>=<val>
+        let expr_src = tokens[0].trim();
+        let var_val = tokens[1].trim();
+        let parts: Vec<&str> = var_val.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            return Err(crate::error::MathError::Eval(
+                "ad needs: <expr> at <var>=<val>".into(),
+            ));
+        }
+        let var = parts[0].trim().to_string();
+        let val: f64 = parts[1]
+            .trim()
+            .parse()
+            .map_err(|_| crate::error::MathError::Eval("bad value".into()))?;
+        let e = Parser::parse(expr_src)?;
+        let d = crate::autodiff::derivative(&e, &var, val, ctx)?;
+        return Ok(Some(format!(
+            "f({}) = {},  f'({}) = {}",
+            var, format_value(d.val), var, format_value(d.deriv)
+        )));
+    }
+
+    // Gradient: ad grad <expr> with x=1,y=2,...
+    if let Some(rest) = rest.strip_prefix("grad ") {
+        let parts: Vec<&str> = rest.splitn(2, " with ").collect();
+        if parts.len() != 2 {
+            return Err(crate::error::MathError::Eval(
+                "ad grad needs: <expr> with <var>=<val>,...".into(),
+            ));
+        }
+        let expr_src = parts[0].trim();
+        let assignments = parts[1].trim();
+        let e = Parser::parse(expr_src)?;
+        let mut point = ctx.clone();
+        for assignment in assignments.split(',') {
+            let kv: Vec<&str> = assignment.splitn(2, '=').collect();
+            if kv.len() == 2 {
+                let k = kv[0].trim();
+                let v: f64 = kv[1]
+                    .trim()
+                    .parse()
+                    .map_err(|_| crate::error::MathError::Eval("bad value".into()))?;
+                point.set(k, v);
+            }
+        }
+        let grad = crate::autodiff::gradient(&e, &point)?;
+        let parts: Vec<String> = grad
+            .iter()
+            .map(|(name, val)| format!("∂f/∂{} = {}", name, format_value(*val)))
+            .collect();
+        return Ok(Some(format!("∇f = [{}]", parts.join(", "))));
+    }
+
+    // Jacobian: ad jacobian <f1>, <f2>, ... with x=1,y=2,...
+    if let Some(rest) = rest.strip_prefix("jacobian ") {
+        let parts: Vec<&str> = rest.splitn(2, " with ").collect();
+        if parts.len() != 2 {
+            return Err(crate::error::MathError::Eval(
+                "ad jacobian needs: <f1>, <f2>, ... with <var>=<val>,...".into(),
+            ));
+        }
+        let exprs_src = parts[0].trim();
+        let assignments = parts[1].trim();
+        let exprs: Result<Vec<Expr>> = exprs_src
+            .split(',')
+            .map(|s| Parser::parse(s.trim()))
+            .collect();
+        let exprs = exprs?;
+        let mut point = ctx.clone();
+        for assignment in assignments.split(',') {
+            let kv: Vec<&str> = assignment.splitn(2, '=').collect();
+            if kv.len() == 2 {
+                let k = kv[0].trim();
+                let v: f64 = kv[1]
+                    .trim()
+                    .parse()
+                    .map_err(|_| crate::error::MathError::Eval("bad value".into()))?;
+                point.set(k, v);
+            }
+        }
+        let jac = crate::autodiff::jacobian(&exprs, &point)?;
+        let rows: Vec<String> = jac
+            .iter()
+            .map(|row| {
+                let vals: Vec<String> = row.iter().map(|v| format_value(*v)).collect();
+                format!("[{}]", vals.join(", "))
+            })
+            .collect();
+        return Ok(Some(format!("J = [{}]", rows.join(", "))));
+    }
+
+    Err(crate::error::MathError::Eval(
+        "ad needs: <expr> at <var>=<val>  |  ad grad <expr> with <var>=<val>,...  |  ad jacobian <f1>,... with <var>=<val>,...".into(),
+    ))
 }
 
 fn do_romberg(rest: &str) -> Result<Option<String>> {
@@ -1649,7 +1922,7 @@ fn parse_f64_list(rest: &str) -> Result<Vec<f64>> {
         .collect()
 }
 
-fn guess_var(expr: &str) -> String {
+pub fn guess_var(expr: &str) -> String {
     // Pick the first single-letter identifier as the plotting variable.
     let mut seen = HashSet::new();
     let mut candidates = Vec::new();
@@ -1724,7 +1997,7 @@ fn format_value(v: f64) -> String {
 
 const HELP: &str = "\
 commands:
-  <expr>              evaluate (e.g. sin(pi/4), gamma(0.5), bessel_j0(5))
+  <expr>              evaluate (e.g. sin(pi/4), 5!, gamma(0.5), bessel_j0(5))
   let x = <expr>      bind a variable
   fn f(x) = <expr>    define a function
   diff <expr> [var]   symbolic derivative
@@ -1764,6 +2037,11 @@ commands:
   eig <rows>          dominant eigenvalue + eigenvector (power iteration)
   svd <rows>          singular value decomposition
   chebyshev n [x]     Chebyshev T_n(x), or T_n nodes on [-1, 1]
+  fast <func> <x> [y] Chebyshev fast approx (sin, cos, tan, exp, log, sqrt, pow)
+  big <op> <args>        Big integer ops for inputs > u64::MAX (prime, factor, gcd, lcm, modpow, totient)
+  ad <expr> at <var>=<val>   Automatic differentiation (dual numbers)
+  ad grad <expr> with ...    Gradient of multivariate expression
+  ad jacobian <f1>,... with ...  Jacobian matrix
   legendre n [x]      Legendre P_n(x), or Gauss–Legendre n-node weights
   integrate <expr> [var]
                       symbolic integration of <expr> with respect to var
@@ -1774,7 +2052,7 @@ commands:
   factor <n>          prime factorization
   fib <n>             Fibonacci number
   binom <n> <k>       binomial coefficient
-  fact <n>            factorial
+  fact <n>            factorial (also: n! in expressions)
   mr-prime <n> [r]    Miller–Rabin primality test
   jacobi <a> <n>      Jacobi symbol (a/n)
   cf <p> <q>          continued fraction of p/q

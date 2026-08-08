@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
 <style>
 :root {
   --bg: #1e1e2e;
@@ -84,11 +85,42 @@ button.success:hover { opacity: 0.85; }
   color: var(--accent2);
   min-width: 40px;
 }
+.cell-header .cell-type-badge {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.cell-header .cell-type-badge.text {
+  background: var(--accent2);
+}
 .cell-header .spacer { flex: 1; }
 .cell-header button {
   padding: 3px 10px;
   font-size: 0.75rem;
 }
+.cell-header .move-btns {
+  display: flex;
+  gap: 2px;
+}
+.cell-header .move-btns button {
+  padding: 3px 7px;
+  font-size: 0.7rem;
+}
+.cell-status {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 4px;
+}
+.cell-status.idle { color: var(--text-dim); }
+.cell-status.running { color: var(--accent2); }
+.cell-status.done { color: var(--green); }
+.cell-status.error { color: var(--red); }
 .cell-input {
   padding: 12px 16px;
 }
@@ -155,6 +187,100 @@ button.success:hover { opacity: 0.85; }
   font-style: italic;
   font-size: 0.8rem;
 }
+.cell.text-cell .cell-input textarea {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.95rem;
+  min-height: 60px;
+}
+.cell.text-cell .cell-output {
+  display: none;
+}
+.cell.text-cell .cell-input-preview {
+  display: none;
+}
+.context-panel {
+  max-width: 900px;
+  margin: 0 auto 12px;
+  padding: 0 16px;
+}
+.context-panel summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  padding: 6px 0;
+}
+.context-panel .context-content {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  margin-top: 6px;
+}
+.context-panel .context-vars {
+  color: var(--green);
+}
+.context-panel .context-funcs {
+  color: var(--accent2);
+  margin-top: 6px;
+}
+.cell-output .output-image {
+  margin: 8px 0;
+  text-align: center;
+}
+.cell-output .output-image img {
+  max-width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.cell.text-cell .cell-input .markdown-preview {
+  padding: 8px 4px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-x: auto;
+}
+.cell.text-cell .markdown-preview h1,
+.cell.text-cell .markdown-preview h2,
+.cell.text-cell .markdown-preview h3 {
+  color: var(--accent);
+  margin: 8px 0 4px;
+}
+.cell.text-cell .markdown-preview h1 { font-size: 1.3rem; }
+.cell.text-cell .markdown-preview h2 { font-size: 1.15rem; }
+.cell.text-cell .markdown-preview h3 { font-size: 1.0rem; }
+.cell.text-cell .markdown-preview p { margin: 4px 0; }
+.cell.text-cell .markdown-preview code {
+  background: var(--bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.85rem;
+}
+.cell.text-cell .markdown-preview pre {
+  background: var(--bg);
+  padding: 8px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.cell.text-cell .markdown-preview ul,
+.cell.text-cell .markdown-preview ol {
+  margin: 4px 0 4px 20px;
+}
+.cell.text-cell .markdown-preview blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 6px 0;
+  padding-left: 12px;
+  color: var(--text-dim);
+}
+.cell-exec-counter {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-family: 'SF Mono', monospace;
+  min-width: 50px;
+}
 .add-cell-bar {
   text-align: center;
   padding: 16px;
@@ -181,20 +307,34 @@ button.success:hover { opacity: 0.85; }
   <h1>mathr notebook</h1>
   <span id="filename" style="color:var(--text-dim);font-size:0.8rem;"></span>
   <span class="spacer"></span>
-  <button onclick="runAll()" class="success">Run All</button>
+  <button onclick="resetAndRunAll()" class="success">Reset &amp; Run All</button>
+  <button onclick="runAll()">Run All</button>
+  <button onclick="resetContext()">Reset Context</button>
   <button onclick="saveNotebook()">Save</button>
-  <button onclick="addCell()">+ Cell</button>
+  <button onclick="addCell('math')">+ Math</button>
+  <button onclick="addCell('text')">+ Text</button>
 </header>
+<div class="context-panel">
+  <details>
+    <summary id="context-summary">Context: 0 variables, 0 functions</summary>
+    <div class="context-content" id="context-content">
+      <div class="context-vars" id="context-vars">No variables bound.</div>
+      <div class="context-funcs" id="context-funcs">No user functions.</div>
+    </div>
+  </details>
+</div>
 <div id="notebook">
   <div id="cells"></div>
   <div class="add-cell-bar">
-    <button onclick="addCell()">+ Add Cell</button>
+    <button onclick="addCell('math')">+ Add Math Cell</button>
+    <button onclick="addCell('text')">+ Add Text Cell</button>
   </div>
 </div>
 
 <script>
 let notebook = { cells: [] };
 let nextId = 0;
+let execCounter = 0;
 
 // Convert a decimal number to a LaTeX fraction if it's a clean rational.
 // Returns null if the number is irrational or denominator would be too large.
@@ -253,7 +393,7 @@ function mathToLatex(expr) {
     'mr-prime', 'jacobi', 'cf', 'diophantine', 'dlog',
     'lu', 'cholesky', 'svd', 'eig', 'symlig', 'hessenberg',
     'schur', 'rank', 'tikhonov', 'spline', 'chebyshev', 'legendre',
-    'det',
+    'det', 'fast',
   ];
   const cmdMatch = s.match(/^([\w-]+)\s+/);
   let prefix = '';
@@ -342,10 +482,13 @@ function init() {
     .then(data => {
       notebook = data;
       nextId = data.cells.length;
-      if (data.cells.length === 0) { addCell(); }
+      // Ensure all cells have cell_type (backward compat with old .mnb files)
+      notebook.cells.forEach(c => { if (!c.cell_type) c.cell_type = 'math'; });
+      if (data.cells.length === 0) { addCell('math'); }
       else { renderAll(); }
     })
-    .catch(() => { addCell(); });
+    .catch(() => { addCell('math'); });
+  updateContextPanel();
 }
 
 function renderAll() {
@@ -355,21 +498,36 @@ function renderAll() {
     container.appendChild(createCellElement(cell, i));
   });
   // Render all input previews
-  notebook.cells.forEach((_, i) => updateInputPreview(i));
+  notebook.cells.forEach((cell, i) => {
+    if (cell.cell_type === 'text') updateMarkdownPreview(i);
+    else updateInputPreview(i);
+  });
 }
 
 function createCellElement(cell, index) {
   const div = document.createElement('div');
-  div.className = 'cell';
+  const isText = (cell.cell_type === 'text');
+  div.className = 'cell' + (isText ? ' text-cell' : '');
   div.dataset.index = index;
 
   // Header
   const header = document.createElement('div');
   header.className = 'cell-header';
+  const typeLabel = isText ? 'TEXT' : 'MATH';
+  const typeClass = isText ? 'text' : '';
+  const execNum = cell.exec_num ? `In [${cell.exec_num}]` : '';
   header.innerHTML = `
     <span class="cell-id">[${cell.id}]</span>
+    <span class="cell-exec-counter" id="exec-${index}">${execNum}</span>
+    <span class="cell-type-badge ${typeClass}" onclick="toggleCellType(${index})" title="Click to toggle cell type">${typeLabel}</span>
+    <span class="cell-status idle" id="status-${index}"></span>
     <span class="spacer"></span>
-    <button onclick="runCell(${index})">Run</button>
+    <span class="move-btns">
+      <button onclick="moveCellUp(${index})" title="Move up">↑</button>
+      <button onclick="moveCellDown(${index})" title="Move down">↓</button>
+    </span>
+    <button onclick="duplicateCell(${index})" title="Duplicate">Dup</button>
+    ${isText ? '' : `<button onclick="runCell(${index})">Run</button>`}
     <button onclick="deleteCell(${index})" class="danger">Del</button>
   `;
   div.appendChild(header);
@@ -379,29 +537,45 @@ function createCellElement(cell, index) {
   inputDiv.className = 'cell-input';
 
   const textarea = document.createElement('textarea');
-  textarea.placeholder = 'Enter math (e.g. sin(pi/4), \\\\frac{1}{2}+1, diff x^3)';
+  textarea.placeholder = isText
+    ? 'Enter text/markdown notes...'
+    : 'Enter math (e.g. sin(pi/4), \\\\frac{1}{2}+1, diff x^3, let x = 5, plot sin(x) 0 6.28)';
   textarea.value = cell.input;
   textarea.onkeydown = (e) => cellKeydown(e, index);
-  textarea.oninput = () => updateInputPreview(index);
+  textarea.oninput = () => {
+    notebook.cells[index].input = textarea.value;
+    if (!isText) updateInputPreview(index);
+    else updateMarkdownPreview(index);
+  };
   inputDiv.appendChild(textarea);
 
-  // Input preview (rendered math)
-  const previewDiv = document.createElement('div');
-  previewDiv.className = 'cell-input-preview';
-  previewDiv.innerHTML = '<span class="preview-label">Rendered:</span><div class="preview-math"></div>';
-  inputDiv.appendChild(previewDiv);
+  if (!isText) {
+    // Input preview (rendered math)
+    const previewDiv = document.createElement('div');
+    previewDiv.className = 'cell-input-preview';
+    previewDiv.innerHTML = '<span class="preview-label">Rendered:</span><div class="preview-math"></div>';
+    inputDiv.appendChild(previewDiv);
+  } else {
+    // Markdown preview for text cells
+    const previewDiv = document.createElement('div');
+    previewDiv.className = 'markdown-preview';
+    previewDiv.id = `md-preview-${index}`;
+    inputDiv.appendChild(previewDiv);
+  }
   div.appendChild(inputDiv);
 
-  // Output area
-  const outputDiv = document.createElement('div');
-  outputDiv.className = 'cell-output';
-  outputDiv.id = `output-${index}`;
-  if (cell.output) {
-    renderOutputInto(cell.output, outputDiv);
-  } else {
-    outputDiv.innerHTML = '<span class="output-placeholder">Not yet evaluated</span>';
+  if (!isText) {
+    // Output area
+    const outputDiv = document.createElement('div');
+    outputDiv.className = 'cell-output';
+    outputDiv.id = `output-${index}`;
+    if (cell.output) {
+      renderOutputInto(cell.output, outputDiv);
+    } else {
+      outputDiv.innerHTML = '<span class="output-placeholder">Not yet evaluated</span>';
+    }
+    div.appendChild(outputDiv);
   }
-  div.appendChild(outputDiv);
 
   return div;
 }
@@ -418,6 +592,21 @@ function updateInputPreview(index) {
   previewMath.innerHTML = '';
   renderKatex(latex, previewMath, true);
   notebook.cells[index].input = textarea.value;
+}
+
+function updateMarkdownPreview(index) {
+  const previewDiv = document.getElementById(`md-preview-${index}`);
+  if (!previewDiv) return;
+  const cellDiv = document.querySelector(`[data-index="${index}"]`);
+  if (!cellDiv) return;
+  const textarea = cellDiv.querySelector('textarea');
+  const input = textarea.value.trim();
+  if (!input) { previewDiv.innerHTML = ''; return; }
+  if (typeof marked !== 'undefined') {
+    previewDiv.innerHTML = marked.parse(input);
+  } else {
+    previewDiv.textContent = input;
+  }
 }
 
 // Determine if a step is a text label, a math expression, or mixed.
@@ -537,9 +726,23 @@ function renderOutputWithSteps(steps, outputDiv) {
 }
 
 function cellKeydown(event, index) {
+  // Shift/Cmd/Ctrl+Enter: run cell
   if (event.key === 'Enter' && (event.shiftKey || event.metaKey || event.ctrlKey)) {
     event.preventDefault();
     runCell(index);
+  }
+  // Alt+Enter: run cell and add a new cell below
+  if (event.key === 'Enter' && event.altKey) {
+    event.preventDefault();
+    runCell(index).then(() => {
+      addCell('math');
+      // Focus the new cell's textarea
+      setTimeout(() => {
+        const cells = document.querySelectorAll('[data-index]');
+        const last = cells[cells.length - 1];
+        if (last) last.querySelector('textarea').focus();
+      }, 50);
+    });
   }
 }
 
@@ -548,7 +751,13 @@ async function runCell(index) {
   const textarea = cellDiv.querySelector('textarea');
   const input = textarea.value;
   notebook.cells[index].input = input;
+
+  // Skip text cells
+  if (notebook.cells[index].cell_type === 'text') return;
+
   const outputDiv = document.getElementById(`output-${index}`);
+  const statusEl = document.getElementById(`status-${index}`);
+  if (statusEl) { statusEl.textContent = 'running'; statusEl.className = 'cell-status running'; }
   outputDiv.innerHTML = '<span class="output-placeholder">Evaluating...</span>';
   try {
     const resp = await fetch('/api/eval', {
@@ -558,20 +767,53 @@ async function runCell(index) {
     });
     const data = await resp.json();
     notebook.cells[index].output = data.output;
-    renderOutputWithSteps(data.steps || [data.output], outputDiv);
+
+    // Check for inline image (plot)
+    if (data.image) {
+      outputDiv.innerHTML = '';
+      const label = document.createElement('div');
+      label.className = 'output-label';
+      label.textContent = 'Plot:';
+      outputDiv.appendChild(label);
+      const imgDiv = document.createElement('div');
+      imgDiv.className = 'output-image';
+      const img = document.createElement('img');
+      img.src = 'data:image/png;base64,' + data.image;
+      imgDiv.appendChild(img);
+      outputDiv.appendChild(imgDiv);
+    } else {
+      renderOutputWithSteps(data.steps || [data.output], outputDiv);
+    }
+
+    // Update execution counter
+    execCounter++;
+    notebook.cells[index].exec_num = execCounter;
+    const execEl = document.getElementById(`exec-${index}`);
+    if (execEl) execEl.textContent = `In [${execCounter}]`;
+
+    if (statusEl) {
+      const isError = data.steps && data.steps[0] && data.steps[0].startsWith('Error:');
+      statusEl.textContent = isError ? 'error' : 'done';
+      statusEl.className = 'cell-status ' + (isError ? 'error' : 'done');
+    }
+    updateContextPanel();
   } catch(e) {
     outputDiv.innerHTML = `<span class="output-error">Request failed: ${escapeHtml(e.message)}</span>`;
+    if (statusEl) { statusEl.textContent = 'error'; statusEl.className = 'cell-status error'; }
   }
 }
 
 async function runAll() {
   for (let i = 0; i < notebook.cells.length; i++) {
-    await runCell(i);
+    if (notebook.cells[i].cell_type !== 'text') {
+      await runCell(i);
+    }
   }
 }
 
-function addCell() {
-  const cell = { id: nextId++, input: '', output: '' };
+function addCell(type) {
+  const cellType = type || 'math';
+  const cell = { id: nextId++, input: '', output: '', cell_type: cellType };
   notebook.cells.push(cell);
   const container = document.getElementById('cells');
   container.appendChild(createCellElement(cell, notebook.cells.length - 1));
@@ -581,6 +823,81 @@ function deleteCell(index) {
   notebook.cells.splice(index, 1);
   notebook.cells.forEach((c, i) => c.id = i);
   renderAll();
+}
+
+function moveCellUp(index) {
+  if (index === 0) return;
+  const tmp = notebook.cells[index];
+  notebook.cells[index] = notebook.cells[index - 1];
+  notebook.cells[index - 1] = tmp;
+  notebook.cells.forEach((c, i) => c.id = i);
+  renderAll();
+}
+
+function moveCellDown(index) {
+  if (index >= notebook.cells.length - 1) return;
+  const tmp = notebook.cells[index];
+  notebook.cells[index] = notebook.cells[index + 1];
+  notebook.cells[index + 1] = tmp;
+  notebook.cells.forEach((c, i) => c.id = i);
+  renderAll();
+}
+
+function duplicateCell(index) {
+  const clone = { ...notebook.cells[index] };
+  notebook.cells.splice(index + 1, 0, clone);
+  notebook.cells.forEach((c, i) => c.id = i);
+  renderAll();
+}
+
+function toggleCellType(index) {
+  const cell = notebook.cells[index];
+  cell.cell_type = (cell.cell_type === 'text') ? 'math' : 'text';
+  cell.output = '';
+  renderAll();
+}
+
+async function resetContext() {
+  try {
+    await fetch('/api/reset', { method: 'POST' });
+    execCounter = 0;
+    notebook.cells.forEach(c => { c.exec_num = null; });
+    renderAll();
+    updateContextPanel();
+    showStatus('Context reset');
+  } catch(e) {
+    showStatus('Reset failed: ' + e.message, true);
+  }
+}
+
+async function resetAndRunAll() {
+  try {
+    await fetch('/api/reset', { method: 'POST' });
+    execCounter = 0;
+    notebook.cells.forEach(c => { c.exec_num = null; });
+    renderAll();
+  } catch(e) {
+    showStatus('Reset failed: ' + e.message, true);
+    return;
+  }
+  await runAll();
+}
+
+async function updateContextPanel() {
+  try {
+    const resp = await fetch('/api/context');
+    const data = await resp.json();
+    const vars = data.vars || [];
+    const funcs = data.funcs || [];
+    document.getElementById('context-summary').textContent =
+      `Context: ${vars.length} variable${vars.length !== 1 ? 's' : ''}, ${funcs.length} function${funcs.length !== 1 ? 's' : ''}`;
+    document.getElementById('context-vars').textContent =
+      vars.length > 0 ? vars.join(', ') : 'No variables bound.';
+    document.getElementById('context-funcs').textContent =
+      funcs.length > 0 ? funcs.join(', ') : 'No user functions.';
+  } catch(e) {
+    // Context endpoint not available — hide panel
+  }
 }
 
 async function saveNotebook() {
@@ -614,13 +931,13 @@ function escapeHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// Wait for KaTeX to load before init
-function waitForKatex(cb, n) {
+// Wait for KaTeX and marked to load before init
+function waitForLibs(cb, n) {
   n = n || 0;
-  if (typeof katex !== 'undefined' || n > 50) cb();
-  else setTimeout(() => waitForKatex(cb, n + 1), 100);
+  if ((typeof katex !== 'undefined' || n > 50) && (typeof marked !== 'undefined' || n > 50)) cb();
+  else setTimeout(() => waitForLibs(cb, n + 1), 100);
 }
-waitForKatex(init);
+waitForLibs(init);
 </script>
 </body>
 </html>

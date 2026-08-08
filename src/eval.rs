@@ -202,6 +202,33 @@ fn builtins() -> Vec<(&'static str, fn(&[f64]) -> Result<f64>)> {
             [n, x] => Ok(crate::special::bessel_jn(*n as i32, *x)),
             _ => Err(MathError::Eval("bessel_j(n, x) takes two args".into())),
         }),
+        ("factorial", |a| match a {
+            [x] if *x >= 0.0 && x.fract() == 0.0 && *x <= 170.0 => {
+                Ok((1..=(*x as u64)).fold(1.0f64, |acc, i| acc * i as f64))
+            }
+            [x] if *x >= 0.0 && x.fract() == 0.0 => Ok(f64::INFINITY),
+            _ => Err(MathError::Eval("factorial requires non-negative integer".into())),
+        }),
+        ("gcd", |a| match a {
+            [x, y] if x.fract() == 0.0 && y.fract() == 0.0 => {
+                Ok(crate::numtheory::gcd(*x as u64, *y as u64) as f64)
+            }
+            _ => Err(MathError::Eval("gcd(a, b) requires two integers".into())),
+        }),
+        ("lcm", |a| match a {
+            [x, y] if x.fract() == 0.0 && y.fract() == 0.0 => {
+                Ok(crate::numtheory::lcm(*x as u64, *y as u64) as f64)
+            }
+            _ => Err(MathError::Eval("lcm(a, b) requires two integers".into())),
+        }),
+        ("C", |a| match a {
+            [n, k] if n.fract() == 0.0 && k.fract() == 0.0 && *n >= 0.0 && *k >= 0.0 => {
+                crate::numtheory::binomial(*n as u64, *k as u64)
+                    .map(|r| r as f64)
+                    .map_err(|e| MathError::Eval(e.to_string()))
+            }
+            _ => Err(MathError::Eval("C(n, k) requires non-negative integers".into())),
+        }),
     ]
 }
 

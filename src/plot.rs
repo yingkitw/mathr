@@ -10,6 +10,62 @@ use crate::expr::Expr;
 use plotters::prelude::*;
 use std::path::Path;
 
+/// Render a plot to a PNG file, read the bytes into memory, and delete the temp file.
+/// Used by the notebook server for inline image display.
+fn plot_to_bytes<F>(draw: F) -> Result<Vec<u8>>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("mathr_plot_{}_{}.png", std::process::id(), id));
+    draw(&path)?;
+    let bytes = std::fs::read(&path)
+        .map_err(|e| MathError::Plot(format!("cannot read temp plot: {}", e)))?;
+    let _ = std::fs::remove_file(&path);
+    Ok(bytes)
+}
+
+/// Plot a single expression to PNG bytes in memory (for inline notebook display).
+pub fn plot_function_to_bytes(
+    expr: &Expr,
+    x_var: &str,
+    x_min: f64,
+    x_max: f64,
+    samples: usize,
+    title: &str,
+) -> Result<Vec<u8>> {
+    plot_to_bytes(|path| {
+        plot_function(path, expr, x_var, x_min, x_max, samples, title)
+    })
+}
+
+/// Plot multiple series to PNG bytes in memory.
+pub fn plot_multi_to_bytes(
+    series: &[(String, Expr, &str)],
+    x_min: f64,
+    x_max: f64,
+    samples: usize,
+    title: &str,
+) -> Result<Vec<u8>> {
+    plot_to_bytes(|path| {
+        plot_multi(path, series, x_min, x_max, samples, title)
+    })
+}
+
+/// Plot a scatter to PNG bytes in memory.
+pub fn plot_scatter_to_bytes(
+    points: &[(f64, f64)],
+    title: &str,
+    x_label: &str,
+    y_label: &str,
+) -> Result<Vec<u8>> {
+    plot_to_bytes(|path| {
+        plot_scatter(path, points, title, x_label, y_label)
+    })
+}
+
 /// Convert any plotters error to a MathError so the `?` operator can
 /// propagate drawing-area failures back through our `Result` type.
 fn p_err<E: std::fmt::Display>(e: E) -> MathError {
@@ -244,4 +300,33 @@ pub fn plot_scatter<P: AsRef<Path>>(
         .draw()
         .map_err(p_err)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::Parser;
+
+    #[test]
+    fn plot_function_to_bytes_produces_png() {
+        let expr = Parser::parse("sin(x)").unwrap();
+        let bytes = plot_function_to_bytes(&expr, "x", 0.0, 3.14159, 100, "y = sin(x)").unwrap();
+        assert!(bytes.len() > 100, "PNG should have content");
+        assert_eq!(&bytes[..8], &[137, 80, 78, 71, 13, 10, 26, 10], "should be PNG");
+    }
+
+    #[test]
+    fn plot_function_to_bytes_bad_range() {
+        let expr = Parser::parse("x").unwrap();
+        let result = plot_function_to_bytes(&expr, "x", 5.0, 1.0, 100, "y = x");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn plot_scatter_to_bytes_produces_png() {
+        let points = vec![(0.0, 0.0), (1.0, 1.0), (2.0, 4.0), (3.0, 9.0)];
+        let bytes = plot_scatter_to_bytes(&points, "quadratic", "x", "y").unwrap();
+        assert!(bytes.len() > 100);
+        assert_eq!(&bytes[..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
+    }
 }

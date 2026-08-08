@@ -201,6 +201,24 @@ impl<'a> Parser<'a> {
                     let right = self.parse_factor()?;
                     left = if op == b'*' { Expr::mul(left, right) } else { Expr::div(left, right) };
                 }
+                // infix `mod`: a mod b → mod(a, b)
+                Some(b'm') | Some(b'M') => {
+                    let saved = self.pos;
+                    let word = self.read_ident();
+                    if word == "mod" {
+                        let right = self.parse_factor()?;
+                        left = Expr::func("mod", vec![left, right]);
+                    } else {
+                        // Not "mod" — treat as implicit multiplication
+                        self.pos = saved;
+                        if self.is_atom_starter(self.peek()) {
+                            let right = self.parse_factor()?;
+                            left = Expr::mul(left, right);
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 // implicit multiplication: 2x, 2(x+1), x sin(y) (rare but allowed)
                 Some(c) if self.is_atom_starter(Some(c)) => {
                     let right = self.parse_factor()?;
@@ -215,6 +233,19 @@ impl<'a> Parser<'a> {
     fn parse_factor(&mut self) -> Result<Expr> {
         let base = self.parse_unary()?;
         self.skip_ws();
+        // Postfix factorial: n! or (expr)!
+        let mut result = base;
+        while self.peek() == Some(b'!') {
+            self.pos += 1;
+            self.skip_ws();
+            // Avoid clash with != (not-equal) — if next char is '=', it's not factorial
+            if self.peek() == Some(b'=') {
+                // Put back the ! and break — this isn't factorial
+                self.pos -= 1;
+                break;
+            }
+            result = Expr::func("factorial", vec![result]);
+        }
         if self.peek() == Some(b'^') {
             self.pos += 1;
             self.skip_ws();
@@ -224,9 +255,9 @@ impl<'a> Parser<'a> {
             } else {
                 self.parse_factor()? // right-associative
             };
-            Ok(Expr::pow(base, exp))
+            Ok(Expr::pow(result, exp))
         } else {
-            Ok(base)
+            Ok(result)
         }
     }
 
@@ -273,6 +304,14 @@ impl<'a> Parser<'a> {
                 self.expect(b')')?;
                 Ok(e)
             }
+            Some(b'|') => {
+                // |x| → abs(x)
+                self.pos += 1;
+                let e = self.parse_expr()?;
+                self.skip_ws();
+                self.expect(b'|')?;
+                Ok(Expr::func("abs", vec![e]))
+            }
             Some(b'\\') => self.parse_tex_command(),
             Some(b'{') => {
                 self.pos += 1;
@@ -309,6 +348,12 @@ impl<'a> Parser<'a> {
                 let num = self.parse_brace_group()?;
                 let den = self.parse_brace_group()?;
                 Ok(Expr::div(num, den))
+            }
+            "binom" | "tbinom" | "dbinom" => {
+                // \binom{n}{k} → C(n, k)
+                let n = self.parse_brace_group()?;
+                let k = self.parse_brace_group()?;
+                Ok(Expr::func("C", vec![n, k]))
             }
             "sqrt" => {
                 let arg = self.parse_brace_group()?;
@@ -388,7 +433,8 @@ impl<'a> Parser<'a> {
             "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
             | "sinh" | "cosh" | "tanh" | "exp" | "ln"
             | "log2" | "log10" | "abs" | "floor" | "ceil" | "round"
-            | "sign" | "cbrt" | "fract" | "gamma" | "erf" | "erfc" | "sinc" => {
+            | "sign" | "cbrt" | "fract" | "gamma" | "erf" | "erfc" | "sinc"
+            | "gcd" | "lcm" => {
                 self.skip_ws();
                 // Function may take argument in braces, parens, or just next atom
                 let arg = if self.peek() == Some(b'{') {
@@ -613,6 +659,82 @@ mod tests {
         assert_eq!(
             p("log(2, 8)"),
             Expr::func("log", vec![Expr::num(2.0), Expr::num(8.0)])
+        );
+    }
+
+    #[test]
+    fn factorial_postfix() {
+        // n! → factorial(n)
+        assert_eq!(p("5!"), Expr::func("factorial", vec![Expr::num(5.0)]));
+        // (expr)! → factorial(expr)
+        assert_eq!(
+            p("(2+3)!"),
+            Expr::func("factorial", vec![Expr::add(Expr::num(2.0), Expr::num(3.0))])
+        );
+        // n!^2 → (n!)^2, factorial binds tighter than ^
+        assert_eq!(
+            p("3!^2"),
+            Expr::pow(Expr::func("factorial", vec![Expr::num(3.0)]), Expr::num(2.0))
+        );
+        // 2*n! → 2 * factorial(n)
+        assert_eq!(
+            p("2*3!"),
+            Expr::mul(Expr::num(2.0), Expr::func("factorial", vec![Expr::num(3.0)]))
+        );
+    }
+
+    #[test]
+    fn abs_bars() {
+        // |x| → abs(x)
+        assert_eq!(p("|x|"), Expr::func("abs", vec![Expr::var("x")]));
+        // |−3| → abs(-3)
+        assert_eq!(p("|-3|"), Expr::func("abs", vec![Expr::neg(Expr::num(3.0))]));
+        // |x+1| → abs(x+1)
+        assert_eq!(
+            p("|x+1|"),
+            Expr::func("abs", vec![Expr::add(Expr::var("x"), Expr::num(1.0))])
+        );
+    }
+
+    #[test]
+    fn infix_mod() {
+        // a mod b → mod(a, b)
+        assert_eq!(
+            p("5 mod 3"),
+            Expr::func("mod", vec![Expr::num(5.0), Expr::num(3.0)])
+        );
+        // a mod b * c → mod(a, b) * c (mod binds at term level)
+        assert_eq!(
+            p("7 mod 2 + 1"),
+            Expr::add(
+                Expr::func("mod", vec![Expr::num(7.0), Expr::num(2.0)]),
+                Expr::num(1.0)
+            )
+        );
+    }
+
+    #[test]
+    fn tex_binom() {
+        // \binom{n}{k} → C(n, k)
+        assert_eq!(
+            p("\\binom{5}{2}"),
+            Expr::func("C", vec![Expr::num(5.0), Expr::num(2.0)])
+        );
+    }
+
+    #[test]
+    fn gcd_lcm_as_functions() {
+        assert_eq!(
+            p("gcd(12, 8)"),
+            Expr::func("gcd", vec![Expr::num(12.0), Expr::num(8.0)])
+        );
+        assert_eq!(
+            p("lcm(4, 6)"),
+            Expr::func("lcm", vec![Expr::num(4.0), Expr::num(6.0)])
+        );
+        assert_eq!(
+            p("C(5, 2)"),
+            Expr::func("C", vec![Expr::num(5.0), Expr::num(2.0)])
         );
     }
 
