@@ -187,10 +187,11 @@ fn handle_connection(
                 }
             };
             let json = format!(
-                "{{\"input\": {}, \"output\": {}, \"steps\": {}}}",
+                "{{\"input\": {}, \"output\": {}, \"steps\": {}, \"mathml\": {}}}",
                 json_escape(&expr),
                 json_escape(&output),
-                steps_json
+                steps_json,
+                json_escape(&generate_mathml(&expr))
             );
             send_response(&mut writer, 200, "application/json", &json)?;
         }
@@ -374,6 +375,19 @@ fn extract_json_field(json: &str, field: &str) -> Option<String> {
         }
     }
     Some(result)
+}
+
+/// Generate MathML output for an expression string.
+/// Returns empty string if the expression can't be parsed.
+fn generate_mathml(expr: &str) -> String {
+    let trimmed = expr.trim();
+    if trimmed.is_empty() || trimmed.starts_with("let ") || trimmed.starts_with("fn ") {
+        return String::new();
+    }
+    match crate::parser::Parser::parse(trimmed) {
+        Ok(e) => crate::mathml::to_mathml_doc(&e),
+        Err(_) => String::new(),
+    }
 }
 
 fn json_escape(s: &str) -> String {

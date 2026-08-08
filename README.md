@@ -53,6 +53,7 @@
 - **Jacobi symbol**, **continued fractions**, **linear Diophantine solver**, **discrete logarithm** (baby-step giant-step)
 - **Big integers** — arbitrary-precision primality, factorization (Pollard's rho), factorial, Fibonacci, binomial, modular exponentiation, totient via `num-bigint`. REPL commands `fact`, `fib`, `binom` auto-upgrade to BigInt on overflow (no separate "big" command needed for these)
 - **Automatic differentiation** — dual numbers for exact forward-mode AD; derivatives, gradients, and Jacobians of arbitrary compositions
+- **MathML** — W3C Presentation MathML export and import for interchange with Word, web browsers, and other CAS systems. Notebook supports MathML cells (input is MathML, imported to Expr and evaluated). Web UI has a "Show MathML" toggle to display MathML output alongside KaTeX rendering.
 
 ### Interpolation & Special Functions
 - **Interpolation** — Lagrange, Newton, linear, **cubic spline**, **Chebyshev** polynomials and series, **Legendre** polynomials, **Gauss–Legendre quadrature**
@@ -214,6 +215,10 @@ mathr> C(5, 2)
 10
 mathr> \binom{5}{2}
 10
+mathr> mathml x^2 + 1
+<math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><msup><mi>x</mi><mn>1</mn></msup><mo>+</mo><mn>1</mn></mrow></math>
+mathr> mathml import <mfrac><mn>1</mn><mn>2</mn></mfrac>
+1/2
 mathr> ad sin(x^2) at x=1.5
 f(x) = 0.997495,  f'(x) = -0.313312
 mathr> ad grad x^2 + y^3 with x=2,y=3

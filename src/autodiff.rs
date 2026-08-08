@@ -7,7 +7,7 @@
 //!
 //! This module provides:
 //! - [`Dual`] — a 1st-order dual number type with full arithmetic
-//! - [`eval`] — evaluate an [`Expr`](crate::expr::Expr) AST with dual numbers
+//! - [`eval`] — evaluate an [`Expr`] AST with dual numbers
 //! - [`derivative`] — compute `f'(x)` at a point for any parseable expression
 //! - [`gradient`] — compute the gradient of a multivariate expression
 //! - [`jacobian`] — compute the Jacobian of a system of expressions

@@ -46,6 +46,9 @@ bigint.rs       (standalone, arbitrary-precision integers via num-bigint:
 autodiff.rs     (standalone, automatic differentiation via dual numbers:
                  Dual type with arithmetic, elementary functions, Expr eval,
                  derivative, gradient, jacobian)
+mathml.rs        (standalone, W3C Presentation MathML export/import:
+                 Expr→MathML and MathML→Expr, supporting mn/mi/mo/mrow/
+                 mfrac/msup/msub/msqrt/mroot/mfenced/mstyle/mtext)
 
 expr.rs ──canonicalize/equals──▶ expr.rs (canonical form comparison)
 

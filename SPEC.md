@@ -98,6 +98,24 @@ These number-theory functions are available as function calls in expressions:
 | `\frac{a}{b}` | `a / b` | `\frac{1}{2}` = 0.5 |
 | `\sqrt{x}` | `sqrt(x)` | `\sqrt{4}` = 2 |
 
+### MathML
+
+W3C Presentation MathML is supported for both export and import.
+
+**Export** (`mathml <expr>`):
+```
+mathr> mathml x^2 + 1
+<math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>1</mn></mrow></math>
+```
+
+**Import** (`mathml import <MathML>`):
+```
+mathr> mathml import <mfrac><mn>1</mn><mn>2</mn></mfrac>
+1/2
+```
+
+Supported MathML elements: `<mn>`, `<mi>`, `<mo>`, `<mrow>`, `<mfrac>`, `<msup>`, `<msub>`, `<msqrt>`, `<mroot>`, `<mtext>`, `<mstyle>`, `<mfenced>`, `<math>`
+
 ### Numbers
 
 - Integers: `42`

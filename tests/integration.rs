@@ -1408,6 +1408,42 @@ fn notebook_text_cell_skipped_in_eval() {
 }
 
 #[test]
+fn notebook_mathml_cell_eval() {
+    use mathr::notebook::{CellType, Notebook};
+    let mut nb = Notebook::new();
+    // MathML cell: <mfrac><mn>1</mn><mn>2</mn></mfrac> → 1/2 → 0.5
+    nb.add_cell_with_type(
+        "<mfrac><mn>1</mn><mn>2</mn></mfrac>",
+        CellType::MathML,
+    );
+    let mut ctx = Context::standard();
+    nb.eval_all(&mut ctx).unwrap();
+    assert!(nb.cells[0].output.contains("0.5"), "output: {}", nb.cells[0].output);
+}
+
+#[test]
+fn notebook_mathml_cell_pow() {
+    use mathr::notebook::{CellType, Notebook};
+    let mut nb = Notebook::new();
+    // <msup><mi>x</mi><mn>2</mn></msup> with x=3 → 9
+    nb.add_cell_with_type("let x = 3", CellType::Math);
+    nb.add_cell_with_type("<msup><mi>x</mi><mn>2</mn></msup>", CellType::MathML);
+    let mut ctx = Context::standard();
+    nb.eval_all(&mut ctx).unwrap();
+    assert!(nb.cells[1].output.contains("9"), "output: {}", nb.cells[1].output);
+}
+
+#[test]
+fn notebook_mathml_cell_type_roundtrip() {
+    use mathr::notebook::{CellType, Notebook, parse_notebook_json};
+    let mut nb = Notebook::new();
+    nb.add_cell_with_type("<mn>42</mn>", CellType::MathML);
+    let json = nb.to_json();
+    let parsed = parse_notebook_json(&json).unwrap();
+    assert_eq!(parsed.cells[0].cell_type, CellType::MathML);
+}
+
+#[test]
 fn notebook_json_roundtrip_with_cell_types() {
     use mathr::notebook::{CellType, Notebook, parse_notebook_json};
     let mut nb = Notebook::new();
@@ -1818,5 +1854,60 @@ fn tex_gcd_lcm_eval() {
     assert_eq!(result, "4");
     let result = mathr::repl::dispatch_str("\\lcm(4, 6)", ctx).unwrap().unwrap();
     assert_eq!(result, "12");
+}
+
+// =========================================================================
+// MathML export and import
+// =========================================================================
+
+#[test]
+fn mathml_export_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("mathml x^2 + 1", ctx).unwrap().unwrap();
+    assert!(result.contains("<math"), "result: {}", result);
+    assert!(result.contains("<msup>"), "result: {}", result);
+    assert!(result.contains("<mi>x</mi>"), "result: {}", result);
+}
+
+#[test]
+fn mathml_export_frac() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("mathml 1/2", ctx).unwrap().unwrap();
+    assert!(result.contains("<mfrac>"), "result: {}", result);
+}
+
+#[test]
+fn mathml_export_sqrt() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("mathml sqrt(x)", ctx).unwrap().unwrap();
+    assert!(result.contains("<msqrt>"), "result: {}", result);
+}
+
+#[test]
+fn mathml_import_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let ml = "<math xmlns=\"http://www.w3.org/1998/Math/MathML\"><mfrac><mn>1</mn><mn>2</mn></mfrac></math>";
+    let result = mathr::repl::dispatch_str(&format!("mathml import {}", ml), ctx)
+        .unwrap().unwrap();
+    assert_eq!(result, "1/2");
+}
+
+#[test]
+fn mathml_import_pow() {
+    let ctx = mathr::eval::Context::standard();
+    let ml = "<msup><mi>x</mi><mn>2</mn></msup>";
+    let result = mathr::repl::dispatch_str(&format!("mathml import {}", ml), ctx)
+        .unwrap().unwrap();
+    assert_eq!(result, "x^2");
+}
+
+#[test]
+fn mathml_roundtrip_api() {
+    use mathr::mathml;
+    use mathr::parser::Parser;
+    let original = Parser::parse("2*x + sin(x)").unwrap();
+    let ml = mathml::to_mathml(&original);
+    let parsed = mathml::from_mathml(&ml).unwrap();
+    assert_eq!(parsed, original);
 }
 

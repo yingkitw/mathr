@@ -98,6 +98,9 @@ button.success:hover { opacity: 0.85; }
 .cell-header .cell-type-badge.text {
   background: var(--accent2);
 }
+.cell-header .cell-type-badge.mathml {
+  background: #6b5b95;
+}
 .cell-header .spacer { flex: 1; }
 .cell-header button {
   padding: 3px 10px;
@@ -233,6 +236,13 @@ button.success:hover { opacity: 0.85; }
   border-radius: 6px;
   border: 1px solid var(--border);
 }
+.cell-output .output-mathml {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+}
 .cell.text-cell .cell-input .markdown-preview {
   padding: 8px 4px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -313,6 +323,8 @@ button.success:hover { opacity: 0.85; }
   <button onclick="saveNotebook()">Save</button>
   <button onclick="addCell('math')">+ Math</button>
   <button onclick="addCell('text')">+ Text</button>
+  <button onclick="addCell('mathml')">+ MathML</button>
+  <button onclick="toggleMathML()" id="mathml-toggle">Show MathML</button>
 </header>
 <div class="context-panel">
   <details>
@@ -328,6 +340,7 @@ button.success:hover { opacity: 0.85; }
   <div class="add-cell-bar">
     <button onclick="addCell('math')">+ Add Math Cell</button>
     <button onclick="addCell('text')">+ Add Text Cell</button>
+    <button onclick="addCell('mathml')">+ Add MathML Cell</button>
   </div>
 </div>
 
@@ -335,6 +348,13 @@ button.success:hover { opacity: 0.85; }
 let notebook = { cells: [] };
 let nextId = 0;
 let execCounter = 0;
+let showMathML = false;
+
+function toggleMathML() {
+  showMathML = !showMathML;
+  document.getElementById('mathml-toggle').textContent = showMathML ? 'Hide MathML' : 'Show MathML';
+  renderAll();
+}
 
 // Convert a decimal number to a LaTeX fraction if it's a clean rational.
 // Returns null if the number is irrational or denominator would be too large.
@@ -500,6 +520,7 @@ function renderAll() {
   // Render all input previews
   notebook.cells.forEach((cell, i) => {
     if (cell.cell_type === 'text') updateMarkdownPreview(i);
+    else if (cell.cell_type === 'mathml') updateMathMLPreview(i);
     else updateInputPreview(i);
   });
 }
@@ -507,14 +528,16 @@ function renderAll() {
 function createCellElement(cell, index) {
   const div = document.createElement('div');
   const isText = (cell.cell_type === 'text');
+  const isMathML = (cell.cell_type === 'mathml');
+  const isEval = !isText; // both Math and MathML cells are evaluated
   div.className = 'cell' + (isText ? ' text-cell' : '');
   div.dataset.index = index;
 
   // Header
   const header = document.createElement('div');
   header.className = 'cell-header';
-  const typeLabel = isText ? 'TEXT' : 'MATH';
-  const typeClass = isText ? 'text' : '';
+  const typeLabel = isText ? 'TEXT' : (isMathML ? 'MATHML' : 'MATH');
+  const typeClass = isText ? 'text' : (isMathML ? 'mathml' : '');
   const execNum = cell.exec_num ? `In [${cell.exec_num}]` : '';
   header.innerHTML = `
     <span class="cell-id">[${cell.id}]</span>
@@ -539,32 +562,41 @@ function createCellElement(cell, index) {
   const textarea = document.createElement('textarea');
   textarea.placeholder = isText
     ? 'Enter text/markdown notes...'
+    : isMathML
+    ? 'Enter Presentation MathML (e.g. <mfrac><mn>1</mn><mn>2</mn></mfrac>)'
     : 'Enter math (e.g. sin(pi/4), \\\\frac{1}{2}+1, diff x^3, let x = 5, plot sin(x) 0 6.28)';
   textarea.value = cell.input;
   textarea.onkeydown = (e) => cellKeydown(e, index);
   textarea.oninput = () => {
     notebook.cells[index].input = textarea.value;
-    if (!isText) updateInputPreview(index);
-    else updateMarkdownPreview(index);
+    if (isText) updateMarkdownPreview(index);
+    else if (isMathML) updateMathMLPreview(index);
+    else updateInputPreview(index);
   };
   inputDiv.appendChild(textarea);
 
-  if (!isText) {
-    // Input preview (rendered math)
-    const previewDiv = document.createElement('div');
-    previewDiv.className = 'cell-input-preview';
-    previewDiv.innerHTML = '<span class="preview-label">Rendered:</span><div class="preview-math"></div>';
-    inputDiv.appendChild(previewDiv);
-  } else {
+  if (isText) {
     // Markdown preview for text cells
     const previewDiv = document.createElement('div');
     previewDiv.className = 'markdown-preview';
     previewDiv.id = `md-preview-${index}`;
     inputDiv.appendChild(previewDiv);
+  } else if (isMathML) {
+    // Native MathML preview for MathML cells
+    const previewDiv = document.createElement('div');
+    previewDiv.className = 'cell-input-preview';
+    previewDiv.innerHTML = '<span class="preview-label">Rendered MathML:</span><div class="preview-math"></div>';
+    inputDiv.appendChild(previewDiv);
+  } else {
+    // Input preview (rendered math via KaTeX)
+    const previewDiv = document.createElement('div');
+    previewDiv.className = 'cell-input-preview';
+    previewDiv.innerHTML = '<span class="preview-label">Rendered:</span><div class="preview-math"></div>';
+    inputDiv.appendChild(previewDiv);
   }
   div.appendChild(inputDiv);
 
-  if (!isText) {
+  if (isEval) {
     // Output area
     const outputDiv = document.createElement('div');
     outputDiv.className = 'cell-output';
@@ -591,6 +623,20 @@ function updateInputPreview(index) {
   const latex = mathToLatex(input);
   previewMath.innerHTML = '';
   renderKatex(latex, previewMath, true);
+  notebook.cells[index].input = textarea.value;
+}
+
+function updateMathMLPreview(index) {
+  const cellDiv = document.querySelector(`[data-index="${index}"]`);
+  if (!cellDiv) return;
+  const textarea = cellDiv.querySelector('textarea');
+  const previewMath = cellDiv.querySelector('.preview-math');
+  if (!previewMath) return;
+  const input = textarea.value.trim();
+  if (!input) { previewMath.innerHTML = ''; return; }
+  // Render MathML natively in the browser
+  const wrapped = input.startsWith('<math') ? input : `<math xmlns="http://www.w3.org/1998/Math/MathML">${input}</math>`;
+  previewMath.innerHTML = wrapped;
   notebook.cells[index].input = textarea.value;
 }
 
@@ -767,6 +813,7 @@ async function runCell(index) {
     });
     const data = await resp.json();
     notebook.cells[index].output = data.output;
+    notebook.cells[index].mathml = data.mathml || '';
 
     // Check for inline image (plot)
     if (data.image) {
@@ -783,6 +830,21 @@ async function runCell(index) {
       outputDiv.appendChild(imgDiv);
     } else {
       renderOutputWithSteps(data.steps || [data.output], outputDiv);
+    }
+
+    // Append MathML output if toggle is on
+    if (showMathML && data.mathml && !data.image) {
+      const mlDiv = document.createElement('div');
+      mlDiv.className = 'output-mathml';
+      const mlLabel = document.createElement('div');
+      mlLabel.className = 'output-label';
+      mlLabel.textContent = 'MathML:';
+      mlDiv.appendChild(mlLabel);
+      const mlPre = document.createElement('pre');
+      mlPre.textContent = data.mathml;
+      mlPre.style.cssText = 'font-size:0.75rem;white-space:pre-wrap;word-break:break-all;color:var(--text-dim);';
+      mlDiv.appendChild(mlPre);
+      outputDiv.appendChild(mlDiv);
     }
 
     // Update execution counter
@@ -809,6 +871,11 @@ async function runAll() {
       await runCell(i);
     }
   }
+}
+
+// Render MathML in the browser using native MathML support
+function renderMathMLNative(mathmlStr, element) {
+  element.innerHTML = mathmlStr;
 }
 
 function addCell(type) {
@@ -852,7 +919,9 @@ function duplicateCell(index) {
 
 function toggleCellType(index) {
   const cell = notebook.cells[index];
-  cell.cell_type = (cell.cell_type === 'text') ? 'math' : 'text';
+  // Cycle: math → text → mathml → math
+  const cycle = { 'math': 'text', 'text': 'mathml', 'mathml': 'math' };
+  cell.cell_type = cycle[cell.cell_type] || 'math';
   cell.output = '';
   renderAll();
 }

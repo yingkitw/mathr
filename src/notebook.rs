@@ -24,6 +24,8 @@ pub enum CellType {
     Math,
     /// A text/markdown cell — displayed as-is, not evaluated.
     Text,
+    /// A MathML cell — input is Presentation MathML, imported to Expr then evaluated.
+    MathML,
 }
 
 impl CellType {
@@ -32,6 +34,7 @@ impl CellType {
         match self {
             CellType::Math => "math",
             CellType::Text => "text",
+            CellType::MathML => "mathml",
         }
     }
 
@@ -39,6 +42,7 @@ impl CellType {
     pub fn from_str(s: &str) -> Self {
         match s.trim() {
             "text" => CellType::Text,
+            "mathml" => CellType::MathML,
             _ => CellType::Math,
         }
     }
@@ -139,7 +143,7 @@ impl Notebook {
             .get_mut(id)
             .ok_or_else(|| MathError::InvalidArgument(format!("cell {} not found", id)))?;
         cell.cell_type = cell_type;
-        if cell_type == CellType::Math {
+        if cell_type != CellType::Text {
             cell.output.clear();
         }
         Ok(())
@@ -166,7 +170,13 @@ impl Notebook {
             }
             return Ok(());
         }
-        let input = cell.input.clone();
+        let input = if cell.cell_type == CellType::MathML {
+            // MathML cells: import to Expr, then evaluate as a normal expression.
+            let expr = crate::mathml::from_mathml(&cell.input)?;
+            expr.to_string()
+        } else {
+            cell.input.clone()
+        };
         let result = repl::dispatch_with_ctx(&input, ctx)?;
         let output = match result {
             Some(s) => s,

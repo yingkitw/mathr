@@ -110,7 +110,7 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **406 inline unit tests** + 156 integration tests — all passing
+- [x] **436 inline unit tests** + 165 integration tests — all passing
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
 
 ### Fast math
@@ -134,6 +134,7 @@
 - [ ] Arbitrary-precision arithmetic (BigDecimal)
 - [ ] Interval arithmetic for rigorous bounds
 - [x] **Automatic differentiation (dual numbers)** — `autodiff` module with `Dual` type, `derivative`, `gradient`, `jacobian`, `ad` REPL command
+- [x] **MathML support** — W3C Presentation MathML export (`to_mathml`, `to_mathml_doc`) and import (`from_mathml`). `mathml` REPL command for both directions. Supports `<mn>`, `<mi>`, `<mo>`, `<mrow>`, `<mfrac>`, `<msup>`, `<msub>`, `<msqrt>`, `<mroot>`, `<mfenced>`, `<mstyle>`, `<mtext>`.
 - [ ] Expression serialization (S-expressions, JSON, RPN)
 - [ ] GPU-accelerated FFT (via `wgpu`)
 - [ ] 3D plotting (surface plots, contour plots)

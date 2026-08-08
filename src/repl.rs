@@ -172,6 +172,7 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "fast ",
         "big ",
         "ad ",
+        "mathml ",
     ];
     if cmd_keywords.iter().any(|kw| line.starts_with(kw)) || line == "vars" || line == "funcs" {
         let result = dispatch_inner(line, &mut ctx.clone())?;
@@ -594,6 +595,9 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("ad ") {
         return do_ad(rest.trim(), &ctx.clone());
+    }
+    if let Some(rest) = line.strip_prefix("mathml ") {
+        return do_mathml(rest.trim());
     }
 
     // Default: evaluate the expression and print the value
@@ -1529,6 +1533,17 @@ fn do_big(rest: &str) -> Result<Option<String>> {
     }
 }
 
+/// `mathml <expr>` → export to Presentation MathML
+/// `mathml import <MathML>` → import from Presentation MathML
+fn do_mathml(rest: &str) -> Result<Option<String>> {
+    if let Some(ml) = rest.strip_prefix("import ") {
+        let e = crate::mathml::from_mathml(ml.trim())?;
+        return Ok(Some(e.to_string()));
+    }
+    let e = Parser::parse(rest)?;
+    Ok(Some(crate::mathml::to_mathml_doc(&e)))
+}
+
 fn do_ad(rest: &str, ctx: &Context) -> Result<Option<String>> {
     // Format: "ad <expr> at <var>=<val>" or "ad grad <expr> with <var>=<val>,..."
     // or "ad jacobian <f1>, <f2>, ... with <var>=<val>,..."
@@ -2042,6 +2057,8 @@ commands:
   ad <expr> at <var>=<val>   Automatic differentiation (dual numbers)
   ad grad <expr> with ...    Gradient of multivariate expression
   ad jacobian <f1>,... with ...  Jacobian matrix
+  mathml <expr>      export expression to Presentation MathML
+  mathml import <ml> import Presentation MathML to expression
   legendre n [x]      Legendre P_n(x), or Gauss–Legendre n-node weights
   integrate <expr> [var]
                       symbolic integration of <expr> with respect to var
