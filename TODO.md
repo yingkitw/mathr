@@ -122,20 +122,29 @@
 ### Automatic differentiation
 - [x] **Dual numbers** — `autodiff` module with `Dual` type (value + derivative), full arithmetic operator overloads, elementary functions (sin, cos, tan, exp, ln, log, sqrt, powf, pow_dual, asin, acos, atan, sinh, cosh, tanh, abs), `eval` for `Expr` AST, `derivative`, `gradient`, `jacobian`, `ad` REPL command. Naming follows AD literature conventions.
 
+### Serialization
+- [x] **Expression serialization** — `serialize` module with three interchangeable formats: S-expressions (`to_sexpr`/`from_sexpr`), JSON (`to_json`/`from_json`), and RPN (`to_rpn`/`from_rpn`). All round-trip via `Expr::equals`. Hand-rolled JSON parser (no serde dep). `serialize <fmt> <expr>` and `serialize <fmt> import <text>` REPL commands.
+
+### Interval arithmetic
+- [x] **Interval arithmetic** — `interval` module with `Interval` type (closed `[lo, hi]` bounds), full arithmetic (+, -, *, /, neg), `sqr`/`powi` with zero-crossing awareness, elementary functions (sin, cos, tan, exp, ln, log10, log2, sqrt, abs, asin, acos, atan, sinh, cosh, tanh, cbrt) with monotonicity and extrema tracking, set operations (intersect, hull, contains, overlaps), and `eval_interval` for rigorous bounds over the `Expr` AST. `interval <expr> with <var>=[lo,hi],...` REPL command. Pure Rust, no deps.
+
+### Matrix decompositions
+- [x] **QR decomposition** — Householder reflections for `A = Q·R` where Q is orthogonal and R is upper-triangular. Handles rectangular m×n matrices (tall and wide). Least-squares solve for overdetermined systems. `qr <rows>` REPL command.
+
 ## Brainstorming
 
 ### High Priority
 (none currently)
 
 ### Medium Priority
-(none currently — big integer support completed)
+(none currently)
 
 ### Low Priority
 - [ ] Arbitrary-precision arithmetic (BigDecimal)
-- [ ] Interval arithmetic for rigorous bounds
 - [x] **Automatic differentiation (dual numbers)** — `autodiff` module with `Dual` type, `derivative`, `gradient`, `jacobian`, `ad` REPL command
 - [x] **MathML support** — W3C Presentation MathML export (`to_mathml`, `to_mathml_doc`) and import (`from_mathml`). `mathml` REPL command for both directions. Supports `<mn>`, `<mi>`, `<mo>`, `<mrow>`, `<mfrac>`, `<msup>`, `<msub>`, `<msqrt>`, `<mroot>`, `<mfenced>`, `<mstyle>`, `<mtext>`.
-- [ ] Expression serialization (S-expressions, JSON, RPN)
+- [x] **Expression serialization** — S-expressions, JSON, RPN (`serialize` module, `serialize` REPL command)
+- [x] **Interval arithmetic** — rigorous bounds via `Interval` type + `eval_interval` over Expr AST (`interval` module, `interval` REPL command)
 - [ ] GPU-accelerated FFT (via `wgpu`)
 - [ ] 3D plotting (surface plots, contour plots)
 - [ ] Animated plot output (GIF/WebM)

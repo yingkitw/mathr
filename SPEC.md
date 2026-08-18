@@ -25,7 +25,7 @@
 | `sample` | `mathr sample <dist> <params...> <N> [seed]` | Random sampling (uniform/normal/exponential) |
 | `dist` | `mathr dist <dist> <x> <params...>` | PDF and CDF (normal/exponential) |
 | `stats` | `mathr stats <data...>` | Descriptive statistics |
-| `matrix` | `mathr matrix <op> <rows...>` | `lu`/`cholesky`/`svd`/`eig`/`symlig`/`hessenberg`/`schur`/`rank`/`det`/`solve` |
+| `matrix` | `mathr matrix <op> <rows...>` | `lu`/`qr`/`cholesky`/`svd`/`eig`/`symlig`/`hessenberg`/`schur`/`rank`/`det`/`solve` |
 | `tikhonov` | `mathr tikhonov <rows...> \| <b...> <lambda>` | Tikhonov-regularised solve |
 | `interp` | `mathr interp <op> ...` | `lagrange`/`newton`/`spline`/`chebyshev`/`legendre` |
 | `gcd` | `mathr gcd <n1> <n2> [...]` | GCD of integers |
@@ -116,6 +116,58 @@ mathr> mathml import <mfrac><mn>1</mn><mn>2</mn></mfrac>
 
 Supported MathML elements: `<mn>`, `<mi>`, `<mo>`, `<mrow>`, `<mfrac>`, `<msup>`, `<msub>`, `<msqrt>`, `<mroot>`, `<mtext>`, `<mstyle>`, `<mfenced>`, `<math>`
 
+### Serialization
+
+`Expr` can be serialized to and from three interchangeable textual formats via the `serialize` module. All three round-trip: `from_*(to_*(e)).equals(e)`.
+
+**S-expressions** (Lisp-like prefix notation):
+```
+mathr> serialize sexpr 2*x + 1
+(add (mul (num 2) (var x)) (num 1))
+mathr> serialize sexpr import (add (mul (num 2) (var x)) (num 1))
+2*x + 1
+```
+Node forms: `(num <n>)`, `(var <name>)`, `(neg <e>)`, `(add|sub|mul|div|pow <a> <b>)`, `(func <name> <arg>...)`. Non-finite numbers use `NaN`, `inf`, `-inf`.
+
+**JSON** (nested objects):
+```
+mathr> serialize json x^2
+{"t":"pow","a":{"t":"var","v":"x"},"b":{"t":"num","v":2}}
+mathr> serialize json import {"t":"pow","a":{"t":"var","v":"x"},"b":{"t":"num","v":2}}
+x^2
+```
+Schema: `{"t":"num","v":<n>}` (or `"v":"NaN"|"inf"|"-inf"` for non-finite), `{"t":"var","v":"<name>"}`, `{"t":"neg","e":{...}}`, `{"t":"add|sub|mul|div|pow","a":{...},"b":{...}}`, `{"t":"func","n":"<name>","a":[{...},...]}`.
+
+**RPN** (postfix, space-separated):
+```
+mathr> serialize rpn 2*x + 1
+2 x * 1 +
+mathr> serialize rpn import 2 x * 1 +
+2*x + 1
+```
+Operators: `+ - * / ^` (binary), `neg` (unary). Functions use a `<name>:<arity>` call token, e.g. `x sin:1` for `sin(x)`, `x 2 pow:2` for `pow(x, 2)`.
+
+### Interval Arithmetic
+
+Interval arithmetic computes guaranteed bounds on a function's output over a range of inputs. Instead of a single value, each variable is assigned an interval `[lo, hi]`, and operations propagate worst-case bounds through the expression.
+
+**REPL** (`interval <expr> with <var>=[lo,hi],...`):
+```
+mathr> interval x^2 + 1 with x=[-2,3]
+[1, 10]
+mathr> interval sin(x) with x=[0,6.283185307179586]
+[-1, 1]
+mathr> interval x*y with x=[1,2],y=[3,4]
+[3, 8]
+```
+
+**Limitations**:
+- No IEEE 1788 outward rounding — bounds use plain `f64` and may be tight at the last bit. Widen by a small epsilon for safety-critical use.
+- **Dependency problem**: `x - x` over `[1, 2]` yields `[-1, 1]`, not `[0, 0]`, because each occurrence of `x` is treated independently. This is fundamental to interval arithmetic.
+- Division by an interval containing zero returns the whole real line `[-∞, ∞]`.
+
+**Supported functions**: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `exp`, `ln`, `log`, `log10`, `log2`, `sqrt`, `abs`, `sqr`, `cbrt`, `floor`, `ceil`, `round`, `sign`, `fract`, `min`, `max`, `pow`, `mod`. Trig functions track global extrema (±1) when the input interval spans a peak or trough.
+
 ### Numbers
 
 - Integers: `42`
@@ -173,6 +225,7 @@ Supported MathML elements: `<mn>`, `<mi>`, `<mo>`, `<mrow>`, `<mfrac>`, `<msup>`
 | `poly-roots <coeffs...>` | Polynomial roots |
 | `isolate-roots <ints...>` | Real root isolation (VAS) |
 | `lu <rows...>` | LU decomposition (rows separated by `\|`) |
+| `qr <rows...>` | QR decomposition (Householder reflections; prints Q and R) |
 | `tikhonov <rows...> \| <b...> <lambda>` | Tikhonov-regularised solve |
 | `cholesky <rows...>` | Cholesky decomposition |
 | `svd <rows...>` | Singular value decomposition |
@@ -190,6 +243,9 @@ Supported MathML elements: `<mn>`, `<mi>`, `<mo>`, `<mrow>`, `<mfrac>`, `<msup>`
 | `cf <p> <q>` | Continued fraction |
 | `diophantine <a> <b> <c>` | Linear Diophantine solver |
 | `dlog <g> <h> <p>` | Discrete logarithm |
+| `mathml <expr>` / `mathml import <ml>` | Presentation MathML export/import |
+| `serialize <fmt> <expr>` / `serialize <fmt> import <t>` | Expression serialization (`fmt`: `sexpr`/`json`/`rpn`) |
+| `interval <expr> with <var>=[lo,hi],...` | Rigorous bounds via interval arithmetic |
 | `vars` / `funcs` | Show bindings |
 | `clear` | Reset context |
 | `help` | Help text |

@@ -20,7 +20,7 @@ parser.rs ──parse──▶ expr.rs (Expr AST)
 
 complex.rs ──▶ fft.rs (Cooley–Tukey, convolution, cross-correlation, windows)
 
-matrix.rs       (standalone, f64 linear algebra: LU, Cholesky, SVD, power iteration,
+matrix.rs       (standalone, f64 linear algebra: LU, Cholesky, SVD, QR, power iteration,
                  symmetric eigenvalue decomposition via QR algorithm,
                  Hessenberg + real Schur decomposition)
 stats.rs        (standalone, descriptive statistics)
@@ -49,6 +49,13 @@ autodiff.rs     (standalone, automatic differentiation via dual numbers:
 mathml.rs        (standalone, W3C Presentation MathML export/import:
                  Expr→MathML and MathML→Expr, supporting mn/mi/mo/mrow/
                  mfrac/msup/msub/msqrt/mroot/mfenced/mstyle/mtext)
+serialize.rs     (standalone, Expr serialization in three interchangeable
+                 formats: S-expressions, JSON, RPN. All round-trip via
+                 Expr::equals. Hand-rolled JSON parser — no serde dep)
+interval.rs      (standalone, interval arithmetic for rigorous bounds:
+                 Interval type with arithmetic, sqr/powi with zero-crossing
+                 awareness, elementary functions with monotonicity/extrema
+                 tracking, set ops, eval_interval over Expr AST)
 
 expr.rs ──canonicalize/equals──▶ expr.rs (canonical form comparison)
 
@@ -65,7 +72,7 @@ error.rs ──used by──▶ all modules
 4. **Numerical**: `calculus::derivative/integrate_trap/integrate_simpson/integrate_adaptive/integrate_romberg` — operate on closures `F: Fn(f64) → f64`. **Fourier series** via `calculus::fourier_series/fourier_eval` — computes coefficients using Simpson's rule integration. **Monte Carlo** via `calculus::monte_carlo_integrate_1d/monte_carlo_integrate_nd` — reproducible LCG-based sampling with standard error estimates.
 5. **Solve**: `solver::bisect/newton/secant/polynomial_roots` (single-variable), `solver::newton_system` (`n`-dimensional with central-difference Jacobian), and `solver::isolate_real_roots` (VAS root isolation with i128 exact arithmetic)
 6. **FFT**: `fft::fft/ifft/rfft` — operates on `Vec<Complex<f64>>` or `Vec<f64>`
-7. **Matrix**: `Matrix` — row-major `Vec<f64>`. Gaussian elimination for det/solve/inverse; **LU** with partial pivoting, **Cholesky** `A = L·Lᵀ` for SPD, **SVD** `A = U·Σ·Vᵀ` via Jacobi rotations, **power iteration** for the dominant eigenpair, **symmetric eigenvalue decomposition** via Householder tridiagonalisation + Wilkinson-shift QR iteration, **Hessenberg decomposition** via Householder reflections, **real Schur decomposition** via shifted QR on Hessenberg form, **Hilbert matrix** construction, **Tikhonov regularised solve** `(AᵀA + λI)x = Aᵀb` for ill-conditioned and rectangular systems
+7. **Matrix**: `Matrix` — row-major `Vec<f64>`. Gaussian elimination for det/solve/inverse; **LU** with partial pivoting, **Cholesky** `A = L·Lᵀ` for SPD, **SVD** `A = U·Σ·Vᵀ` via Jacobi rotations, **QR** `A = Q·R` via Householder reflections (orthogonal Q, upper-triangular R, least-squares solve), **power iteration** for the dominant eigenpair, **symmetric eigenvalue decomposition** via Householder tridiagonalisation + Wilkinson-shift QR iteration, **Hessenberg decomposition** via Householder reflections, **real Schur decomposition** via shifted QR on Hessenberg form, **Hilbert matrix** construction, **Tikhonov regularised solve** `(AᵀA + λI)x = Aᵀb` for ill-conditioned and rectangular systems
 8. **Stats**: Functions on `&[f64]` slices. **Stochastic primitives**: `Rng` (reproducible LCG), `normal`/`exponential` sampling (Box–Muller, inverse-CDF), `normal_pdf`/`normal_cdf`/`exp_pdf`/`exp_cdf`, `moments` (skewness, excess kurtosis), `cumulants`
 9. **Number theory**: Functions on `u64` integers (gcd, sieve, totient, Miller–Rabin, CRT, modular inverse, **discrete logarithm**) and on `i64` (extended GCD, **Jacobi symbol**, **continued fractions**, **linear Diophantine solver**)
 10. **ODE**: `ode::euler/rk4/rkf45` — operate on closures `F: Fn(f64, f64) → f64`
@@ -80,6 +87,8 @@ error.rs ──used by──▶ all modules
 19. **Interpolate**: `interpolate::lagrange_interp/newton_interp/CubicSpline/chebyshev_*/legendre_*/gauss_legendre` — point-wise polynomial, smooth C²-continuous cubic, Chebyshev series, Legendre polynomials, Gauss–Legendre quadrature
 20. **Special**: `special::gamma/erf/sinc/bessel_j0/j1/jn` — Lanczos, continued-fraction, Maclaurin-series, and asymptotic-form approximations
 21. **Plot**: `plot::plot_function/multi/scatter` — evaluates `Expr` over a range, renders PNG via `plotters`
+22. **Serialize**: `serialize::to_sexpr/from_sexpr`, `to_json/from_json`, `to_rpn/from_rpn` — three interchangeable textual encodings of `Expr`. All round-trip via `Expr::equals`. JSON uses a hand-rolled recursive-descent parser (no serde dependency, matching the crate convention). `serialize <fmt> <expr>` and `serialize <fmt> import <text>` REPL commands.
+23. **Interval**: `interval::Interval` — closed `[lo, hi]` bounds with outward-conservative arithmetic (+, -, *, /, neg), `sqr`/`powi` with zero-crossing awareness, elementary functions (sin, cos, tan, exp, ln, sqrt, abs, asin, acos, atan, sinh, cosh, tanh, cbrt) with monotonicity and extrema tracking for trig, set operations (intersect, hull, contains, overlaps), and `eval_interval` for rigorous bounds over the `Expr` AST. `interval <expr> with <var>=[lo,hi],...` REPL command.
 
 ## Design Decisions
 
@@ -90,7 +99,7 @@ error.rs ──used by──▶ all modules
 - **Error handling**: `MathError` (via `thiserror`) in the library, `anyhow` in the binary.
 - **Prelude**: `mathr::prelude` re-exports the most common types for ergonomic `use mathr::prelude::*;`.
 - **Numerical recipes**: Where possible (Gamma, sinc, Bessel, incomplete gamma) we use well-tested A&S or NR polynomial approximations; otherwise we use direct series / closed-form recurrences.
-- **Matrix decomposition family**: Gaussian elimination for inverse/determinant; LU with partial pivoting for fast solves; Cholesky for symmetric positive-definite matrices; SVD via Jacobi rotations for rank/reconditioning; power iteration for the dominant eigenpair; symmetric eigenvalue decomposition via Householder tridiagonalisation + Wilkinson-shift QR iteration; Hessenberg decomposition via Householder reflections; real Schur decomposition via shifted QR on Hessenberg form with 2×2 block handling for complex conjugate eigenvalue pairs.
+- **Matrix decomposition family**: Gaussian elimination for inverse/determinant; LU with partial pivoting for fast solves; Cholesky for symmetric positive-definite matrices; SVD via Jacobi rotations for rank/reconditioning; QR via Householder reflections for least-squares; power iteration for the dominant eigenpair; symmetric eigenvalue decomposition via Householder tridiagonalisation + Wilkinson-shift QR iteration; Hessenberg decomposition via Householder reflections; real Schur decomposition via shifted QR on Hessenberg form with 2×2 block handling for complex conjugate eigenvalue pairs.
 
 ## Deployment
 

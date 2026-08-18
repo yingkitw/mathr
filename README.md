@@ -54,6 +54,8 @@
 - **Big integers** — arbitrary-precision primality, factorization (Pollard's rho), factorial, Fibonacci, binomial, modular exponentiation, totient via `num-bigint`. REPL commands `fact`, `fib`, `binom` auto-upgrade to BigInt on overflow (no separate "big" command needed for these)
 - **Automatic differentiation** — dual numbers for exact forward-mode AD; derivatives, gradients, and Jacobians of arbitrary compositions
 - **MathML** — W3C Presentation MathML export and import for interchange with Word, web browsers, and other CAS systems. Notebook supports MathML cells (input is MathML, imported to Expr and evaluated). Web UI has a "Show MathML" toggle to display MathML output alongside KaTeX rendering.
+- **Expression serialization** — convert `Expr` to and from three interchangeable textual formats: S-expressions (`(add (mul (num 2) (var x)) (num 1))`), JSON (`{"t":"add",...}`), and RPN (`2 x * 1 +`). All round-trip via `Expr::equals`. Useful for persistence, interop, and pipe-friendly shell workflows. `serialize <fmt> <expr>` and `serialize <fmt> import <text>` REPL commands.
+- **Interval arithmetic** — rigorous bounds on computations over the `Expr` AST. Assign variables to intervals `[lo, hi]` and get guaranteed bounds on the result. Tracks extrema for trig functions, handles zero-crossings for even powers, and supports the full elementary function set. `interval <expr> with <var>=[lo,hi],...` REPL command. Pure Rust, no deps.
 
 ### Interpolation & Special Functions
 - **Interpolation** — Lagrange, Newton, linear, **cubic spline**, **Chebyshev** polynomials and series, **Legendre** polynomials, **Gauss–Legendre quadrature**
@@ -219,6 +221,22 @@ mathr> mathml x^2 + 1
 <math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><msup><mi>x</mi><mn>1</mn></msup><mo>+</mo><mn>1</mn></mrow></math>
 mathr> mathml import <mfrac><mn>1</mn><mn>2</mn></mfrac>
 1/2
+mathr> serialize sexpr 2*x + 1
+(add (mul (num 2) (var x)) (num 1))
+mathr> serialize json x^2
+{"t":"pow","a":{"t":"var","v":"x"},"b":{"t":"num","v":2}}
+mathr> serialize rpn import 2 x * 1 +
+2*x + 1
+mathr> interval x^2 + 1 with x=[-2,3]
+[1, 10]
+mathr> interval sin(x) with x=[0,6.283185307179586]
+[-1, 1]
+mathr> qr 12 -51 4 | 6 167 -68 | -4 24 -41
+QR ok (max reconstruction error = 0.00e+00)
+Q =
+...
+R =
+...
 mathr> ad sin(x^2) at x=1.5
 f(x) = 0.997495,  f'(x) = -0.313312
 mathr> ad grad x^2 + y^3 with x=2,y=3
@@ -379,11 +397,13 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `solver` | Bisection, Newton, secant, polynomial roots, **Newton for systems**, VAS root isolation |
 | `fft` | Cooley–Tukey FFT, convolution, cross-correlation, windows |
 | `complex` | Generic complex number type |
-| `matrix` | Matrix arithmetic, determinant, inverse, solve, **LU**, **Cholesky**, **SVD**, **eigenvalues**, rank |
+| `matrix` | Matrix arithmetic, determinant, inverse, solve, **LU**, **QR**, **Cholesky**, **SVD**, **eigenvalues**, rank |
 | `stats` | Descriptive statistics, correlation, regression, stochastic primitives |
 | `numtheory` | GCD, LCM, primality, factorization, sieve, CRT, totient, **Jacobi**, **Diophantine**, **continued fractions**, **discrete log** |
 | `bigint` | Arbitrary-precision integers: primality (Miller–Rabin), factorization (Pollard's rho), GCD, LCM, factorial, Fibonacci, binomial, mod_pow, totient |
 | `autodiff` | Automatic differentiation via dual numbers: `derivative`, `gradient`, `jacobian`, `Dual` type with full arithmetic |
+| `serialize` | Expression serialization: S-expressions, JSON, RPN (`to_sexpr`/`from_sexpr`, `to_json`/`from_json`, `to_rpn`/`from_rpn`) — all round-trip via `Expr::equals` |
+| `interval` | Interval arithmetic for rigorous bounds: `Interval` type with arithmetic, elementary functions, `eval_interval` over `Expr` AST |
 | `ode` | Euler, RK4, RK4 systems, adaptive RKF45 |
 | `taylor` | Symbolic Taylor series expansion |
 | `laurent` | Laurent series expansion around poles |

@@ -522,6 +522,123 @@ fn matrix_schur_cli() {
     assert!(output.contains("orthogonal"));
 }
 
+// ===== QR decomposition =====
+
+#[test]
+fn qr_repl_square() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qr 12 -51 4 | 6 167 -68 | -4 24 -41", ctx).unwrap().unwrap();
+    assert!(result.contains("QR ok"));
+    assert!(result.contains("Q ="));
+    assert!(result.contains("R ="));
+    // Reconstruction error should be tiny
+    assert!(result.contains("error = 0.00e+00") || result.contains("error = "));
+}
+
+#[test]
+fn qr_repl_rectangular_tall() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qr 1 1 | 1 2 | 1 3 | 1 4", ctx).unwrap().unwrap();
+    assert!(result.contains("QR ok"));
+    assert!(result.contains("Q ="));
+    assert!(result.contains("R ="));
+}
+
+#[test]
+fn qr_repl_wide_matrix() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qr 1 2 3 4 | 5 6 7 8", ctx).unwrap().unwrap();
+    assert!(result.contains("QR ok"));
+}
+
+#[test]
+fn qr_repl_identity() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qr 1 0 0 | 0 1 0 | 0 0 1", ctx).unwrap().unwrap();
+    assert!(result.contains("QR ok"));
+}
+
+#[test]
+fn qr_api_reconstruct() {
+    use mathr::matrix::Matrix;
+    let a = Matrix::from_rows(&[
+        vec![12.0, -51.0, 4.0],
+        vec![6.0, 167.0, -68.0],
+        vec![-4.0, 24.0, -41.0],
+    ]).unwrap();
+    let qr = a.qr().unwrap();
+    let recon = qr.reconstruct();
+    for i in 0..3 {
+        for j in 0..3 {
+            assert!((a[(i, j)] - recon[(i, j)]).abs() < 1e-10);
+        }
+    }
+}
+
+#[test]
+fn qr_api_q_orthogonal() {
+    use mathr::matrix::Matrix;
+    let a = Matrix::from_rows(&[
+        vec![1.0, 2.0],
+        vec![3.0, 4.0],
+        vec![5.0, 6.0],
+    ]).unwrap();
+    let qr = a.qr().unwrap();
+    let q = qr.q();
+    let qt = q.transpose();
+    let qtq = (&qt * &q).unwrap();
+    for i in 0..3 {
+        for j in 0..3 {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!((qtq[(i, j)] - expected).abs() < 1e-10);
+        }
+    }
+}
+
+#[test]
+fn qr_api_least_squares() {
+    use mathr::matrix::Matrix;
+    // Fit y = 1 + 2x: data (1,3), (2,5), (3,7)
+    let a = Matrix::from_rows(&[
+        vec![1.0, 1.0],
+        vec![1.0, 2.0],
+        vec![1.0, 3.0],
+    ]).unwrap();
+    let b = vec![3.0, 5.0, 7.0];
+    let x = a.qr().unwrap().solve(&b).unwrap();
+    assert!((x[0] - 1.0).abs() < 1e-10);
+    assert!((x[1] - 2.0).abs() < 1e-10);
+}
+
+#[test]
+fn qr_api_r_upper_triangular() {
+    use mathr::matrix::Matrix;
+    let a = Matrix::from_rows(&[
+        vec![4.0, 1.0, 2.0],
+        vec![3.0, 5.0, 1.0],
+        vec![1.0, 2.0, 6.0],
+    ]).unwrap();
+    let qr = a.qr().unwrap();
+    let r = qr.r();
+    for i in 0..3 {
+        for j in 0..i {
+            assert!(r[(i, j)].abs() < 1e-10, "R[{},{}] = {} not zero", i, j, r[(i,j)]);
+        }
+    }
+}
+
+#[test]
+fn qr_api_rank_deficient_errors() {
+    use mathr::matrix::Matrix;
+    let a = Matrix::from_rows(&[
+        vec![1.0, 2.0],
+        vec![1.0, 2.0],
+        vec![1.0, 2.0],
+    ]).unwrap();
+    let b = vec![1.0, 2.0, 3.0];
+    assert!(a.qr().unwrap().solve(&b).is_err());
+}
+
 #[test]
 fn isolate_roots_cli() {
     let ctx = mathr::eval::Context::standard();
@@ -1910,4 +2027,224 @@ fn mathml_roundtrip_api() {
     let parsed = mathml::from_mathml(&ml).unwrap();
     assert_eq!(parsed, original);
 }
+
+// =========================================================================
+// Expression serialization (S-expr, JSON, RPN)
+// =========================================================================
+
+#[test]
+fn serialize_sexpr_export_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("serialize sexpr 2*x + 1", ctx)
+        .unwrap().unwrap();
+    assert_eq!(result, "(add (mul (num 2) (var x)) (num 1))");
+}
+
+#[test]
+fn serialize_sexpr_import_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "serialize sexpr import (add (mul (num 2) (var x)) (num 1))",
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "2*x + 1");
+}
+
+#[test]
+fn serialize_json_export_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("serialize json x^2", ctx)
+        .unwrap().unwrap();
+    assert!(result.contains("\"t\":\"pow\""), "result: {}", result);
+    assert!(result.contains("\"v\":\"x\""), "result: {}", result);
+}
+
+#[test]
+fn serialize_json_import_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let j = r#"{"t":"pow","a":{"t":"var","v":"x"},"b":{"t":"num","v":2}}"#;
+    let result = mathr::repl::dispatch_str(
+        &format!("serialize json import {}", j),
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "x^2");
+}
+
+#[test]
+fn serialize_rpn_export_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("serialize rpn 2*x + 1", ctx)
+        .unwrap().unwrap();
+    assert_eq!(result, "2 x * 1 +");
+}
+
+#[test]
+fn serialize_rpn_import_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "serialize rpn import 2 x * 1 +",
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "2*x + 1");
+}
+
+#[test]
+fn serialize_rpn_func_export() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("serialize rpn sin(x)", ctx)
+        .unwrap().unwrap();
+    assert_eq!(result, "x sin:1");
+}
+
+#[test]
+fn serialize_roundtrip_api_all_formats() {
+    use mathr::parser::Parser;
+    use mathr::serialize::{from_json, from_rpn, from_sexpr, to_json, to_rpn, to_sexpr};
+    let original = Parser::parse("2*x + sin(x) - 1").unwrap();
+    let cases: [(String, fn(&str) -> mathr::error::Result<mathr::expr::Expr>); 3] = [
+        (to_sexpr(&original), from_sexpr),
+        (to_json(&original), from_json),
+        (to_rpn(&original), from_rpn),
+    ];
+    for (text, parse) in cases {
+        let parsed = parse(&text).unwrap();
+        assert!(original.equals(&parsed), "round-trip failed for: {}", text);
+    }
+}
+
+#[test]
+fn serialize_bad_format_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("serialize xml x", ctx);
+    assert!(result.is_err());
+}
+
+// =========================================================================
+// Interval arithmetic
+// =========================================================================
+
+#[test]
+fn interval_repl_polynomial() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "interval x^2 + 1 with x=[-2,3]",
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "[1, 10]");
+}
+
+#[test]
+fn interval_repl_sin_full_range() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "interval sin(x) with x=[0,6.283185307179586]",
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "[-1, 1]");
+}
+
+#[test]
+fn interval_repl_multivar() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "interval x*y with x=[1,2],y=[3,4]",
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "[3, 8]");
+}
+
+#[test]
+fn interval_repl_dependency_problem() {
+    // x - x over [1,2] → [-1, 1] (dependency problem, not [0,0])
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "interval x - x with x=[1,2]",
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "[-1, 1]");
+}
+
+#[test]
+fn interval_repl_div_by_zero() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "interval 1/x with x=[-1,1]",
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "[-∞, ∞]");
+}
+
+#[test]
+fn interval_repl_exp() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "interval exp(x) with x=[0,1]",
+        ctx,
+    )
+    .unwrap().unwrap();
+    // exp(0)=1, exp(1)=e≈2.71828...
+    assert!(result.starts_with("[1, 2.718"));
+}
+
+#[test]
+fn interval_repl_odd_power() {
+    // x^3 over [-2,1] → [-8, 1] (odd, monotonic)
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str(
+        "interval x^3 with x=[-2,1]",
+        ctx,
+    )
+    .unwrap().unwrap();
+    assert_eq!(result, "[-8, 1]");
+}
+
+#[test]
+fn interval_repl_missing_with_errors() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("interval x^2", ctx);
+    assert!(result.is_err());
+}
+
+#[test]
+fn interval_repl_unknown_var_errors() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("interval y + 1 with x=[1,2]", ctx);
+    assert!(result.is_err());
+}
+
+#[test]
+fn interval_api_eval() {
+    use mathr::interval::{eval_interval, Interval};
+    use mathr::parser::Parser;
+    use std::collections::HashMap;
+    let e = Parser::parse("x^2 + 2*x + 1").unwrap();
+    let mut vars = HashMap::new();
+    vars.insert("x".to_string(), Interval::new(-1.0, 1.0));
+    let r = eval_interval(&e, &vars).unwrap();
+    // (x+1)^2 over [-1, 1] → [0, 4]
+    assert!(r.contains(0.0));
+    assert!(r.contains(4.0));
+}
+
+#[test]
+fn interval_api_empty_on_negative_sqrt() {
+    use mathr::interval::{eval_interval, Interval};
+    use mathr::parser::Parser;
+    use std::collections::HashMap;
+    let e = Parser::parse("sqrt(x)").unwrap();
+    let mut vars = HashMap::new();
+    vars.insert("x".to_string(), Interval::new(-4.0, -1.0));
+    let r = eval_interval(&e, &vars).unwrap();
+    assert!(r.is_empty);
+}
+
+
 

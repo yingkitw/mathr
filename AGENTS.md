@@ -65,8 +65,21 @@ This document defines the continuous improvement cycle for the **mathr** crate �
 
 ## The Loop
 
+### 0. Consult MEMORY.md Before Starting
+**CRITICAL**: Always begin each task by reading relevant sections of `MEMORY.md`. This prevents:
+- Reinventing solutions to already-solved problems
+- Repeating known mistakes and anti-patterns
+- Missing established conventions for similar features
+- Ignoring domain-specific pitfalls (numerical instability, branch cuts, parser edge cases, convergence criteria)
+
+**How to consult MEMORY.md**:
+1. Search for keywords related to your task (e.g., "quadrature", "Miller–Rabin", "Expr canonicalization", "SVD")
+2. Read relevant pattern sections for context and proven approaches
+3. Follow established conventions unless there's a clear reason to diverge
+4. If MEMORY.md lacks relevant patterns, note this during the harvest step (Step 4)
+
 ### 1. Complete Remaining TODO Items
-Pick the next highest-priority item from `TODO.md` (or `ARCHITECTURE.md` if the task is architectural). Implement it with minimal, focused changes. Do not add speculative features.
+Pick the next highest-priority item from `TODO.md` (or `ARCHITECTURE.md` if the task is architectural). If no high-priority items remain, run the competitive intelligence step to seed new work. Implement with minimal, focused changes. Do not add speculative features.
 
 ### 2. Create Tests and Examples
 For every new capability:
@@ -94,6 +107,15 @@ After each completed feature, extract patterns and best practices:
 
 Add these to `MEMORY.md` with clear categories and references to specific files/lines.
 
+**Harvest Quality Checklist**:
+- [ ] Added success patterns with code examples where useful
+- [ ] Documented anti-patterns with what to avoid instead
+- [ ] Included domain-specific gotchas and edge cases (numerical stability, branch cuts)
+- [ ] Referenced specific files/lines for future lookup
+- [ ] Used existing MEMORY.md categories or created new ones if needed
+- [ ] Made entries searchable with relevant keywords
+- [ ] Noted any gaps found in MEMORY.md during Step 0 consultation
+
 ### 5. Loop Back to Step 1
 Return to `TODO.md` and pick the next item. Repeat until the backlog is clear.
 
@@ -116,9 +138,9 @@ Keep all project docs aligned with the current implementation. Root docs (requir
 - **`ARCHITECTURE.md`**: Module relationships, data flow, design decisions
 - **`TODO.md`**: Mark completed items, move them to Done, keep brainstorming current
 - **`SPEC.md`**: CLI subcommands, expression grammar, supported functions/constants
-- **`MEMORY.md`**: Harvested patterns, domain knowledge, technical conventions (enhanced)
+- **`MEMORY.md`**: Harvested patterns, domain knowledge, technical conventions
 
-Update **`AGENTS.md`** if the loop itself evolves.
+Update **`AGENTS.md`** (this file) if the loop itself evolves.
 
 ## Memory System (MEMORY.md)
 
@@ -172,6 +194,38 @@ Organize `MEMORY.md` into these sections:
 - Notebook (`.mnb`) format and cell evaluation
 - HTTP server and web UI integration
 
+### Maintaining MEMORY.md Quality
+
+**When to Update MEMORY.md**:
+- After completing any non-trivial feature or bug fix
+- When discovering a new pattern or anti-pattern
+- After resolving a tricky debugging session (especially numerical convergence or stability issues)
+- When establishing new conventions
+- When a known reference value or validation table is confirmed
+
+**How to Write Good MEMORY.md Entries**:
+1. **Be specific**: Reference actual files and line numbers where patterns occur
+2. **Show examples**: Include minimal code snippets demonstrating the pattern
+3. **Explain why**: Don't just say what—explain the reasoning behind the pattern
+4. **Link related patterns**: Cross-reference related entries with `[[PatternName]]`
+5. **Keep it searchable**: Use keywords that future developers will search for
+6. **Date entries**: Add dates so readers know how current the information is
+
+**Signs MEMORY.md Needs Attention**:
+- Same questions or patterns coming up repeatedly in development
+- Developers (human or AI) solving problems that should be documented
+- Frequent bugs in similar areas (indicates missing anti-pattern documentation)
+- New contributors asking the same questions
+- Numerical regressions in similar areas (e.g. repeated convergence failures)
+
+**MEMORY.md Hygiene Routine** (run monthly):
+- [ ] Review for outdated information (deprecated APIs, changed conventions)
+- [ ] Consolidate redundant entries
+- [ ] Add missing patterns from recent work
+- [ ] Update cross-references if structure changed
+- [ ] Verify all file references still exist
+- [ ] Check for numerical learnings that weren't captured
+
 ## Principles
 
 - **Simplicity over flexibility**: Solve the problem at hand, not every hypothetical future problem
@@ -180,8 +234,9 @@ Organize `MEMORY.md` into these sections:
 - **Test before ship**: No feature is complete until it has passing tests
 - **Docs are code**: Documentation drift is a bug
 - **Numerical fidelity**: Never compromise on mathematical accuracy for convenience
-- **Memory first**: Always check `MEMORY.md` before starting a new feature
-- **Pattern harvesting**: After success, update `MEMORY.md` to share the learning
+- **Memory first**: Consult `MEMORY.md` before starting work—reuse proven patterns, avoid known pitfalls, follow established conventions. If MEMORY.md lacks relevant information, note the gap and fill it during harvest
+- **Pattern harvesting**: After success, update `MEMORY.md` with patterns, anti-patterns, and learnings so others benefit from your experience
+- **Memory hygiene**: Keep MEMORY.md current, searchable, and cross-referenced. It's only valuable if maintained
 
 ## File Positioning and Value
 
@@ -214,6 +269,7 @@ Organize `MEMORY.md` into these sections:
 - **Audience**: Development team (accelerates onboarding and consistency)
 - **Position**: Development acceleration and quality consistency
 - **Focus**: Proven patterns, domain knowledge, technical conventions
+- **Update**: Must be updated after each completed feature to capture patterns and lessons learned
 
 ### AGENTS.md (this file)
 - **Value**: Development process and workflow definition
@@ -222,13 +278,6 @@ Organize `MEMORY.md` into these sections:
 - **Focus**: How we work, the loop, memory system, principles
 - **Update**: This file should be updated when the development loop itself evolves or when new process patterns emerge
 
-### MEMORY.md
-- **Value**: Institutional knowledge and pattern library
-- **Audience**: Development team (accelerates onboarding and consistency)
-- **Position**: Development acceleration and quality consistency
-- **Focus**: Proven patterns, domain knowledge, technical conventions
-- **Update**: Must be updated after each completed feature to capture patterns and lessons learned
-
 ## How These Files Work Together
 
 1. **README.md** tells stakeholders what the project is and how to use it
@@ -236,9 +285,9 @@ Organize `MEMORY.md` into these sections:
 3. **ARCHITECTURE.md** describes how the modules fit together
 4. **TODO.md** tells developers what to build next (driven by competitive intelligence)
 5. **AGENTS.md** tells agents how to work through the TODO items with quality and memory
-6. **MEMORY.md** captures what we learned so we don't repeat mistakes
+6. **MEMORY.md** captures what we learned so we don't repeat mistakes and provides proven patterns to accelerate development
 
 The loop reinforces these files:
-- Complete TODO → Test → Harvest to MEMORY → Optimize → Research → Update TODO
+Consult MEMORY.md → Complete TODO → Test → Harvest to MEMORY → Optimize → Research → Update TODO
 
-This creates a flywheel of continuous improvement with institutional knowledge preservation.
+This creates a flywheel of continuous improvement with institutional knowledge preservation. **MEMORY.md is both the starting point (consult before work) and the destination (harvest after work), creating a virtuous cycle of learning and improvement.**

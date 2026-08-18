@@ -129,6 +129,8 @@ This file captures institutional knowledge, patterns, and best practices for the
 - **Single-string dispatch**: `clap` with `Arg<Action::SetTrue>` for flags
 - **Command routing**: `repl.rs:dispatch()` routes to library functions based on first token
 - **Step-by-step**: `repl.rs:dispatch_steps()` returns `Vec<String>` of intermediate steps for educational display
+- **Keyword list for step dispatch**: `repl.rs` keeps a `cmd_keywords` array (~line 163) of `"prefix "` strings; commands starting with one of these fall through to `dispatch_inner` for single-step output. Add new REPL commands here AND in `dispatch_inner`'s `strip_prefix` chain.
+- **Import subcommand convention**: for reversible formats (MathML, serialize), use `<cmd> import <text>` to import and bare `<cmd> <expr>` to export — see `do_mathml` (~line 1538) and `do_serialize` (~line 1548) in `repl.rs`.
 
 ### Notebook Integration
 - **Context persistence**: `notebook.rs:eval_all()` uses `&mut Context` across cells
@@ -141,6 +143,70 @@ This file captures institutional knowledge, patterns, and best practices for the
 - **Function definition**: `fn f(x) = expr` stores closure in context
 - **Context inspection**: `vars` and `funcs` commands show bindings
 - **Reset**: `clear` command resets context to defaults
+
+## Serialization Patterns (serialize.rs)
+
+### Three-format design
+- **S-expressions** (`to_sexpr`/`from_sexpr`): Lisp-like prefix notation, `(add (mul (num 2) (var x)) (num 1))`. Recursive-descent parser over paren/atom tokens.
+- **JSON** (`to_json`/`from_json`): nested objects with a `"t"` tag discriminator. Hand-rolled recursive JSON parser (no serde) — matches the crate's no-serde convention used by `notebook.rs`.
+- **RPN** (`to_rpn`/`from_rpn`): space-separated postfix. Functions use a `<name>:<arity>` call token (e.g. `x sin:1`, `x 2 pow:2`). Stack-based parser.
+
+### Round-trip contract
+- All three formats round-trip via `Expr::equals` (canonical form), NOT raw `==`. This matters because `equals` normalizes `Sub`→`Add(Neg)` and sorts commutative operands — two structurally different `Expr`s can be mathematically equal. Tests use `assert!(e.equals(&e2))`, never `assert_eq!(e, e2)`.
+
+### Number formatting
+- Shared `fmt_num` helper: integers as `i64`, `NaN`/`inf`/`-inf` as identifiers (sexpr/rpn) or strings (json, since JSON numbers can't be NaN/inf). `parse_num` is the inverse. Keep these consistent across formats so the textual forms stay aligned with `Expr::Display`.
+
+### Pitfalls encountered
+- **`Iterator::rev()` on `Map` of `Range`**: `(0..n).map(|_| stack.pop()).rev().collect()` does NOT reverse the collected pops — it reverses the range iteration, but `pop()` still pulls from the top in the same order. Fix: collect into a `Vec` first, then call `.reverse()` on the Vec. (Bug found in `from_rpn` function-arg ordering, 2026-08-18.)
+- **JSON parser UTF-8**: when reading string chars byte-by-byte, multi-byte UTF-8 sequences need full decoding (back up, decode with `str::from_utf8`, advance by `char.len_utf8()`). Single-byte fallback only for ASCII `< 0x80`.
+- **Dead-code warning on `JsonValue::Bool`**: a robust JSON parser should support all value types even if the Expr schema never uses them; `#[allow(dead_code)]` on the variant is cleaner than removing it.
+
+## QR Decomposition Patterns (matrix.rs)
+
+### Householder reflections algorithm
+- **Sign choice**: `alpha = -sign(x[0]) * ||x||` where `x` is the sub-column being zeroed. This ensures the reflection is numerically stable (avoids cancellation). The sign of R's diagonal entries depends on this choice — they can be negative even for positive-definite matrices. Tests should check `abs(r[i,i])` not `r[i,i] == expected` when the sign isn't deterministic.
+- **Householder vector**: `v = x - alpha * e_1`, then `H = I - 2*v*vᵀ/(vᵀv)`. Apply H to R from the left and to Q from the right (Q = Q·H accumulates the reflections).
+- **Skip zero columns**: if `||x|| < 1e-300` or `||v||² < 1e-300`, skip the step — the column is already zeroed below the diagonal.
+- **Rectangular matrices**: works for both tall (m≥n) and wide (m<n). Q is always m×m orthogonal, R is m×n upper-trapezoidal. No transpose swap needed.
+
+### Least-squares solve
+- For overdetermined systems (m≥n, full rank): compute `Qᵀb` then back-substitute `R·x = Qᵀb` using the n×n leading block of R.
+- Rank deficiency: if any `|R[i,i]| < 1e-14` during back-substitution, return an error.
+- Underdetermined (n>m): reject — QR can't solve underdetermined systems.
+
+### Pitfalls encountered
+- **`&Matrix * &Matrix` returns `Result<Matrix>`**: not `Matrix` directly. In tests, must `.unwrap()` the product before indexing: `let qtq = (&qt * &q).unwrap();`. Forgetting this causes `E0608: cannot index into Result`.
+- **R diagonal sign**: for the identity matrix, the Householder reflection of `[1,0,0]` produces `v = [2,0,0]`, which maps `R[0,0]` from 1 to -1. The test `assert!(close(r[(i,i)], 1.0))` fails — use `assert!(close(r[(i,i)].abs(), 1.0))` instead.
+
+## Interval Arithmetic Patterns (interval.rs)
+
+### Core design
+- **`Interval { lo, hi, is_empty }`**: closed `[lo, hi]` or empty ∅. `new(lo, hi)` auto-converts to empty if `lo > hi`. `whole()` is `(-∞, +∞)`.
+- **No outward rounding**: uses plain `f64` arithmetic (not IEEE 1788 directed rounding). Bounds may be tight at the last bit — documented limitation. For safety-critical use, widen by epsilon.
+- **`eval_interval(&Expr, &HashMap<String, Interval>)`**: tree-walking evaluator over the Expr AST with interval values. Constants `pi`, `e`, `tau` provided as point intervals. Unknown vars/functions error.
+
+### Arithmetic rules
+- **Add**: `[a,b] + [c,d] = [a+c, b+d]` — endpoint sums.
+- **Sub**: `[a,b] - [c,d] = [a-d, b-c]` — cross endpoints (this causes the dependency problem).
+- **Mul**: compute all 4 endpoint products `{a·c, a·d, b·c, b·d}`, take min/max. Handles zero-crossing automatically.
+- **Div**: if divisor contains 0 → `whole()`. Else same 4-endpoint product pattern with division.
+- **Neg**: `[a,b] → [-b, -a]` — bounds swap.
+
+### Function-specific patterns
+- **Monotonic increasing** (exp, ln, log10, log2, sqrt, atan, asin, sinh, tanh, cbrt): image is `[f(lo), f(hi)]`. Check domain first (ln/sqrt/log need positive input; return empty if outside domain).
+- **Monotonic decreasing** (acos): image is `[f(hi), f(lo)]` — bounds swap.
+- **Even function** (cosh): if 0 ∈ [lo,hi], min is `f(0)=1`; else min is `min(f(lo), f(hi))`.
+- **Trig extrema tracking** (sin, cos): check if the interval contains a global max (sin: π/2+2kπ; cos: 2kπ) or min (sin: -π/2+2kπ; cos: π+2kπ). If so, bound includes ±1. Use `contains_extremum(lo, hi, target)` helper which checks congruence mod 2π.
+- **tan**: has poles at π/2+kπ. If interval contains a pole → `whole()`. Use `interval_contains_tan_pole`.
+- **sqr (x²)**: tighter than `self * self` because it knows both operands are the same value. If 0 ∈ [lo,hi] → `[0, max(lo², hi²)]`; else `[min(lo², hi²), max(lo², hi²)]`.
+- **powi (x^n)**: even n → if 0 ∈ [lo,hi], min is 0; odd n → monotonic, `[lo^n, hi^n]`.
+
+### Dependency problem (fundamental limitation)
+- `x - x` over `[1, 2]` → `[-1, 1]`, NOT `[0, 0]`. Each occurrence of `x` is treated as independent. This over-conservatism grows with expression complexity. Documented in module docs and SPEC.md. No fix without more advanced techniques (affine arithmetic, Taylor models).
+
+### REPL parsing pitfall
+- `interval <expr> with x=[-2,3],y=[1,4]` — the comma inside `[lo,hi]` must NOT be treated as an assignment separator. Use `split_assignments()` in `repl.rs` which tracks bracket depth (`[` increments, `]` decrements, split on `,` only when depth==0). (Bug found 2026-08-18.)
 
 ## Fast Approximation Patterns
 
@@ -239,6 +305,8 @@ This file captures institutional knowledge, patterns, and best practices for the
 - **taylor.rs** and **laurent.rs** depend on symbolic + eval
 - **fft.rs** depends on complex.rs
 - **plot.rs** depends on eval + expr
+- **mathml.rs** and **serialize.rs** depend on expr + error only (pure AST transforms)
+- **interval.rs** depends on expr + error + std::collections (interval eval over Expr AST)
 - **repl.rs** uses all modules
 - **server.rs** uses repl dispatch for notebook evaluation
 - **error.rs** used by all modules

@@ -1467,6 +1467,164 @@ impl Matrix {
         }
         reg.solve(&atb)
     }
+
+    /// QR decomposition via Householder reflections: `A = Q · R` where `Q` is
+    /// orthogonal (`QᵀQ = I`) and `R` is upper-triangular. Works for
+    /// rectangular `m × n` matrices with `m ≥ n` (tall or square).
+    ///
+    /// For `m < n`, the transpose is decomposed and the factors are swapped
+    /// (so `Q` is `m × m` and `R` is `m × n` upper-trapezoidal).
+    pub fn qr(&self) -> Result<Qr> {
+        let m = self.rows;
+        let n = self.cols;
+        if m == 0 || n == 0 {
+            return Err(MathError::InvalidArgument("qr: empty matrix".into()));
+        }
+        // Work on a copy of A; R starts as A and gets transformed in place.
+        let mut r = self.data.clone();
+        let r_rows = m;
+        let r_cols = n;
+        // Q accumulates as the product of Householder reflections; start as I_m.
+        let mut q = vec![0.0; m * m];
+        for i in 0..m {
+            q[i * m + i] = 1.0;
+        }
+        let k = m.min(n);
+        for step in 0..k {
+            // Build Householder vector for column `step`, rows step..r_rows.
+            let len = r_rows - step;
+            // Extract the sub-column x = r[step..r_rows, step].
+            let mut x = vec![0.0; len];
+            for i in 0..len {
+                x[i] = r[(step + i) * r_cols + step];
+            }
+            let x_norm: f64 = x.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if x_norm < 1e-300 {
+                continue; // Already zeroed, skip this step.
+            }
+            // alpha = -sign(x[0]) * ||x||
+            let alpha = if x[0] >= 0.0 { -x_norm } else { x_norm };
+            // v = x - alpha * e_1
+            let mut v = x.clone();
+            v[0] -= alpha;
+            let v_norm_sq: f64 = v.iter().map(|val| val * val).sum();
+            if v_norm_sq < 1e-300 {
+                continue;
+            }
+            // Apply H = I - 2*v*vᵀ/(vᵀv) to the sub-matrix R[step..r_rows, step..r_cols]
+            // For each column j in [step, r_cols):
+            //   R[i, j] -= 2 * v[i-step] * (sum_k v[k] * R[step+k, j]) / v_norm_sq
+            for j in step..r_cols {
+                let mut dot = 0.0;
+                for i in 0..len {
+                    dot += v[i] * r[(step + i) * r_cols + j];
+                }
+                let factor = 2.0 * dot / v_norm_sq;
+                for i in 0..len {
+                    r[(step + i) * r_cols + j] -= factor * v[i];
+                }
+            }
+            // Apply H to Q from the right: Q = Q · H (affects columns step..m of Q)
+            // Q[:, i] -= 2 * v[i-step] * (sum_k Q[:, step+k] * v[k]) / v_norm_sq
+            for i in 0..m {
+                let mut dot = 0.0;
+                for k in 0..len {
+                    dot += q[i * m + (step + k)] * v[k];
+                }
+                let factor = 2.0 * dot / v_norm_sq;
+                for k in 0..len {
+                    q[i * m + (step + k)] -= factor * v[k];
+                }
+            }
+        }
+        // If m < n, we decomposed Aᵀ; swap back.
+        // Actually, we handled it generically above — R is m×n upper-trapezoidal
+        // and Q is m×m orthogonal. No swap needed.
+        let _ = (r_rows, r_cols); // already correct
+        Ok(Qr {
+            m,
+            n,
+            q,
+            r,
+        })
+    }
+}
+
+/// QR decomposition result: `A = Q · R`.
+pub struct Qr {
+    m: usize,
+    n: usize,
+    q: Vec<f64>,
+    r: Vec<f64>,
+}
+
+impl Qr {
+    /// The orthogonal `m × m` matrix `Q`.
+    pub fn q(&self) -> Matrix {
+        Matrix::from_row_major(self.m, self.m, self.q.clone()).unwrap()
+    }
+
+    /// The upper-triangular (or upper-trapezoidal for rectangular) `m × n` matrix `R`.
+    pub fn r(&self) -> Matrix {
+        Matrix::from_row_major(self.m, self.n, self.r.clone()).unwrap()
+    }
+
+    /// Reconstruct the original matrix `A = Q · R`.
+    pub fn reconstruct(&self) -> Matrix {
+        let mut data = vec![0.0; self.m * self.n];
+        for i in 0..self.m {
+            for j in 0..self.n {
+                let mut sum = 0.0;
+                for k in 0..self.m {
+                    sum += self.q[i * self.m + k] * self.r[k * self.n + j];
+                }
+                data[i * self.n + j] = sum;
+            }
+        }
+        Matrix::from_row_major(self.m, self.n, data).unwrap()
+    }
+
+    /// Solve the least-squares problem `min ‖A·x − b‖` for overdetermined
+    /// systems (`m ≥ n`, full column rank). Returns `x` of length `n`.
+    ///
+    /// Computes `Qᵀb` then back-substitutes `R·x = Qᵀb`.
+    pub fn solve(&self, b: &[f64]) -> Result<Vec<f64>> {
+        if b.len() != self.m {
+            return Err(MathError::InvalidArgument(format!(
+                "qr.solve: b has length {}, expected {}",
+                b.len(),
+                self.m
+            )));
+        }
+        if self.n > self.m {
+            return Err(MathError::InvalidArgument(
+                "qr.solve: underdetermined system (n > m)".into(),
+            ));
+        }
+        // Compute Qᵀ · b  (length m)
+        let mut qtb = vec![0.0; self.m];
+        for i in 0..self.m {
+            for k in 0..self.m {
+                qtb[i] += self.q[k * self.m + i] * b[k];
+            }
+        }
+        // Back-substitution on the upper-triangular n×n leading block of R.
+        let mut x = vec![0.0; self.n];
+        for i in (0..self.n).rev() {
+            let mut sum = qtb[i];
+            for j in (i + 1)..self.n {
+                sum -= self.r[i * self.n + j] * x[j];
+            }
+            let diag = self.r[i * self.n + i];
+            if diag.abs() < 1e-14 {
+                return Err(MathError::InvalidArgument(
+                    "qr.solve: matrix is rank-deficient".into(),
+                ));
+            }
+            x[i] = sum / diag;
+        }
+        Ok(x)
+    }
 }
 
 #[cfg(test)]
@@ -2128,5 +2286,290 @@ mod tests {
         let x = a.solve_tikhonov(&b, 0.0).unwrap();
         assert!(close(x[0], 1.0), "intercept should be 1, got {}", x[0]);
         assert!(close(x[1], 2.0), "slope should be 2, got {}", x[1]);
+    }
+
+    // ===== QR Decomposition Tests =====
+
+    #[test]
+    fn qr_square_reconstruct() {
+        let a = Matrix::from_rows(&[
+            vec![12.0, -51.0, 4.0],
+            vec![6.0, 167.0, -68.0],
+            vec![-4.0, 24.0, -41.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let recon = qr.reconstruct();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(close(a[(i, j)], recon[(i, j)]),
+                    "QR reconstruct mismatch at ({},{}): {} vs {}", i, j, a[(i,j)], recon[(i,j)]);
+            }
+        }
+    }
+
+    #[test]
+    fn qr_q_orthogonal() {
+        let a = Matrix::from_rows(&[
+            vec![12.0, -51.0, 4.0],
+            vec![6.0, 167.0, -68.0],
+            vec![-4.0, 24.0, -41.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let q = qr.q();
+        // QᵀQ should be identity
+        let qt = q.transpose();
+        let qtq = (&qt * &q).unwrap();
+        for i in 0..3 {
+            for j in 0..3 {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(close(qtq[(i, j)], expected),
+                    "QᵀQ not identity at ({},{}): {}", i, j, qtq[(i,j)]);
+            }
+        }
+    }
+
+    #[test]
+    fn qr_r_upper_triangular() {
+        let a = Matrix::from_rows(&[
+            vec![12.0, -51.0, 4.0],
+            vec![6.0, 167.0, -68.0],
+            vec![-4.0, 24.0, -41.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let r = qr.r();
+        for i in 0..3 {
+            for j in 0..i {
+                assert!(r[(i, j)].abs() < 1e-10,
+                    "R not upper-triangular at ({},{}): {}", i, j, r[(i,j)]);
+            }
+        }
+    }
+
+    #[test]
+    fn qr_rectangular_tall() {
+        // 4×2 matrix
+        let a = Matrix::from_rows(&[
+            vec![1.0, 1.0],
+            vec![1.0, 2.0],
+            vec![1.0, 3.0],
+            vec![1.0, 4.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let q = qr.q();
+        let r = qr.r();
+        assert_eq!(q.rows, 4);
+        assert_eq!(q.cols, 4);
+        assert_eq!(r.rows, 4);
+        assert_eq!(r.cols, 2);
+        // Reconstruct
+        let recon = qr.reconstruct();
+        for i in 0..4 {
+            for j in 0..2 {
+                assert!(close(a[(i, j)], recon[(i, j)]));
+            }
+        }
+    }
+
+    #[test]
+    fn qr_rectangular_wide() {
+        // 2×4 matrix (m < n)
+        let a = Matrix::from_rows(&[
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![5.0, 6.0, 7.0, 8.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let q = qr.q();
+        let r = qr.r();
+        assert_eq!(q.rows, 2);
+        assert_eq!(q.cols, 2);
+        assert_eq!(r.rows, 2);
+        assert_eq!(r.cols, 4);
+        // Reconstruct
+        let recon = qr.reconstruct();
+        for i in 0..2 {
+            for j in 0..4 {
+                assert!(close(a[(i, j)], recon[(i, j)]));
+            }
+        }
+    }
+
+    #[test]
+    fn qr_least_squares_linear_fit() {
+        // Fit y = 1 + 2x to data (1,3), (2,5), (3,7)
+        let a = Matrix::from_rows(&[
+            vec![1.0, 1.0],
+            vec![1.0, 2.0],
+            vec![1.0, 3.0],
+        ]).unwrap();
+        let b = vec![3.0, 5.0, 7.0];
+        let x = a.qr().unwrap().solve(&b).unwrap();
+        assert!(close(x[0], 1.0), "intercept: {}", x[0]);
+        assert!(close(x[1], 2.0), "slope: {}", x[1]);
+    }
+
+    #[test]
+    fn qr_least_squares_noisy() {
+        // Fit y = 2 + 0.5x with noise: (0, 2.1), (1, 2.4), (2, 3.1), (3, 3.4)
+        // True line: y = 2 + 0.5x → b ≈ [2, 2.5, 3, 3.5]
+        let a = Matrix::from_rows(&[
+            vec![1.0, 0.0],
+            vec![1.0, 1.0],
+            vec![1.0, 2.0],
+            vec![1.0, 3.0],
+        ]).unwrap();
+        let b = vec![2.1, 2.4, 3.1, 3.4];
+        let x = a.qr().unwrap().solve(&b).unwrap();
+        // Should be close to [2, 0.5]
+        assert!((x[0] - 2.0).abs() < 0.1, "intercept: {}", x[0]);
+        assert!((x[1] - 0.5).abs() < 0.1, "slope: {}", x[1]);
+    }
+
+    #[test]
+    fn qr_solve_matches_lu_for_square() {
+        // For a square invertible system, QR and LU should give the same answer.
+        let a = Matrix::from_rows(&[
+            vec![4.0, 3.0],
+            vec![6.0, 3.0],
+        ]).unwrap();
+        let b = vec![10.0, 12.0];
+        let x_qr = a.qr().unwrap().solve(&b).unwrap();
+        let x_lu = a.lu().unwrap().solve(&b).unwrap();
+        for i in 0..2 {
+            assert!(close(x_qr[i], x_lu[i]), "QR vs LU mismatch at {}: {} vs {}", i, x_qr[i], x_lu[i]);
+        }
+    }
+
+    #[test]
+    fn qr_identity_matrix() {
+        let a = Matrix::from_rows(&[
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let recon = qr.reconstruct();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(close(a[(i, j)], recon[(i, j)]));
+            }
+        }
+        // R should be diagonal with |1| on the diagonal (sign may vary)
+        let r = qr.r();
+        for i in 0..3 {
+            assert!(close(r[(i, i)].abs(), 1.0), "R diagonal abs should be 1, got {}", r[(i,i)]);
+        }
+    }
+
+    #[test]
+    fn qr_already_upper_triangular() {
+        let a = Matrix::from_rows(&[
+            vec![2.0, 1.0, 3.0],
+            vec![0.0, 5.0, 1.0],
+            vec![0.0, 0.0, 4.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let recon = qr.reconstruct();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(close(a[(i, j)], recon[(i, j)]));
+            }
+        }
+    }
+
+    #[test]
+    fn qr_rank_deficient_errors() {
+        // Column 2 is 2× column 1 → rank deficient
+        let a = Matrix::from_rows(&[
+            vec![1.0, 2.0],
+            vec![1.0, 2.0],
+            vec![1.0, 2.0],
+        ]).unwrap();
+        let b = vec![1.0, 2.0, 3.0];
+        let result = a.qr().unwrap().solve(&b);
+        assert!(result.is_err(), "rank-deficient should error");
+    }
+
+    #[test]
+    fn qr_wrong_b_length_errors() {
+        let a = Matrix::from_rows(&[
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        ]).unwrap();
+        let b = vec![1.0, 2.0]; // should be 3
+        assert!(a.qr().unwrap().solve(&b).is_err());
+    }
+
+    #[test]
+    fn qr_underdetermined_errors() {
+        // 2×3 matrix (m < n) — underdetermined
+        let a = Matrix::from_rows(&[
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+        ]).unwrap();
+        let b = vec![1.0, 2.0];
+        assert!(a.qr().unwrap().solve(&b).is_err());
+    }
+
+    #[test]
+    fn qr_q_orthogonal_rectangular() {
+        let a = Matrix::from_rows(&[
+            vec![1.0, 1.0],
+            vec![1.0, 2.0],
+            vec![1.0, 3.0],
+            vec![1.0, 4.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let q = qr.q();
+        let qt = q.transpose();
+        let qtq = (&qt * &q).unwrap();
+        // QᵀQ = I (4×4)
+        for i in 0..4 {
+            for j in 0..4 {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(close(qtq[(i, j)], expected),
+                    "QᵀQ not identity at ({},{}): {}", i, j, qtq[(i,j)]);
+            }
+        }
+    }
+
+    #[test]
+    fn qr_classical_example() {
+        // Classic textbook example (Trefethen & Bau)
+        // A = [[1, 2], [2, 4], [3, 6]] is rank-deficient, so use a full-rank one:
+        // A = [[1, 2], [2, 3], [3, 4]]
+        let a = Matrix::from_rows(&[
+            vec![1.0, 2.0],
+            vec![2.0, 3.0],
+            vec![3.0, 4.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let recon = qr.reconstruct();
+        for i in 0..3 {
+            for j in 0..2 {
+                assert!(close(a[(i, j)], recon[(i, j)]));
+            }
+        }
+        // R should be 3×2 upper-triangular (zeros below diagonal in 2×2 block)
+        let r = qr.r();
+        assert!(r[(1, 0)].abs() < 1e-10);
+        assert!(r[(2, 0)].abs() < 1e-10);
+        assert!(r[(2, 1)].abs() < 1e-10);
+    }
+
+    #[test]
+    fn qr_2x2_simple() {
+        // Simple 2×2: A = [[4, 1], [0, 3]]
+        // QR: Q = [[1, 0], [0, 1]], R = A (already upper-triangular)
+        let a = Matrix::from_rows(&[
+            vec![4.0, 1.0],
+            vec![0.0, 3.0],
+        ]).unwrap();
+        let qr = a.qr().unwrap();
+        let recon = qr.reconstruct();
+        assert!(close(recon[(0, 0)], 4.0));
+        assert!(close(recon[(0, 1)], 1.0));
+        assert!(close(recon[(1, 0)], 0.0));
+        assert!(close(recon[(1, 1)], 3.0));
     }
 }

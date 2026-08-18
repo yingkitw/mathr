@@ -162,7 +162,7 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
     // fall back to dispatch_inner and wrap the result as a single step.
     let cmd_keywords = [
         "int ", "romberg ", "fft ", "conv ", "plot ", "stats ",
-        "poly-roots ", "isolate-roots ", "lu ", "cholesky ", "svd ",
+        "poly-roots ", "isolate-roots ", "lu ", "qr ", "cholesky ", "svd ",
         "eig ", "symlig ", "hessenberg ", "schur ", "rank ", "tikhonov ",
         "spline ", "chebyshev ", "legendre ", "fourier ", "mc ",
         "sample ", "dist ", "pdiff ", "gradient ", "let ", "fn ",
@@ -173,6 +173,8 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "big ",
         "ad ",
         "mathml ",
+        "serialize ",
+        "interval ",
     ];
     if cmd_keywords.iter().any(|kw| line.starts_with(kw)) || line == "vars" || line == "funcs" {
         let result = dispatch_inner(line, &mut ctx.clone())?;
@@ -533,6 +535,9 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("lu ") {
         return do_lu(rest.trim());
     }
+    if let Some(rest) = line.strip_prefix("qr ") {
+        return do_qr(rest.trim());
+    }
     if let Some(rest) = line.strip_prefix("tikhonov ") {
         return do_tikhonov(rest.trim());
     }
@@ -598,6 +603,12 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("mathml ") {
         return do_mathml(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("serialize ") {
+        return do_serialize(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("interval ") {
+        return do_interval(rest.trim());
     }
 
     // Default: evaluate the expression and print the value
@@ -1544,6 +1555,146 @@ fn do_mathml(rest: &str) -> Result<Option<String>> {
     Ok(Some(crate::mathml::to_mathml_doc(&e)))
 }
 
+/// `serialize <fmt> <expr>` → export expression to `<fmt>` (sexpr | json | rpn)
+/// `serialize <fmt> import <text>` → import from `<fmt>` and show the expression
+fn do_serialize(rest: &str) -> Result<Option<String>> {
+    let (fmt, tail) = rest
+        .split_once(char::is_whitespace)
+        .map(|(f, t)| (f, t.trim()))
+        .unwrap_or((rest, ""));
+    if tail.is_empty() {
+        return Err(crate::error::MathError::InvalidArgument(format!(
+            "serialize: expected `serialize <fmt> <expr>` or `serialize <fmt> import <text>` (fmt: sexpr, json, rpn); got `{}`",
+            rest
+        )));
+    }
+    match fmt {
+        "sexpr" => {
+            if let Some(s) = tail.strip_prefix("import ") {
+                let e = crate::serialize::from_sexpr(s.trim())?;
+                Ok(Some(e.to_string()))
+            } else {
+                let e = Parser::parse(tail)?;
+                Ok(Some(crate::serialize::to_sexpr(&e)))
+            }
+        }
+        "json" => {
+            if let Some(s) = tail.strip_prefix("import ") {
+                let e = crate::serialize::from_json(s.trim())?;
+                Ok(Some(e.to_string()))
+            } else {
+                let e = Parser::parse(tail)?;
+                Ok(Some(crate::serialize::to_json(&e)))
+            }
+        }
+        "rpn" => {
+            if let Some(s) = tail.strip_prefix("import ") {
+                let e = crate::serialize::from_rpn(s.trim())?;
+                Ok(Some(e.to_string()))
+            } else {
+                let e = Parser::parse(tail)?;
+                Ok(Some(crate::serialize::to_rpn(&e)))
+            }
+        }
+        other => Err(crate::error::MathError::InvalidArgument(format!(
+            "serialize: unknown format `{}` (try: sexpr, json, rpn)",
+            other
+        ))),
+    }
+}
+
+/// `interval <expr> with <var>=[lo,hi], <var>=[lo,hi], ...`
+/// → rigorous bounds on the expression over the given variable intervals.
+fn do_interval(rest: &str) -> Result<Option<String>> {
+    let parts: Vec<&str> = rest.splitn(2, " with ").collect();
+    if parts.len() != 2 {
+        return Err(crate::error::MathError::Eval(
+            "interval needs: <expr> with <var>=[lo,hi],...".into(),
+        ));
+    }
+    let expr_src = parts[0].trim();
+    let assignments = parts[1].trim();
+    let e = Parser::parse(expr_src)?;
+    let mut vars: std::collections::HashMap<String, crate::interval::Interval> =
+        std::collections::HashMap::new();
+    // Split assignments on commas, but respect `[lo,hi]` brackets so the comma
+    // inside an interval bound is not treated as an assignment separator.
+    for assignment in split_assignments(assignments) {
+        let assignment = assignment.trim();
+        if assignment.is_empty() {
+            continue;
+        }
+        // Format: var=[lo, hi]
+        let kv: Vec<&str> = assignment.splitn(2, '=').collect();
+        if kv.len() != 2 {
+            return Err(crate::error::MathError::Eval(format!(
+                "bad interval assignment `{}` (expected: var=[lo,hi])",
+                assignment
+            )));
+        }
+        let var = kv[0].trim().to_string();
+        let bracketed = kv[1].trim();
+        let inner = bracketed
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .ok_or_else(|| {
+                crate::error::MathError::Eval(format!(
+                    "bad interval `{}` (expected: [lo,hi])",
+                    bracketed
+                ))
+            })?;
+        let bounds: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+        if bounds.len() != 2 {
+            return Err(crate::error::MathError::Eval(format!(
+                "bad interval `{}` (expected: [lo,hi])",
+                bracketed
+            )));
+        }
+        let lo: f64 = bounds[0]
+            .parse()
+            .map_err(|_| crate::error::MathError::Eval(format!("bad lo bound: {}", bounds[0])))?;
+        let hi: f64 = bounds[1]
+            .parse()
+            .map_err(|_| crate::error::MathError::Eval(format!("bad hi bound: {}", bounds[1])))?;
+        vars.insert(var, crate::interval::Interval::new(lo, hi));
+    }
+    let result = crate::interval::eval_interval(&e, &vars)?;
+    Ok(Some(result.to_string()))
+}
+
+/// Split `var=[lo,hi], var=[lo,hi], ...` into individual assignments, respecting
+/// `[...]` brackets so the comma inside an interval is not treated as a separator.
+fn split_assignments(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut buf = String::new();
+    for c in s.chars() {
+        match c {
+            '[' => {
+                depth += 1;
+                buf.push(c);
+            }
+            ']' => {
+                depth -= 1;
+                buf.push(c);
+            }
+            ',' if depth == 0 => {
+                let trimmed = buf.trim().to_string();
+                if !trimmed.is_empty() {
+                    out.push(trimmed);
+                }
+                buf.clear();
+            }
+            _ => buf.push(c),
+        }
+    }
+    let trimmed = buf.trim().to_string();
+    if !trimmed.is_empty() {
+        out.push(trimmed);
+    }
+    out
+}
+
 fn do_ad(rest: &str, ctx: &Context) -> Result<Option<String>> {
     // Format: "ad <expr> at <var>=<val>" or "ad grad <expr> with <var>=<val>,..."
     // or "ad jacobian <f1>, <f2>, ... with <var>=<val>,..."
@@ -1847,6 +1998,29 @@ fn do_lu(rest: &str) -> Result<Option<String>> {
     )))
 }
 
+/// `qr <rows...>` — QR decomposition via Householder reflections.
+/// Prints Q (orthogonal) and R (upper-triangular), plus reconstruction error.
+fn do_qr(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let qr = m.qr()?;
+    let q = qr.q();
+    let r = qr.r();
+    let recon = qr.reconstruct();
+    let mut max_diff = 0.0_f64;
+    for i in 0..m.rows {
+        for j in 0..m.cols {
+            let d = (m[(i, j)] - recon[(i, j)]).abs();
+            if d > max_diff {
+                max_diff = d;
+            }
+        }
+    }
+    Ok(Some(format!(
+        "QR ok (max reconstruction error = {:.2e})\nQ =\n{}\nR =\n{}",
+        max_diff, q, r
+    )))
+}
+
 fn do_tikhonov(rest: &str) -> Result<Option<String>> {
     // Format: <matrix rows separated by |> | <b vector> <lambda>
     // The last token is lambda, the second-to-last starts the b vector.
@@ -2042,6 +2216,8 @@ commands:
   isolate-roots <ints...>  real root isolation (VAS, integer coefficients)
   lu <rows>           matrix LU decomposition (rows separated by '|')
                       computes determinant and inverse
+  qr <rows>           matrix QR decomposition (Householder reflections)
+                      prints Q (orthogonal) and R (upper-triangular)
   tikhonov <rows> | <b...> <lambda>
                       Tikhonov-regularised solve (Ax≈b with L2 penalty)
   rank <rows>         matrix rank
@@ -2059,6 +2235,9 @@ commands:
   ad jacobian <f1>,... with ...  Jacobian matrix
   mathml <expr>      export expression to Presentation MathML
   mathml import <ml> import Presentation MathML to expression
+  serialize <fmt> <expr>      export expression (fmt: sexpr | json | rpn)
+  serialize <fmt> import <t>  import from format and show the expression
+  interval <expr> with <var>=[lo,hi],...  rigorous bounds via interval arithmetic
   legendre n [x]      Legendre P_n(x), or Gauss–Legendre n-node weights
   integrate <expr> [var]
                       symbolic integration of <expr> with respect to var

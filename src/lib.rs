@@ -73,6 +73,8 @@ pub mod fastmath;
 pub mod notebook;
 pub mod server;
 pub mod mathml;
+pub mod serialize;
+pub mod interval;
 
 pub use error::{MathError, Result};
 
@@ -101,6 +103,8 @@ pub mod prelude {
         jacobian as ad_jacobian, Dual,
     };
     pub use crate::mathml::{from_mathml, to_mathml, to_mathml_doc};
+    pub use crate::serialize::{from_json, from_rpn, from_sexpr, to_json, to_rpn, to_sexpr};
+    pub use crate::interval::{Interval, eval_interval};
     pub use crate::ode::{euler, rk4, rk4_system, rkf45};
     pub use crate::solver::{
         bisect, isolate_real_roots, newton_central, newton_system, polynomial_roots, secant, SolveOptions,
