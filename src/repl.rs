@@ -10,6 +10,7 @@
 //!   `solve \<expr\> \[wrt\] \[guess\]`
 //!   `simplify \<expr\>`
 //!   `plot \<expr\> a b \[out.png\]`
+//!   `dec \<expr\> \[prec \<n\>\] \[with \<var\>=\<val\>,...\]`  arbitrary precision
 //!   `vars | funcs | clear | help | quit`
 
 use crate::error::Result;
@@ -133,6 +134,21 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         ]);
     }
 
+    // expand: show original and distributed polynomial
+    if let Some(rest) = line.strip_prefix("expand ") {
+        let e = Parser::parse(rest.trim())?;
+        let s = crate::poly::expand(&e);
+        return Ok(vec![
+            format!("expand: {}", e),
+            format!("= {}", s),
+        ]);
+    }
+
+    // apart: partial fraction decomposition steps
+    if let Some(rest) = line.strip_prefix("apart ") {
+        return Ok(crate::apart::apart_steps_str(rest.trim())?);
+    }
+
     // solve: show equation, method, root
     if let Some(rest) = line.strip_prefix("solve ") {
         return solve_steps(rest.trim(), ctx);
@@ -158,6 +174,11 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         return laurent_steps(rest.trim());
     }
 
+    // limit: show substitution / L'Hôpital / probe steps
+    if let Some(rest) = line.strip_prefix("limit ") {
+        return Ok(limit_steps_str(rest.trim())?);
+    }
+
     // For all other REPL commands (int, romberg, fft, plot, stats, etc.),
     // fall back to dispatch_inner and wrap the result as a single step.
     let cmd_keywords = [
@@ -170,6 +191,8 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "fact ", "mr-prime ", "jacobi ", "cf ", "diophantine ", "dlog ",
         "det ",
         "fast ",
+        "cond ",
+        "null ",
         "big ",
         "ad ",
         "mathml ",
@@ -544,6 +567,13 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("rank ") {
         return do_rank(rest.trim());
     }
+    if let Some(rest) = line.strip_prefix("cond ") {
+        return do_cond(rest.trim());
+    }
+    if line == "null" || line.starts_with("null ") {
+        let rest = line.strip_prefix("null").unwrap_or("").trim();
+        return do_null(rest);
+    }
     if let Some(rest) = line.strip_prefix("spline ") {
         return do_spline(rest.trim());
     }
@@ -597,6 +627,24 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("big ") {
         return do_big(rest.trim());
+    }
+    if line == "dec" {
+        return Err(crate::error::MathError::Eval(
+            "dec needs: <expr> [prec <n>] [with <var>=<val>,...]".into(),
+        ));
+    }
+    if let Some(rest) = line.strip_prefix("dec ") {
+        return do_dec(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("limit ") {
+        return do_limit(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("expand ") {
+        let e = Parser::parse(rest.trim())?;
+        return Ok(Some(crate::poly::expand(&e).to_string()));
+    }
+    if let Some(rest) = line.strip_prefix("apart ") {
+        return do_apart(rest.trim());
     }
     if let Some(rest) = line.strip_prefix("ad ") {
         return do_ad(rest.trim(), &ctx.clone());
@@ -1544,6 +1592,156 @@ fn do_big(rest: &str) -> Result<Option<String>> {
     }
 }
 
+/// `dec <expr> [prec <n>] [with <var>=<val>,...]` — arbitrary-precision
+/// decimal evaluation. `prec` is the number of significant digits (default
+/// 30, max 1000); `pi`, `e`, and `tau` are computed at full precision.
+fn do_dec(rest: &str) -> Result<Option<String>> {
+    use crate::bigdec;
+    const DEFAULT_PREC: usize = 30;
+    let mut prec = DEFAULT_PREC;
+    let mut work = rest.trim().to_string();
+    if let Some(idx) = work.rfind(" prec ") {
+        let tail = work[idx + 6..].trim();
+        let n: usize = tail.parse().map_err(|_| {
+            crate::error::MathError::Eval("dec: prec must be a positive integer".into())
+        })?;
+        if n == 0 || n > 1000 {
+            return Err(crate::error::MathError::Eval(
+                "dec: prec must be between 1 and 1000".into(),
+            ));
+        }
+        prec = n;
+        work.truncate(idx);
+    }
+    let mut assign_part: Option<String> = None;
+    if let Some(idx) = work.find(" with ") {
+        assign_part = Some(work[idx + 6..].to_string());
+        work.truncate(idx);
+    }
+    let expr_src = work.trim();
+    if expr_src.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "dec needs: <expr> [prec <n>] [with <var>=<val>,...]".into(),
+        ));
+    }
+    let e = Parser::parse(expr_src)?;
+    let mut vars: std::collections::HashMap<String, bigdecimal::BigDecimal> =
+        std::collections::HashMap::new();
+    if let Some(a) = assign_part {
+        for assignment in split_assignments(&a) {
+            let kv: Vec<&str> = assignment.splitn(2, '=').collect();
+            if kv.len() != 2 {
+                return Err(crate::error::MathError::Eval(format!(
+                    "bad assignment `{}` (expected: var=value)",
+                    assignment
+                )));
+            }
+            let name = kv[0].trim().to_string();
+            let val = bigdec::parse(kv[1].trim())?;
+            vars.insert(name, val);
+        }
+    }
+    let result = bigdec::eval_decimal_rounded(&e, &vars, prec)?;
+    Ok(Some(result.to_string()))
+}
+
+/// `limit <expr> <var> <point>` or `limit <expr> <point>` — compute the
+/// limit as the variable approaches the point (finite, `inf`, or `-inf`).
+/// The variable may be omitted when the expression has exactly one.
+fn parse_limit_target(rest: &str) -> Result<(crate::expr::Expr, String, f64)> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "limit needs: <expr> [<var>] <point>".into(),
+        ));
+    }
+    let parse_point = |tok: &str| -> Result<f64> {
+        match tok.to_ascii_lowercase().as_str() {
+            "inf" | "+inf" | "infinity" | "+infinity" => Ok(f64::INFINITY),
+            "-inf" | "-infinity" => Ok(f64::NEG_INFINITY),
+            _ => tok.parse::<f64>().map_err(|_| {
+                crate::error::MathError::Eval(format!("invalid limit point: {}", tok))
+            }),
+        }
+    };
+    if tokens.len() >= 3 {
+        let point = parse_point(tokens[tokens.len() - 1])?;
+        let var = tokens[tokens.len() - 2].to_string();
+        let expr_src = tokens[..tokens.len() - 2].join(" ");
+        let e = Parser::parse(&expr_src)?;
+        Ok((e, var, point))
+    } else if tokens.len() == 2 {
+        let point = parse_point(tokens[1])?;
+        let e = Parser::parse(tokens[0])?;
+        let mut vars = e.variables();
+        if vars.len() != 1 {
+            return Err(crate::error::MathError::Eval(
+                "limit needs: <expr> <var> <point> (expression has multiple or no variables)"
+                    .into(),
+            ));
+        }
+        Ok((e, vars.remove(0), point))
+    } else {
+        Err(crate::error::MathError::Eval(
+            "limit needs: <expr> [<var>] <point>  e.g. `limit sin(x)/x x 0` or `limit 1/x inf`"
+                .into(),
+        ))
+    }
+}
+
+fn do_limit(rest: &str) -> Result<Option<String>> {
+    let (e, var, point) = parse_limit_target(rest)?;
+    let v = crate::limit::limit(&e, &var, point)?;
+    Ok(Some(format!(
+        "lim {} as {} → {} = {}",
+        crate::simplify::simplify(&e),
+        var,
+        crate::limit::fmt_point(point),
+        v
+    )))
+}
+
+/// Step-by-step variant used by `dispatch_steps` (notebook UI).
+fn limit_steps_str(rest: &str) -> Result<Vec<String>> {
+    let (e, var, point) = parse_limit_target(rest)?;
+    crate::limit::limit_steps(&e, &var, point)
+}
+
+/// `apart <expr> [var]` — partial fraction decomposition of a rational
+/// function. The variable may be omitted when the expression has exactly
+/// one.
+fn do_apart(rest: &str) -> Result<Option<String>> {
+    let (e, var) = parse_single_var_target(rest)?;
+    let out = crate::apart::apart(&e, &var)?;
+    Ok(Some(out.to_string()))
+}
+
+/// Parse `"<expr> [var]"` — infer the variable from the expression when
+/// omitted (requires exactly one free variable).
+fn parse_single_var_target(rest: &str) -> Result<(crate::expr::Expr, String)> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "needs: <expr> [<var>]".into(),
+        ));
+    }
+    if tokens.len() >= 2 {
+        let var = tokens[tokens.len() - 1].to_string();
+        let expr_src = tokens[..tokens.len() - 1].join(" ");
+        let e = Parser::parse(&expr_src)?;
+        Ok((e, var))
+    } else {
+        let e = Parser::parse(tokens[0])?;
+        let mut vars = e.variables();
+        if vars.len() != 1 {
+            return Err(crate::error::MathError::Eval(
+                "needs: <expr> <var> (expression has multiple or no variables)".into(),
+            ));
+        }
+        Ok((e, vars.remove(0)))
+    }
+}
+
 /// `mathml <expr>` → export to Presentation MathML
 /// `mathml import <MathML>` → import from Presentation MathML
 fn do_mathml(rest: &str) -> Result<Option<String>> {
@@ -2071,6 +2269,35 @@ fn do_rank(rest: &str) -> Result<Option<String>> {
     Ok(Some(format!("rank = {}", r)))
 }
 
+fn do_cond(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let k = m.condition_number()?;
+    if k.is_infinite() {
+        return Ok(Some("cond = inf (singular)".into()));
+    }
+    Ok(Some(format!("cond = {}", format_value(k))))
+}
+
+fn do_null(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let basis = m.nullspace(0.0)?;
+    if basis.is_empty() {
+        return Ok(Some("nullspace: {} (full column rank)".into()));
+    }
+    let strs: Vec<String> = basis
+        .iter()
+        .map(|v| {
+            let parts: Vec<String> = v.iter().map(|x| format_value(*x)).collect();
+            format!("({})", parts.join(", "))
+        })
+        .collect();
+    Ok(Some(format!(
+        "nullspace basis (dim {}):\n  {}",
+        basis.len(),
+        strs.join("\n  ")
+    )))
+}
+
 fn do_det(rest: &str) -> Result<Option<String>> {
     let m = parse_matrix(rest)?;
     let d = m.determinant()?;
@@ -2221,6 +2448,8 @@ commands:
   tikhonov <rows> | <b...> <lambda>
                       Tikhonov-regularised solve (Ax≈b with L2 penalty)
   rank <rows>         matrix rank
+  cond <rows>         condition number (2-norm, from SVD)
+  null <rows>         nullspace basis of a homogeneous system A·x = 0
   det <rows>          matrix determinant
   spline x1 y1 x2 y2 ... x_at
                       natural cubic spline interpolant at x_at
@@ -2230,6 +2459,12 @@ commands:
   chebyshev n [x]     Chebyshev T_n(x), or T_n nodes on [-1, 1]
   fast <func> <x> [y] Chebyshev fast approx (sin, cos, tan, exp, log, sqrt, pow)
   big <op> <args>        Big integer ops for inputs > u64::MAX (prime, factor, gcd, lcm, modpow, totient)
+  dec <expr> [prec <n>] [with <var>=<val>,...]
+                         arbitrary-precision evaluation (default prec 30)
+  limit <expr> [<var>] <point>
+                         limit as var approaches point (finite, inf, -inf)
+  expand <expr>          distribute products/powers into a polynomial
+  apart <expr> [<var>]   partial fraction decomposition
   ad <expr> at <var>=<val>   Automatic differentiation (dual numbers)
   ad grad <expr> with ...    Gradient of multivariate expression
   ad jacobian <f1>,... with ...  Jacobian matrix
@@ -2262,7 +2497,10 @@ constants: pi, e, tau, inf
 functions: sin, cos, tan, asin, acos, atan, sinh, cosh, tanh,
            exp, ln, log, log2, log10, sqrt, cbrt, abs, floor,
            ceil, round, sign, min, max, pow, mod, fract,
-           gamma, erf, erfc, sinc, bessel_j0, bessel_j1, bessel_j
+           gamma, erf, erfc, sinc, bessel_j0, bessel_j1, bessel_j,
+           digamma, trigamma, polygamma(m, x), harmonic(n), zeta,
+           hurwitz(s, a), elliptic_k, elliptic_e, elliptic_f(phi, k),
+           elliptic_e_inc(phi, k)
 ";
 
 /// Suppresses an unused warning for the `Cow` import in environments where
@@ -2325,6 +2563,104 @@ mod tests {
         let steps = dispatch_steps("sin(pi/4)", Context::standard()).unwrap();
         assert_eq!(steps.len(), 1);
         assert!(steps[0].contains("0.707"));
+    }
+
+    #[test]
+    fn dispatch_dec_sqrt2() {
+        let mut ctx = Context::standard();
+        let result = dispatch("dec sqrt(2) prec 30", &mut ctx).unwrap().unwrap();
+        assert!(result.starts_with("1.4142135623730950488016887242"));
+    }
+
+    #[test]
+    fn dispatch_dec_pi_50() {
+        let mut ctx = Context::standard();
+        let result = dispatch("dec pi prec 50", &mut ctx).unwrap().unwrap();
+        assert_eq!(
+            result,
+            "3.1415926535897932384626433832795028841971693993751"
+        );
+    }
+
+    #[test]
+    fn dispatch_dec_third() {
+        let mut ctx = Context::standard();
+        let result = dispatch("dec 1/3 prec 10", &mut ctx).unwrap().unwrap();
+        assert_eq!(result, "0.3333333333");
+    }
+
+    #[test]
+    fn dispatch_dec_with_vars_and_default_prec() {
+        let mut ctx = Context::standard();
+        let result = dispatch("dec x*2 + 1 with x=1.5", &mut ctx).unwrap().unwrap();
+        assert_eq!(result, "4.00000000000000000000000000000");
+    }
+
+    #[test]
+    fn dispatch_dec_prec_out_of_range() {
+        let mut ctx = Context::standard();
+        assert!(dispatch("dec 1 prec 0", &mut ctx).is_err());
+        assert!(dispatch("dec 1 prec 2000", &mut ctx).is_err());
+    }
+
+    #[test]
+    fn dispatch_limit_removable() {
+        let mut ctx = Context::standard();
+        let result = dispatch("limit (x^2 - 1)/(x - 1) x 1", &mut ctx)
+            .unwrap()
+            .unwrap();
+        assert!(result.contains("2"), "got: {}", result);
+    }
+
+    #[test]
+    fn dispatch_limit_var_inferred() {
+        let mut ctx = Context::standard();
+        let result = dispatch("limit sin(x)/x 0", &mut ctx).unwrap().unwrap();
+        assert!(result.contains("= 1"), "got: {}", result);
+    }
+
+    #[test]
+    fn dispatch_limit_infinity() {
+        let mut ctx = Context::standard();
+        let result = dispatch("limit 1/x inf", &mut ctx).unwrap().unwrap();
+        assert!(result.contains("= 0"), "got: {}", result);
+        let result = dispatch("limit 1/x^2 0", &mut ctx).unwrap().unwrap();
+        assert!(result.contains("+∞"), "got: {}", result);
+        let result = dispatch("limit 1/x 0", &mut ctx).unwrap().unwrap();
+        assert!(result.contains("does not exist"), "got: {}", result);
+    }
+
+    #[test]
+    fn dispatch_limit_steps() {
+        let steps = dispatch_steps("limit sin(x)/x x 0", Context::standard()).unwrap();
+        assert!(steps.len() >= 3);
+        assert!(steps[0].contains("limit of sin(x)/x"));
+        assert!(steps.iter().any(|s| s.contains("L'Hôpital")));
+        assert!(steps.last().unwrap().contains("limit = 1"));
+    }
+
+    #[test]
+    fn dispatch_expand_command() {
+        let mut ctx = Context::standard();
+        let result = dispatch("expand (x+1)^3", &mut ctx).unwrap().unwrap();
+        assert!(result.contains("x^3"), "got: {}", result);
+        assert!(result.contains("3*x^2"), "got: {}", result);
+        assert!(result.ends_with("1"), "got: {}", result);
+    }
+
+    #[test]
+    fn dispatch_expand_multivariate() {
+        let mut ctx = Context::standard();
+        let result = dispatch("expand (x+y)*(x-y)", &mut ctx).unwrap().unwrap();
+        assert!(result.contains("x^2 - y^2"), "got: {}", result);
+    }
+
+    #[test]
+    fn dispatch_expand_steps() {
+        let steps = dispatch_steps("expand (x+2)*(x+3)", Context::standard()).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert!(steps[0].contains("expand"));
+        assert!(steps[1].contains("x^2 + 5*x + 6"));
     }
 
     #[test]

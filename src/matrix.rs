@@ -1192,6 +1192,60 @@ impl Matrix {
             v: v_mat,
         })
     }
+
+    /// Condition number in the 2-norm: `σ_max / σ_min` from the singular
+    /// value decomposition. Returns `inf` for singular (or zero) matrices.
+    ///
+    /// ```text
+    /// κ(A) = ‖A‖₂ · ‖A⁻¹‖₂
+    /// ```
+    ///
+    /// Values above ~1e12 indicate the linear system `A·x = b` is
+    /// effectively ill-conditioned in `f64` arithmetic.
+    pub fn condition_number(&self) -> Result<f64> {
+        let svd = self.svd()?;
+        let max = svd
+            .singular_values
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let min = svd
+            .singular_values
+            .iter()
+            .cloned()
+            .fold(f64::INFINITY, f64::min);
+        if min <= 0.0 || !min.is_finite() {
+            return Ok(f64::INFINITY);
+        }
+        Ok(max / min)
+    }
+
+    /// Orthonormal basis of the (right) nullspace `{x : A·x = 0}`, computed
+    /// from the eigendecomposition of `Aᵀ·A`: eigenvectors whose eigenvalue
+    /// magnitude is at most `tol` (relative to the largest eigenvalue) span
+    /// the nullspace. `tol <= 0` selects the default `1e-10`.
+    ///
+    /// Returns one basis vector (length `cols`) per nullspace dimension,
+    /// or an empty vector when `A` has full column rank.
+    pub fn nullspace(&self, tol: f64) -> Result<Vec<Vec<f64>>> {
+        let tol = if tol <= 0.0 { 1e-10 } else { tol };
+        let at = self.transpose();
+        let ata = (&at * self)?;
+        let (values, vectors) = ata.symmetric_eig()?;
+        let scale = values.last().copied().unwrap_or(0.0).abs().max(1.0);
+        // Eigenvalues are ascending: everything below the threshold (at the
+        // front) is a nullspace direction.
+        let n = vectors.cols;
+        let mut basis = Vec::new();
+        for c in 0..n {
+            if values[c].abs() > tol * scale {
+                break;
+            }
+            let v: Vec<f64> = (0..n).map(|r| vectors[(r, c)]).collect();
+            basis.push(v);
+        }
+        Ok(basis)
+    }
 }
 
 /// A row-major LU decomposition of a square matrix.
@@ -1931,6 +1985,75 @@ mod tests {
         assert!((svd.singular_values[0] - 3.0).abs() < 1e-8);
         assert!((svd.singular_values[1] - 2.0).abs() < 1e-8);
         assert!((svd.singular_values[2] - 1.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn condition_number_known_values() {
+        // Identity: κ = 1
+        let i = Matrix::identity(3);
+        assert!((i.condition_number().unwrap() - 1.0).abs() < 1e-10);
+        // diag(3, 1): κ = 3
+        let d = Matrix::from_rows(&[vec![3.0, 0.0], vec![0.0, 1.0]]).unwrap();
+        assert!((d.condition_number().unwrap() - 3.0).abs() < 1e-8);
+        // Singular matrix: κ = inf
+        let s = Matrix::from_rows(&[vec![1.0, 1.0], vec![1.0, 1.0]]).unwrap();
+        assert_eq!(s.condition_number().unwrap(), f64::INFINITY);
+    }
+
+    #[test]
+    fn condition_number_hilbert_is_large() {
+        // 6×6 Hilbert matrix: κ ≈ 1.5e7 — well-conditioned check boundary
+        let h = Matrix::hilbert(6);
+        let k = h.condition_number().unwrap();
+        assert!(k > 1e6, "κ(H₆) = {}", k);
+        assert!(k < 1e9, "κ(H₆) = {}", k);
+    }
+
+    #[test]
+    fn nullspace_rank_deficient() {
+        // [[1, 1], [1, 1]] → nullspace spanned by (−1, 1)/√2
+        let s = Matrix::from_rows(&[vec![1.0, 1.0], vec![1.0, 1.0]]).unwrap();
+        let basis = s.nullspace(0.0).unwrap();
+        assert_eq!(basis.len(), 1);
+        // A·v = 0
+        let av = s.mul_vec(&basis[0]).unwrap();
+        assert!(av.iter().all(|&x| x.abs() < 1e-9));
+    }
+
+    #[test]
+    fn nullspace_wide_matrix() {
+        // 1×3 [1 2 3]: nullspace is a 2D plane
+        let w = Matrix::from_rows(&[vec![1.0, 2.0, 3.0]]).unwrap();
+        let basis = w.nullspace(0.0).unwrap();
+        assert_eq!(basis.len(), 2);
+        for v in &basis {
+            assert!((v[0] + 2.0 * v[1] + 3.0 * v[2]).abs() < 1e-9);
+            // orthonormal
+            let n: f64 = v.iter().map(|x| x * x).sum();
+            assert!((n - 1.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn nullspace_full_rank_is_empty() {
+        let a = Matrix::from_rows(&[vec![1.0, 0.0], vec![0.0, 1.0]]).unwrap();
+        assert!(a.nullspace(0.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn nullspace_vector_satisfies_homogeneous_system() {
+        // 3×4 rank-2 system
+        let a = Matrix::from_rows(&[
+            vec![1.0, 2.0, 0.0, 3.0],
+            vec![2.0, 4.0, 0.0, 6.0],
+            vec![1.0, 1.0, 1.0, 0.0],
+        ]).unwrap();
+        let basis = a.nullspace(0.0).unwrap();
+        assert!(basis.len() >= 2);
+        for v in &basis {
+            let av = a.mul_vec(v).unwrap();
+            assert!(av.iter().all(|&x| x.abs() < 1e-8));
+        }
     }
 
     #[test]

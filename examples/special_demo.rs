@@ -45,4 +45,18 @@ fn main() {
         let p = special::incomplete_gamma_p(1.0, x / 2.0);
         println!("  P(1, {:4.1}) = {:.10}", x / 2.0, p);
     }
+
+// --- Zeta / polygamma / harmonic (2026 additions) ---
+println!("\nZeta, polygamma, harmonic:");
+println!("  zeta(2)    = {:.12}  (= π²/6)", special::zeta(2.0));
+println!("  zeta(-1)   = {:.12}  (= −1/12)", special::zeta(-1.0));
+println!("  zeta(3)    = {:.12}  (Apéry)", special::zeta(3.0));
+println!("  harmonic(10) = {:.12}", special::harmonic(10));
+println!("  polygamma(2, 1) = {:.12}  (= −2·ζ(3))", special::polygamma(2, 1.0));
+
+// --- Elliptic integrals ---
+println!("\nElliptic integrals (modulus k):");
+for k in [0.0, 0.5, 0.9] {
+    println!("  K({}) = {:.12}   E({}) = {:.12}", k, special::elliptic_k(k), k, special::elliptic_e(k));
+}
 }

@@ -35,7 +35,9 @@ ode.rs          (standalone, numerical ODE integration)
 interpolate.rs  (standalone, Lagrange, Newton, cubic spline, Chebyshev,
                  Legendre, Gauss–Legendre)
 special.rs      (standalone, Gamma, Beta, erf, sinc, incomplete gamma,
-                 Bessel J_0/J_1/J_n)
+                 Bessel J_0/J_1/J_n, digamma/trigamma/polygamma,
+                 harmonic numbers, Hurwitz/Riemann zeta (Euler–Maclaurin),
+                 elliptic integrals K/E/F/E_inc (Carlson RF + AGM))
 fastmath.rs     (standalone, Chebyshev-based fast approximations of sin, cos,
                  tan, exp, log, sqrt, pow with argument reduction)
 bigint.rs       (standalone, arbitrary-precision integers via num-bigint:
@@ -56,6 +58,26 @@ interval.rs      (standalone, interval arithmetic for rigorous bounds:
                  Interval type with arithmetic, sqr/powi with zero-crossing
                  awareness, elementary functions with monotonicity/extrema
                  tracking, set ops, eval_interval over Expr AST)
+bigdec.rs        (standalone, arbitrary-precision decimal arithmetic on the
+                 bigdecimal crate: precision-controlled add/sub/mul/div via
+                 BigInt long division, sqrt/exp/ln/trig with argument
+                 reduction + Taylor/atanh series + 10 guard digits, pi via
+                 Machin, eval_decimal over Expr AST. `dec` REPL command)
+limit.rs         (standalone, symbolic limits: direct substitution,
+                 L'Hôpital's rule for 0/0 and ∞/∞ quotients (recursive,
+                 max 6), numeric probing fallback with pole/divergence
+                 detection, limits at ±∞. `limit` REPL command + steps)
+poly.rs          (standalone, polynomial expansion: multivariate to_poly/
+                 poly_to_expr conversions with like-term collection and
+                 degree/lex ordering; expand distributes products and
+                 integer powers, keeps functions/symbolic powers opaque.
+                 `expand` REPL command + steps)
+apart.rs         (partial fraction decomposition of rational functions:
+                 dense coefficient conversion from poly, long division,
+                 Durand–Kerner factorization via polynomial_roots_complex,
+                 conjugate pairs → quadratics, root clustering for
+                 multiplicities, Gaussian-elimination coefficient solve.
+                 `apart` REPL command + steps)
 
 expr.rs ──canonicalize/equals──▶ expr.rs (canonical form comparison)
 
@@ -89,13 +111,18 @@ error.rs ──used by──▶ all modules
 21. **Plot**: `plot::plot_function/multi/scatter` — evaluates `Expr` over a range, renders PNG via `plotters`
 22. **Serialize**: `serialize::to_sexpr/from_sexpr`, `to_json/from_json`, `to_rpn/from_rpn` — three interchangeable textual encodings of `Expr`. All round-trip via `Expr::equals`. JSON uses a hand-rolled recursive-descent parser (no serde dependency, matching the crate convention). `serialize <fmt> <expr>` and `serialize <fmt> import <text>` REPL commands.
 23. **Interval**: `interval::Interval` — closed `[lo, hi]` bounds with outward-conservative arithmetic (+, -, *, /, neg), `sqr`/`powi` with zero-crossing awareness, elementary functions (sin, cos, tan, exp, ln, sqrt, abs, asin, acos, atan, sinh, cosh, tanh, cbrt) with monotonicity and extrema tracking for trig, set operations (intersect, hull, contains, overlaps), and `eval_interval` for rigorous bounds over the `Expr` AST. `interval <expr> with <var>=[lo,hi],...` REPL command.
+24. **Arbitrary-precision decimals**: `bigdec` — precision-controlled arithmetic over `bigdecimal::BigDecimal` (`add`/`sub`/`mul` round to N significant digits; `div` uses BigInt long division sized from operand digit counts), transcendentals (`pi`, `e`, `sqrt`, `exp`, `ln`, `log2`, `log10`, `sin`, `cos`, `tan`, `atan`, `asin`, `acos`, `sinh`, `cosh`, `tanh`, `pow`) computed at `prec + 10` guard digits and correctly rounded, `eval_decimal`/`eval_decimal_rounded` over the `Expr` AST with variable bindings. `dec <expr> [prec <n>] [with <var>=<val>,...]` REPL command.
+25. **Limits**: `limit::limit`/`limit::limit_steps` — three-stage strategy: direct substitution on the simplified expression, L'Hôpital's rule for `0/0`/`∞/∞` quotients (simplify → differentiate → recurse, max 6), numeric probing near the target (both sides, geometric steps) with convergence/pole/oscillation classification. Results are `LimitValue::{Finite, PosInfinity, NegInfinity, DoesNotExist}`; finite values are snapped to integers/12 significant digits. `limit <expr> [<var>] <point>` REPL command; step-by-step via `dispatch_steps`.
+26. **Polynomial expansion**: `poly::expand` — bottom-up: children expand first, then a node converts to a dense multivariate polynomial (`Vec<Term>`, `coeff × var^exp` map) when possible and back to a collected sum. Safety caps: exponent ≤ 64, term count ≤ 20k, monomial exponent ≤ 10k. `to_poly`/`poly_to_expr` are public building blocks for future partial fractions. `expand <expr>` REPL command; step-by-step via `dispatch_steps`.
+27. **Partial fractions**: `apart::apart` — long division (`N = Q·D + R`), numeric factorization of `D` via `solver::polynomial_roots_complex` (conjugate pairs → quadratics `x² + px + q`; root clustering → multiplicities), then a square K×K linear system (columns = `D/F^k`, and `x·D/F^k` for quadratics) solved with `Matrix::solve`. Sign-aware output joins and coefficient snapping. `apart <expr> [<var>]` REPL command; step-by-step via `dispatch_steps`.
+28. **Condition number & nullspace**: `Matrix::condition_number` (2-norm κ = σ_max/σ_min from `svd()`; `inf` when singular) and `Matrix::nullspace` (orthonormal basis from the eigendecomposition of `Aᵀ·A` via `symmetric_eig`, relative tolerance — works for wide matrices where `svd()`'s V is not the full right-vector basis). `cond`/`null` REPL commands.
 
 ## Design Decisions
 
 - **No external math crates**: FFT, complex numbers, matrix ops, stats, special functions, and number theory are all implemented from scratch. Only `plotters` is used for rendering.
 - **Expr as the universal AST**: One enum serves parsing, evaluation, symbolic differentiation, symbolic integration, simplification, and Taylor series.
 - **Closures for numerical methods**: Solvers, integrators, and ODE steppers accept `Fn` closures, making them composable with the evaluator.
-- **Inline tests**: Each module has `#[cfg(test)] mod tests` — no separate test files. **341 tests** total (plus 112 integration tests).
+- **Inline tests**: Each module has `#[cfg(test)] mod tests` — no separate test files. **689 tests** total (plus 213 integration tests).
 - **Error handling**: `MathError` (via `thiserror`) in the library, `anyhow` in the binary.
 - **Prelude**: `mathr::prelude` re-exports the most common types for ergonomic `use mathr::prelude::*;`.
 - **Numerical recipes**: Where possible (Gamma, sinc, Bessel, incomplete gamma) we use well-tested A&S or NR polynomial approximations; otherwise we use direct series / closed-form recurrences.

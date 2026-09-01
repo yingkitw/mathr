@@ -25,7 +25,7 @@
 | `sample` | `mathr sample <dist> <params...> <N> [seed]` | Random sampling (uniform/normal/exponential) |
 | `dist` | `mathr dist <dist> <x> <params...>` | PDF and CDF (normal/exponential) |
 | `stats` | `mathr stats <data...>` | Descriptive statistics |
-| `matrix` | `mathr matrix <op> <rows...>` | `lu`/`qr`/`cholesky`/`svd`/`eig`/`symlig`/`hessenberg`/`schur`/`rank`/`det`/`solve` |
+| `matrix` | `mathr matrix <op> <rows...>` | `lu`/`qr`/`cholesky`/`svd`/`eig`/`symlig`/`hessenberg`/`schur`/`rank`/`cond`/`null`/`det`/`solve` |
 | `tikhonov` | `mathr tikhonov <rows...> \| <b...> <lambda>` | Tikhonov-regularised solve |
 | `interp` | `mathr interp <op> ...` | `lagrange`/`newton`/`spline`/`chebyshev`/`legendre` |
 | `gcd` | `mathr gcd <n1> <n2> [...]` | GCD of integers |
@@ -168,6 +168,98 @@ mathr> interval x*y with x=[1,2],y=[3,4]
 
 **Supported functions**: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `exp`, `ln`, `log`, `log10`, `log2`, `sqrt`, `abs`, `sqr`, `cbrt`, `floor`, `ceil`, `round`, `sign`, `fract`, `min`, `max`, `pow`, `mod`. Trig functions track global extrema (±1) when the input interval spans a peak or trough.
 
+### Arbitrary-Precision Decimals
+
+The `bigdec` module evaluates expressions with exact decimal arithmetic at a chosen number of significant digits (default 30, max 1000). Constants `pi`, `e`, and `tau` are computed at full target precision (not the f64 approximations used by normal evaluation).
+
+**REPL** (`dec <expr> [prec <n>] [with <var>=<val>,...]`):
+```
+mathr> dec pi prec 50
+3.1415926535897932384626433832795028841971693993751
+mathr> dec sqrt(2) prec 30
+1.414213562373095048801688724210
+mathr> dec 1/3 prec 10
+0.3333333333
+mathr> dec x*2 + 1 with x=1.5 prec 10
+4.000000000
+```
+
+**Supported functions**: `sqrt`, `cbrt`, `exp`, `ln`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `abs`, `floor`, `ceil`, `round`, `sign`, `min`, `max`, `pow(a, b)`, `fact(n)`.
+
+**How it works**: all intermediate steps keep 10 guard digits beyond the requested precision (MPFR-style); π comes from Machin's formula (16·atan(1/5) − 4·atan(1/239)), exp/ln use argument reduction plus Taylor/atanh series, and trig uses π/2 quadrant reduction with Taylor series.
+
+**Limitations**:
+- Decimal exponents beyond ±1,000,000 (i.e. 10^±1000000) are rejected.
+- Results are correctly rounded to `prec` significant digits but are not interval-certified (no outward rounding).
+
+### Limits
+
+The `limit` module computes two-sided limits `lim x→a f(x)` for finite points and for `x → ±∞`, using a three-stage strategy:
+
+1. **Direct substitution** on the simplified expression (continuity).
+2. **L'Hôpital's rule** for quotients in `0/0` or `∞/∞` form — differentiates numerator and denominator and recurses (up to 6 times).
+3. **Numeric probing** — evaluates both sides approaching the target; detects finite convergence, poles (`±∞`), opposite-side divergence, and oscillation (`does not exist`).
+
+**REPL** (`limit <expr> [<var>] <point>` — the variable may be omitted when the expression has exactly one):
+```
+mathr> limit sin(x)/x x 0
+lim sin(x)/x as x → 0 = 1
+mathr> limit (x^2 - 1)/(x - 1) 1
+lim (x^2 - 1)/(x - 1) as x → 1 = 2
+mathr> limit 1/x^2 0
+lim 1/x^2 as x → 0 = +∞
+mathr> limit 1/x 0
+lim 1/x as x → 0 = does not exist
+mathr> limit (2*x + 1)/(x + 5) inf
+lim (2*x + 1)/(x + 5) as x → +∞ = 2
+mathr> limit x/exp(x) x inf
+lim x/exp(x) as x → +∞ = 0
+```
+
+Points: any number, or `inf`/`-inf`. The notebook step-by-step view shows substitution results, L'Hôpital applications, and the final verdict.
+
+**Limitations**:
+- Two-sided limits only (no one-sided `x → a⁺` syntax; sides are analysed internally).
+- L'Hôpital applies to top-level quotients only; other indeterminate forms (`∞−∞`, `0·∞`, `0^0`) fall through to numeric probing.
+- Numeric probing classifies behaviour by sampling; exotic functions may be misclassified near pathological points.
+
+### Polynomial Expansion
+
+The `poly` module distributes products and non-negative integer powers into a collected sum of monomials. Multivariate expressions are supported; like terms are collected; output is ordered by descending degree. Non-polynomial parts (function calls, symbolic powers, variable denominators) are left intact while their polynomial children still distribute.
+
+**REPL** (`expand <expr>`):
+```
+mathr> expand (x+1)^3
+x^3 + 3*x^2 + 3*x + 1
+mathr> expand (x+y)*(x-y)
+x^2 - y^2
+mathr> expand (x+2)*(x+3)
+x^2 + 5*x + 6
+```
+
+**Limitations**: integer exponents up to 64 are expanded; larger (or symbolic) exponents stay as `Pow`. Division only distributes when the denominator is a non-zero constant. Term count is capped at 20,000.
+
+### Partial Fraction Decomposition
+
+The `apart` module decomposes a rational function `N(x)/D(x)` into a polynomial quotient plus a sum of fractions over the linear and irreducible quadratic factors of `D`:
+
+**REPL** (`apart <expr> [<var>]` — the variable may be omitted when the expression has exactly one):
+```
+mathr> apart 1/(x*(x+1))
+-(1/(x + 1)) + 1/x
+mathr> apart (x^2+1)/(x-1)
+x + 1 + 2/(x - 1)
+mathr> apart 1/(x^3+x^2)
+1/(x + 1) - 1/x + 1/x^2
+```
+
+**Method**: polynomial long division first (`N = Q·D + R`), then numeric factorization of `D` (Durand–Kerner complex roots; conjugate pairs become irreducible quadratics; repeated roots are clustered for multiplicity), then a square linear system for the unknown coefficients solved by Gaussian elimination. Coefficients near integers are snapped for display.
+
+**Limitations**:
+- Univariate with a polynomial denominator only (functions in the denominator, or multiple variables, are rejected).
+- Denominator degree is capped at 32; repeated roots carry the numerical fuzz inherent to multiple-root finding (coefficients may be off in the last digits).
+- Factorization is numeric, so exact rational coefficients are approximated (typically ~12 significant digits).
+
 ### Numbers
 
 - Integers: `42`
@@ -194,7 +286,7 @@ mathr> interval x*y with x=[1,2],y=[3,4]
 | Roots | `sqrt`, `cbrt` |
 | Rounding | `floor`, `ceil`, `round`, `fract` |
 | Other | `abs`, `sign`, `min(...)`, `max(...)`, `pow(x,y)`, `mod(x,y)` |
-| Special | `gamma`, `erf`, `erfc`, `sinc`, `bessel_j0`, `bessel_j1`, `bessel_j(n,x)` |
+| Special | `gamma`, `erf`, `erfc`, `sinc`, `bessel_j0`, `bessel_j1`, `bessel_j(n,x)`, `digamma`, `trigamma`, `polygamma(m,x)`, `harmonic(n)`, `zeta(s)`, `hurwitz(s,a)`, `elliptic_k(k)`, `elliptic_e(k)`, `elliptic_f(phi,k)`, `elliptic_e_inc(phi,k)` |
 
 ## REPL Commands
 
@@ -234,6 +326,8 @@ mathr> interval x*y with x=[1,2],y=[3,4]
 | `hessenberg <rows...>` | Hessenberg decomposition `A = Q·H·Qᵀ` |
 | `schur <rows...>` | Real Schur decomposition `A = Q·T·Qᵀ` |
 | `rank <rows...>` | Matrix rank |
+| `cond <rows...>` | 2-norm condition number σ_max/σ_min (SVD); `inf` for singular |
+| `null <rows...>` | Orthonormal nullspace basis of `{x : A·x = 0}` |
 | `det <rows...>` | Matrix determinant |
 | `spline x1 y1 x2 y2 ... x_at` | Cubic spline at `x_at` |
 | `chebyshev n [x]` | Chebyshev `T_n(x)` (or `n` nodes) |

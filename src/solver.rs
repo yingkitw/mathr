@@ -151,6 +151,34 @@ pub fn secant<F: Fn(f64) -> f64>(
 /// Implemented with the Durand–Kerner method, which converges quickly for
 /// well-separated roots and is robust enough for moderate degrees.
 pub fn polynomial_roots(coeffs: &[f64]) -> Result<Vec<(f64, f64)>> {
+    let roots = durand_kerner_all_roots(coeffs)?;
+
+    // collect real roots (within tolerance) and pair them with f(root)
+    let mut out = Vec::new();
+    for zi in roots {
+        if zi.im.abs() < 1e-6 {
+            let x = zi.re;
+            let fx = polynomial_eval(coeffs, x);
+            out.push((x, fx));
+        }
+    }
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(out)
+}
+
+/// Find all complex roots of a polynomial with real coefficients, returned
+/// as `(re, im)` pairs via the Durand–Kerner method. Complex roots appear
+/// together with their conjugates.
+pub fn polynomial_roots_complex(coeffs: &[f64]) -> Result<Vec<(f64, f64)>> {
+    let roots = durand_kerner_all_roots(coeffs)?;
+    let mut out: Vec<(f64, f64)> = roots.iter().map(|z| (z.re, z.im)).collect();
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(out)
+}
+
+/// Run the Durand–Kerner iteration and return all n complex roots of the
+/// (real-coefficient, descending) polynomial.
+fn durand_kerner_all_roots(coeffs: &[f64]) -> Result<Vec<crate::complex::Complex<f64>>> {
     let n = coeffs.len().saturating_sub(1);
     if n == 0 {
         return Ok(Vec::new());
@@ -199,17 +227,7 @@ pub fn polynomial_roots(coeffs: &[f64]) -> Result<Vec<(f64, f64)>> {
         }
     }
 
-    // collect real roots (within tolerance) and pair them with f(root)
-    let mut out = Vec::new();
-    for zi in z {
-        if zi.im.abs() < 1e-6 {
-            let x = zi.re;
-            let fx = polynomial_eval(coeffs, x);
-            out.push((x, fx));
-        }
-    }
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(out)
+    Ok(z)
 }
 
 fn polynomial_eval(coeffs: &[f64], x: f64) -> f64 {

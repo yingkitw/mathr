@@ -202,6 +202,33 @@ fn builtins() -> Vec<(&'static str, fn(&[f64]) -> Result<f64>)> {
             [n, x] => Ok(crate::special::bessel_jn(*n as i32, *x)),
             _ => Err(MathError::Eval("bessel_j(n, x) takes two args".into())),
         }),
+        ("digamma", |a| unary(a, |x| Ok(crate::special::digamma(x)))),
+        ("trigamma", |a| unary(a, |x| Ok(crate::special::trigamma(x)))),
+        ("polygamma", |a| match a {
+            [m, x] if m.fract() == 0.0 && *m >= 0.0 => {
+                Ok(crate::special::polygamma(*m as u32, *x))
+            }
+            _ => Err(MathError::Eval("polygamma(m, x) requires a non-negative integer order".into())),
+        }),
+        ("harmonic", |a| match a {
+            [n] if n.fract() == 0.0 && *n >= 0.0 => Ok(crate::special::harmonic(*n as u64)),
+            _ => Err(MathError::Eval("harmonic(n) requires a non-negative integer".into())),
+        }),
+        ("zeta", |a| unary(a, |x| Ok(crate::special::zeta(x)))),
+        ("hurwitz", |a| match a {
+            [s, aa] => Ok(crate::special::hurwitz_zeta(*s, *aa)),
+            _ => Err(MathError::Eval("hurwitz(s, a) takes two args".into())),
+        }),
+        ("elliptic_k", |a| unary(a, |x| Ok(crate::special::elliptic_k(x)))),
+        ("elliptic_e", |a| unary(a, |x| Ok(crate::special::elliptic_e(x)))),
+        ("elliptic_f", |a| match a {
+            [phi, k] => Ok(crate::special::elliptic_f(*phi, *k)),
+            _ => Err(MathError::Eval("elliptic_f(phi, k) takes two args".into())),
+        }),
+        ("elliptic_e_inc", |a| match a {
+            [phi, k] => Ok(crate::special::elliptic_e_inc(*phi, *k)),
+            _ => Err(MathError::Eval("elliptic_e_inc(phi, k) takes two args".into())),
+        }),
         ("factorial", |a| match a {
             [x] if *x >= 0.0 && x.fract() == 0.0 && *x <= 170.0 => {
                 Ok((1..=(*x as u64)).fold(1.0f64, |acc, i| acc * i as f64))

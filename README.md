@@ -56,10 +56,15 @@
 - **MathML** — W3C Presentation MathML export and import for interchange with Word, web browsers, and other CAS systems. Notebook supports MathML cells (input is MathML, imported to Expr and evaluated). Web UI has a "Show MathML" toggle to display MathML output alongside KaTeX rendering.
 - **Expression serialization** — convert `Expr` to and from three interchangeable textual formats: S-expressions (`(add (mul (num 2) (var x)) (num 1))`), JSON (`{"t":"add",...}`), and RPN (`2 x * 1 +`). All round-trip via `Expr::equals`. Useful for persistence, interop, and pipe-friendly shell workflows. `serialize <fmt> <expr>` and `serialize <fmt> import <text>` REPL commands.
 - **Interval arithmetic** — rigorous bounds on computations over the `Expr` AST. Assign variables to intervals `[lo, hi]` and get guaranteed bounds on the result. Tracks extrema for trig functions, handles zero-crossings for even powers, and supports the full elementary function set. `interval <expr> with <var>=[lo,hi],...` REPL command. Pure Rust, no deps.
+- **Arbitrary-precision decimals** — evaluate expressions to N significant digits (up to 1000) with correctly-rounded results: π (Machin), e, sqrt, exp, ln, log, trig, and powers, all with 10 guard digits and argument reduction. `dec <expr> [prec <n>] [with <var>=<val>,...]` REPL command; `bigdec` module for library use.
+- **Symbolic limits** — `lim x→a f(x)` for finite points and ±∞ via direct substitution, L'Hôpital's rule (recursive, for 0/0 and ∞/∞), and numeric probing with pole/divergence detection. `limit <expr> [<var>] <point>` REPL command with step-by-step output in the notebook.
+- **Polynomial expansion** — `expand (x+1)^3 → x^3 + 3*x^2 + 3*x + 1`: distributes products and integer powers into collected multivariate polynomials; non-polynomial factors stay intact. `expand` REPL command; `poly::to_poly`/`poly_to_expr` for library use.
+- **Partial fractions** — SymPy-style `apart`: decomposes rational functions into a quotient plus fractions over linear and irreducible quadratic denominators (numeric factorization + linear solve). `apart <expr> [<var>]` REPL command with step-by-step output in the notebook.
+- **Condition number & nullspace** — `cond <rows>` gives the 2-norm condition number from the SVD (singular matrices report `inf`); `null <rows>` returns an orthonormal basis of `{x : A·x = 0}` via the eigendecomposition of `AᵀA` (works for wide matrices). `Matrix::condition_number`/`Matrix::nullspace` for library use.
 
 ### Interpolation & Special Functions
 - **Interpolation** — Lagrange, Newton, linear, **cubic spline**, **Chebyshev** polynomials and series, **Legendre** polynomials, **Gauss–Legendre quadrature**
-- **Special functions** — Gamma, log-Gamma, Beta, erf, erfc, sinc, incomplete gamma P, **Bessel functions** `J_0`, `J_1`, `J_n`
+- **Special functions** — Gamma, log-Gamma, Beta, erf, erfc, sinc, incomplete gamma P, **Bessel functions** `J_0`, `J_1`, `J_n`, **digamma/trigamma/polygamma**, **harmonic numbers**, **Riemann & Hurwitz zeta**, **elliptic integrals** K, E, F(φ,k), E(φ,k)
 - **Fast math** — Chebyshev-based approximations of `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `pow` with argument reduction (~1e-12 accuracy)
 
 ### Input & Output
@@ -404,11 +409,15 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `autodiff` | Automatic differentiation via dual numbers: `derivative`, `gradient`, `jacobian`, `Dual` type with full arithmetic |
 | `serialize` | Expression serialization: S-expressions, JSON, RPN (`to_sexpr`/`from_sexpr`, `to_json`/`from_json`, `to_rpn`/`from_rpn`) — all round-trip via `Expr::equals` |
 | `interval` | Interval arithmetic for rigorous bounds: `Interval` type with arithmetic, elementary functions, `eval_interval` over `Expr` AST |
+| `bigdec` | Arbitrary-precision decimal arithmetic: `pi`/`e`/`sqrt`/`exp`/`ln`/trig to N significant digits, `eval_decimal` over `Expr` AST, `dec` REPL command |
+| `limit` | Symbolic limits: direct substitution, recursive L'Hôpital's rule, numeric probing fallback, limits at ±∞, pole/DNE detection |
+| `poly` | Polynomial expansion/collection over `Expr`: multivariate `expand`, `to_poly`/`poly_to_expr` conversions |
+| `apart` | Partial fraction decomposition of rational functions (`apart <expr> [var]`): long division, numeric factorization, coefficient solve |
 | `ode` | Euler, RK4, RK4 systems, adaptive RKF45 |
 | `taylor` | Symbolic Taylor series expansion |
 | `laurent` | Laurent series expansion around poles |
 | `interpolate` | Lagrange, Newton, linear, **cubic spline**, **Chebyshev**, **Legendre**, **Gauss–Legendre** |
-| `special` | Gamma, Beta, erf, erfc, sinc, incomplete gamma, **Bessel J_0/J_1/J_n** |
+| `special` | Gamma, Beta, erf, erfc, sinc, incomplete gamma, **Bessel J_0/J_1/J_n**, **digamma/trigamma/polygamma**, **harmonic**, **zeta/Hurwitz**, **elliptic integrals** K/E/F/E_inc |
 | `fastmath` | Chebyshev-based fast approximations of `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `pow` |
 | `rational` | Exact rational arithmetic (`Rational` type), `eval_rational` for exact AST evaluation |
 | `notebook` | `.mnb` notebook format, JSON cells with TeX/math input + output, **cell types** (math/text), **cell reordering**, **shared context** |
@@ -427,6 +436,7 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `num-traits` | Numeric trait bounds |
 | `num-bigint` | Arbitrary-precision integers |
 | `num-integer` | Integer trait methods (mod_floor, is_even) |
+| `bigdecimal` | Arbitrary-precision decimal backend for `bigdec` |
 | `approx` (dev) | Float comparison in tests |
 
 ## License

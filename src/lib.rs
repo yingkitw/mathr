@@ -75,6 +75,10 @@ pub mod server;
 pub mod mathml;
 pub mod serialize;
 pub mod interval;
+pub mod bigdec;
+pub mod limit;
+pub mod poly;
+pub mod apart;
 
 pub use error::{MathError, Result};
 
@@ -105,6 +109,10 @@ pub mod prelude {
     pub use crate::mathml::{from_mathml, to_mathml, to_mathml_doc};
     pub use crate::serialize::{from_json, from_rpn, from_sexpr, to_json, to_rpn, to_sexpr};
     pub use crate::interval::{Interval, eval_interval};
+    pub use crate::bigdec::{eval_decimal, BigDecimal};
+    pub use crate::limit::{limit, LimitValue};
+    pub use crate::poly::expand;
+    pub use crate::apart::apart;
     pub use crate::ode::{euler, rk4, rk4_system, rkf45};
     pub use crate::solver::{
         bisect, isolate_real_roots, newton_central, newton_system, polynomial_roots, secant, SolveOptions,

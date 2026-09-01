@@ -2248,3 +2248,291 @@ fn interval_api_empty_on_negative_sqrt() {
 
 
 
+
+// =========================================================================
+// Arbitrary-precision decimal arithmetic (bigdec)
+// =========================================================================
+
+#[test]
+fn bigdec_pi_and_e_reference_digits() {
+    let pi = mathr::bigdec::pi(50).unwrap();
+    assert_eq!(
+        pi.to_string(),
+        "3.1415926535897932384626433832795028841971693993751"
+    );
+    let e = mathr::bigdec::e(30).unwrap();
+    assert!(e.to_string().starts_with("2.71828182845904523536028747135"));
+}
+
+#[test]
+fn bigdec_sqrt_exp_ln_round_trip() {
+    use mathr::bigdec::BigDecimal;
+    let two = BigDecimal::from(2);
+    let s = mathr::bigdec::sqrt(&two, 30).unwrap();
+    assert!(s.to_string().starts_with("1.4142135623730950488016887242"));
+    let five = BigDecimal::from(5);
+    let l = mathr::bigdec::ln(&five, 30).unwrap();
+    let back = mathr::bigdec::exp(&l, 30).unwrap();
+    let diff = (mathr::bigdec::to_f64(&back) - 5.0).abs();
+    assert!(diff < 1e-25);
+}
+
+#[test]
+fn bigdec_trig_matches_f64() {
+    use mathr::bigdec::BigDecimal;
+    let one = BigDecimal::from(1);
+    let s = mathr::bigdec::sin(&one, 30).unwrap();
+    assert!((mathr::bigdec::to_f64(&s) - 1.0f64.sin()).abs() < 1e-15);
+    let t = mathr::bigdec::tanh(&one, 30).unwrap();
+    assert!((mathr::bigdec::to_f64(&t) - 1.0f64.tanh()).abs() < 1e-15);
+}
+
+#[test]
+fn bigdec_eval_decimal_with_vars() {
+    use mathr::bigdec::{eval_decimal_rounded, parse as dec_parse};
+    use std::collections::HashMap;
+    let e = mathr::parser::Parser::parse("x^2 + 1/x").unwrap();
+    let mut vars = HashMap::new();
+    vars.insert("x".to_string(), dec_parse("1.5").unwrap());
+    let r = eval_decimal_rounded(&e, &vars, 20).unwrap();
+    // 2.25 + 2/3 = 2.9166666666666666667 (20 sig digits)
+    assert!(r.to_string().starts_with("2.9166666666666666667"));
+}
+
+#[test]
+fn bigdec_repl_dec_command() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("dec sqrt(2) prec 30", ctx).unwrap().unwrap();
+    assert!(result.starts_with("1.4142135623730950488016887242"));
+
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("dec 1/3 prec 10", ctx).unwrap().unwrap();
+    assert_eq!(result, "0.3333333333");
+
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("dec pi prec 50", ctx).unwrap().unwrap();
+    assert!(result.starts_with("3.1415926535897932384626433832795028841971693993751"));
+}
+
+#[test]
+fn bigdec_repl_dec_with_assignments() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("dec x*2 + 1 with x=1.5, prec 10", ctx)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result, "4.000000000");
+}
+
+#[test]
+fn bigdec_repl_dec_domain_errors() {
+    let ctx = mathr::eval::Context::standard();
+    assert!(mathr::repl::dispatch_str("dec ln(-1) prec 10", ctx).is_err());
+    let ctx = mathr::eval::Context::standard();
+    assert!(mathr::repl::dispatch_str("dec 1 prec 0", ctx).is_err());
+}
+
+// =========================================================================
+// Symbolic limits (limit)
+// =========================================================================
+
+#[test]
+fn limit_pipeline_lhopital_and_probe() {
+    use mathr::limit::{limit, LimitValue};
+    use mathr::parser::Parser;
+
+    // Removable singularity resolved by L'Hôpital
+    let e = Parser::parse("(x^2 - 1)/(x - 1)").unwrap();
+    assert_eq!(limit(&e, "x", 1.0).unwrap(), LimitValue::Finite(2.0));
+
+    // sin(x)/x at 0 via L'Hôpital
+    let e = Parser::parse("sin(x)/x").unwrap();
+    assert_eq!(limit(&e, "x", 0.0).unwrap(), LimitValue::Finite(1.0));
+
+    // Pole at a finite point
+    let e = Parser::parse("1/x^2").unwrap();
+    assert_eq!(limit(&e, "x", 0.0).unwrap(), LimitValue::PosInfinity);
+
+    // Opposite-side divergence
+    let e = Parser::parse("1/x").unwrap();
+    assert_eq!(limit(&e, "x", 0.0).unwrap(), LimitValue::DoesNotExist);
+
+    // Limits at infinity
+    let e = Parser::parse("(2*x + 1)/(x + 5)").unwrap();
+    assert_eq!(limit(&e, "x", f64::INFINITY).unwrap(), LimitValue::Finite(2.0));
+    let e = Parser::parse("x/exp(x)").unwrap();
+    assert_eq!(limit(&e, "x", f64::INFINITY).unwrap(), LimitValue::Finite(0.0));
+}
+
+#[test]
+fn limit_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("limit sin(x)/x 0", ctx).unwrap().unwrap();
+    assert!(r.contains("= 1"), "got: {}", r);
+
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("limit (x^2-1)/(x-1) x 1", ctx).unwrap().unwrap();
+    assert!(r.contains("= 2"), "got: {}", r);
+
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("limit exp(-x) x inf", ctx).unwrap().unwrap();
+    assert!(r.contains("= 0"), "got: {}", r);
+}
+
+#[test]
+fn limit_steps_via_dispatch() {
+    let steps = mathr::repl::dispatch_steps("limit sin(x)/x x 0", mathr::eval::Context::standard()).unwrap();
+    assert!(steps[0].contains("limit of"));
+    assert!(steps.last().unwrap().contains("limit = 1"));
+}
+
+// =========================================================================
+// Polynomial expansion (poly)
+// =========================================================================
+
+#[test]
+fn poly_expand_pipeline() {
+    use mathr::poly::expand;
+    let e = mathr::parser::Parser::parse("(x+1)^3").unwrap();
+    let expanded = expand(&e);
+    assert!(expanded.to_string().contains("x^3"));
+    assert!(expanded.to_string().contains("3*x^2"));
+
+    // Expanded polynomial evaluates identically to the source
+    let mut ctx = mathr::eval::Context::standard();
+    ctx.set("x", 2.5);
+    let a = mathr::eval::eval(&e, &ctx).unwrap();
+    let b = mathr::eval::eval(&expanded, &ctx).unwrap();
+    assert!((a - b).abs() < 1e-10);
+}
+
+#[test]
+fn poly_expand_multivariate_and_functions() {
+    use mathr::poly::expand;
+    let e = mathr::parser::Parser::parse("(x+y)*(x-y)").unwrap();
+    assert!(expand(&e).to_string().contains("x^2 - y^2"));
+
+    // Functions stay opaque but polynomial sides distribute
+    let e = mathr::parser::Parser::parse("sin(x)*(x + 1)").unwrap();
+    let out = expand(&e).to_string();
+    assert!(out.contains("sin(x)"), "got: {}", out);
+}
+
+#[test]
+fn poly_expand_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("expand (x+2)*(x+3)", ctx).unwrap().unwrap();
+    assert!(r.contains("x^2 + 5*x + 6"), "got: {}", r);
+}
+
+// =========================================================================
+// Partial fraction decomposition (apart)
+// =========================================================================
+
+#[test]
+fn apart_numeric_equivalence_pipeline() {
+    use mathr::apart::apart;
+    use mathr::eval::{eval, Context};
+    use mathr::parser::Parser;
+
+    for (src, points) in [
+        ("1/(x^2 - 1)", vec![0.3, 0.9, 2.2, -3.1]),
+        ("1/(x*(x+1)^2)", vec![0.5, 2.0, -3.0]),
+        ("(x^2 + 1)/(x - 1)", vec![0.5, 2.0, -1.5]),
+        ("(3*x + 5)/((x^2 + x + 1)*(x - 2))", vec![0.5, 1.0, -2.0, 3.0]),
+    ] {
+        let e = Parser::parse(src).unwrap();
+        let out = apart(&e, "x").unwrap();
+        for &x in &points {
+            let mut ctx = Context::standard();
+            ctx.set("x", x);
+            let a = eval(&e, &ctx).unwrap();
+            let b = eval(&out, &ctx).unwrap();
+            assert!(
+                (a - b).abs() < 1e-6 * a.abs().max(1.0),
+                "{}: mismatch at x={}: {} vs {}",
+                src, x, a, b
+            );
+        }
+    }
+}
+
+#[test]
+fn apart_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("apart 1/(x*(x+1))", ctx).unwrap().unwrap();
+    assert!(r.contains("1/x"), "got: {}", r);
+    assert!(r.contains("1/(x + 1)"), "got: {}", r);
+
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("apart (x^2+1)/(x-1) x", ctx).unwrap().unwrap();
+    assert!(r.contains("x + 1"), "got: {}", r);
+}
+
+#[test]
+fn apart_steps_via_dispatch() {
+    let steps = mathr::repl::dispatch_steps(
+        "apart 1/(x*(x+1))",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(steps[0].contains("apart"), "got: {:?}", steps);
+    assert!(steps.last().unwrap().contains("1/x"), "got: {:?}", steps);
+}
+
+// =========================================================================
+// Condition number & nullspace (matrix)
+// =========================================================================
+
+#[test]
+fn matrix_condition_number_pipeline() {
+    use mathr::matrix::Matrix;
+    // Well-conditioned
+    let d = Matrix::from_rows(&[vec![3.0, 0.0], vec![0.0, 1.0]]).unwrap();
+    assert!((d.condition_number().unwrap() - 3.0).abs() < 1e-8);
+    // Singular
+    let s = Matrix::from_rows(&[vec![1.0, 1.0], vec![1.0, 1.0]]).unwrap();
+    assert_eq!(s.condition_number().unwrap(), f64::INFINITY);
+    // Hilbert: ill-conditioned
+    let h = Matrix::hilbert(6);
+    let k = h.condition_number().unwrap();
+    assert!(k > 1e6 && k < 1e9);
+}
+
+#[test]
+fn matrix_nullspace_pipeline() {
+    use mathr::matrix::Matrix;
+    // Full rank → empty
+    let i = Matrix::identity(2);
+    assert!(i.nullspace(0.0).unwrap().is_empty());
+    // Rank-deficient → basis vectors satisfy A·v = 0
+    let a = Matrix::from_rows(&[
+        vec![1.0, 2.0, 0.0, 3.0],
+        vec![2.0, 4.0, 0.0, 6.0],
+        vec![1.0, 1.0, 1.0, 0.0],
+    ]).unwrap();
+    let basis = a.nullspace(0.0).unwrap();
+    assert!(!basis.is_empty());
+    for v in &basis {
+        let av = a.mul_vec(v).unwrap();
+        assert!(av.iter().all(|&x| x.abs() < 1e-8));
+    }
+}
+
+#[test]
+fn matrix_cond_null_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("cond 1 2 | 3 4", ctx).unwrap().unwrap();
+    assert!(r.contains("cond ="), "got: {}", r);
+
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("cond 1 1 | 1 1", ctx).unwrap().unwrap();
+    assert!(r.contains("inf"), "got: {}", r);
+
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("null 1 1 | 1 1", ctx).unwrap().unwrap();
+    assert!(r.contains("dim 1"), "got: {}", r);
+
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("null 1 0 | 0 1", ctx).unwrap().unwrap();
+    assert!(r.contains("full column rank"), "got: {}", r);
+}

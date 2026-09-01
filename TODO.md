@@ -81,6 +81,8 @@
 - [x] erf, erfc (via incomplete gamma)
 - [x] sinc, incomplete gamma P
 - [x] **Bessel functions** `J_0(x)`, `J_1(x)`, integer-order `J_n(x)` (Maclaurin series + asymptotic + forward recurrence)
+- [x] **Condition number / nullspace** — `Matrix::condition_number` (2-norm, σ_max/σ_min from SVD, inf for singular) and `Matrix::nullspace` (orthonormal basis of {x : Ax = 0} from the eigendecomposition of AᵀA, works for wide matrices). `cond <rows>` and `null <rows>` REPL commands.
+- [x] **More special functions** — `digamma`, `trigamma`, `polygamma(m, x)` (via Hurwitz zeta), `harmonic(n)`, `zeta(s)` (Euler–Maclaurin, exact trivial zeros/pole), `hurwitz(s, a)`, elliptic integrals `elliptic_k(k)` (Carlson RF), `elliptic_e(k)` (AGM identity), `elliptic_f(φ, k)` (RF), `elliptic_e_inc(φ, k)` (Simpson quadrature). All registered as expression functions; validated against reference digits (Apéry, π²/6, Legendre K/E values).
 
 ### Taylor series
 - [x] Symbolic expansion around any point
@@ -110,7 +112,7 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **436 inline unit tests** + 165 integration tests — all passing
+- [x] **689 inline unit tests** + 213 integration tests — all passing
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
 
 ### Fast math
@@ -131,16 +133,26 @@
 ### Matrix decompositions
 - [x] **QR decomposition** — Householder reflections for `A = Q·R` where Q is orthogonal and R is upper-triangular. Handles rectangular m×n matrices (tall and wide). Least-squares solve for overdetermined systems. `qr <rows>` REPL command.
 
+### Arbitrary-precision decimals
+- [x] **Arbitrary-precision decimal arithmetic** — `bigdec` module on the `bigdecimal` crate: precision-controlled `add`/`sub`/`mul`/`div` (BigInt long division sized from operand digit counts), `sqrt` (Newton), `exp`/`ln` (argument reduction + Taylor/atanh series), `pi` (Machin), `e`, `log2`/`log10`, `sin`/`cos`/`tan` (π/2 quadrant reduction), `atan`/`asin`/`acos`, `sinh`/`cosh`/`tanh`, `pow`, `eval_decimal`/`eval_decimal_rounded` over the `Expr` AST with variable bindings. All transcendentals compute at `prec + 10` guard digits and correctly round. `dec <expr> [prec <n>] [with <var>=<val>,...]` REPL command. Parser-folded `pi`/`e`/`tau` f64 constants are restored to full precision.
+
+### Symbolic limits
+- [x] **Symbolic limits** — `limit` module: `lim x→a f(x)` for finite points and ±∞. Three-stage strategy: direct substitution on the simplified expression, L'Hôpital's rule for `0/0`/`∞/∞` quotients (recursive, max 6 applications), numeric probing with geometric steps from both sides. Classifies finite limits (integer/12-sig snapping), poles (`±∞`), opposite-side divergence, and oscillation (`does not exist`). `limit <expr> [<var>] <point>` REPL command with variable inference; step-by-step output via `dispatch_steps` (notebook UI).
+
+### Polynomial algebra
+- [x] **Polynomial expansion/collect** — `poly` module: `expand` distributes products and non-negative integer powers into a collected sum of monomials (multivariate, `f64` coefficients, like-term collection, descending-degree + lex ordering, `Sub` joins for negative terms). Non-polynomial parts (functions, symbolic powers, variable denominators) stay intact with expanded children; safety caps on exponent (64) and term count (20k) prevent blowup. `to_poly`/`poly_to_expr` exported as the foundation for partial fractions. `expand <expr>` REPL command + step-by-step.
+- [x] **Partial fraction decomposition** — `apart` module: `apart <expr> [var]` decomposes univariate rational functions via polynomial long division + numeric factorization of the denominator (Durand–Kerner complex roots, conjugate pairs → irreducible quadratics, root clustering for multiplicities) + square linear system for the coefficients (solved by Gaussian elimination). Sign-aware output joins (`-1/(x + 1) + 1/x`), integer/12-sig coefficient snapping, step-by-step in the notebook.
+
 ## Brainstorming
 
 ### High Priority
-(none currently)
+(none currently — symbolic limits completed this cycle)
 
 ### Medium Priority
-(none currently)
+(none currently — condition number/nullspace and special functions completed this cycle)
 
 ### Low Priority
-- [ ] Arbitrary-precision arithmetic (BigDecimal)
+- [x] **Arbitrary-precision arithmetic (BigDecimal)** — `bigdec` module: `pi`/`e`/`sqrt`/`exp`/`ln`/trig to N significant digits, `eval_decimal` over `Expr` AST, `dec` REPL command
 - [x] **Automatic differentiation (dual numbers)** — `autodiff` module with `Dual` type, `derivative`, `gradient`, `jacobian`, `ad` REPL command
 - [x] **MathML support** — W3C Presentation MathML export (`to_mathml`, `to_mathml_doc`) and import (`from_mathml`). `mathml` REPL command for both directions. Supports `<mn>`, `<mi>`, `<mo>`, `<mrow>`, `<mfrac>`, `<msup>`, `<msub>`, `<msqrt>`, `<mroot>`, `<mfenced>`, `<mstyle>`, `<mtext>`.
 - [x] **Expression serialization** — S-expressions, JSON, RPN (`serialize` module, `serialize` REPL command)
