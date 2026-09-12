@@ -9,7 +9,7 @@
 //!
 //! Every function takes a `prec` argument = the number of significant
 //! digits to keep (the *working precision*). [`eval_decimal`] adds
-//! [`GUARD`] extra guard digits internally and the caller rounds the final
+//! `GUARD` extra guard digits internally and the caller rounds the final
 //! result with [`round`] for display. This mirrors MPFR-style precision
 //! contexts: intermediate rounding at `prec + GUARD` digits keeps
 //! mantissas bounded and the final `prec` digits trustworthy.
@@ -689,7 +689,7 @@ pub fn pow(x: &BigDecimal, y: &BigDecimal, prec: usize) -> Result<BigDecimal> {
 ///
 /// Variables are looked up in `vars`; `pi`, `e`, and `tau` are provided at
 /// the requested precision. All intermediate steps are computed with
-/// [`GUARD`] extra digits; the result carries that working precision —
+/// `GUARD` extra digits; the result carries that working precision —
 /// round with [`round`] for display.
 pub fn eval_decimal(
     expr: &Expr,

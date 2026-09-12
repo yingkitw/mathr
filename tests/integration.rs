@@ -751,6 +751,142 @@ fn tikhonov_repl() {
 }
 
 #[test]
+fn spcg_repl() {
+    // Solve a simple SPD system: A = [[2, 1], [1, 3]], b = [3, 4], x = [1, 1]
+    let result = mathr::repl::dispatch_str(
+        "spcg 2 1 | 1 3 | 3 4",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("x = ["), "output should contain x = [...]: {}", output);
+    assert!(output.contains("iterations"), "output should report iterations: {}", output);
+    assert!(output.contains("residual"), "output should report residual: {}", output);
+}
+
+#[test]
+fn spcg_repl_nonsymmetric_error() {
+    // A = [[2, 1], [0, 3]] is not symmetric — CG must reject it.
+    let result = mathr::repl::dispatch_str(
+        "spcg 2 1 | 0 3 | 3 4",
+        mathr::eval::Context::standard(),
+    );
+    assert!(result.is_err(), "nonsymmetric input should error");
+}
+
+#[test]
+fn spcg_jacobi_repl() {
+    // Jacobi preconditioning solves the same SPD system.
+    let result = mathr::repl::dispatch_str(
+        "spcg jacobi 2 1 | 1 3 | 3 4",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("x = ["), "output should contain x = [...]: {}", output);
+    assert!(output.contains("iterations"), "output should report iterations: {}", output);
+}
+
+#[test]
+fn spbicg_repl() {
+    // Nonsymmetric system [[2,1],[0,3]]·x = [3,4] has x = [5/6, 4/3].
+    let result = mathr::repl::dispatch_str(
+        "spbicg 2 1 | 0 3 | 3 4",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("x = ["), "output should contain x = [...]: {}", output);
+    assert!(
+        output.contains("0.83333"),
+        "x[0] should be ~5/6: {}",
+        output
+    );
+}
+
+#[test]
+fn spbicg_repl_singular_error() {
+    // Singular inconsistent system must break down, not return garbage.
+    let result = mathr::repl::dispatch_str(
+        "spbicg 1 1 | 1 1 | 1 2",
+        mathr::eval::Context::standard(),
+    );
+    assert!(result.is_err(), "singular inconsistent input should error");
+}
+
+#[test]
+fn bspline_repl() {
+    // Cubic through (0,0) (1,1) (2,4) (3,9): y = x² is reproduced exactly.
+    let result = mathr::repl::dispatch_str(
+        "bspline 0 0 1 1 2 4 3 9 1.5",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(
+        output.contains("bspline(1.5) = 2.25"),
+        "cubic should reproduce x² exactly: {}",
+        output
+    );
+    assert!(output.contains("degree 3"), "should report degree: {}", output);
+}
+
+#[test]
+fn hermite_repl() {
+    // Slopes matching y = x² on [0, 1] give exact reproduction.
+    let result = mathr::repl::dispatch_str(
+        "hermite 0 0 0 1 1 2 0.5",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(
+        output.contains("hermite(0.5) = 0.25"),
+        "hermite should reproduce x² exactly: {}",
+        output
+    );
+}
+
+#[test]
+fn hermite_repl_bad_input() {
+    // Triples + x_at: wrong token count must error.
+    let result = mathr::repl::dispatch_str(
+        "hermite 0 0 0 1 1 0.5",
+        mathr::eval::Context::standard(),
+    );
+    assert!(result.is_err(), "wrong token count should error");
+}
+
+#[test]
+fn spbicg_ilu_repl() {
+    // ILU(0) preconditioning solves the same nonsymmetric system.
+    let result = mathr::repl::dispatch_str(
+        "spbicg ilu 2 1 | 0 3 | 3 4",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(result.is_some());
+    let output = result.unwrap();
+    assert!(output.contains("x = ["), "output should contain x = [...]: {}", output);
+    assert!(output.contains("0.83333"), "x[0] should be ~5/6: {}", output);
+}
+
+#[test]
+fn spbicg_ilu_repl_zero_pivot_error() {
+    // [[1,1],[1,1]] elimination produces a zero pivot — ILU(0) must error.
+    let result = mathr::repl::dispatch_str(
+        "spbicg ilu 1 1 | 1 1 | 1 2",
+        mathr::eval::Context::standard(),
+    );
+    assert!(result.is_err(), "zero-pivot input should error");
+}
+
+#[test]
 fn laurent_repl() {
     // Laurent series of 1/x around x=0, pole order 1, 3 positive terms
     let result = mathr::repl::dispatch_str(
@@ -2535,4 +2671,294 @@ fn matrix_cond_null_repl_dispatch() {
     let ctx = mathr::eval::Context::standard();
     let r = mathr::repl::dispatch_str("null 1 0 | 0 1", ctx).unwrap().unwrap();
     assert!(r.contains("full column rank"), "got: {}", r);
+}
+
+#[test]
+fn dists_repl_dispatch() {
+    // t distribution: t_0.975(10) = 2.228
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("dist t 2.228 10", ctx).unwrap().unwrap();
+    assert!(r.contains("cdf = 0.97"), "got: {}", r);
+
+    // chi-squared: k=2 closed form cdf = 1 - e^{-x/2}
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("dist chi2 2 2", ctx).unwrap().unwrap();
+    assert!(r.contains("0.63212"), "got: {}", r);
+
+    // binomial pmf: B(10, 0.5) at k=5 = 252/1024
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("dist binom 5 10 0.5", ctx).unwrap().unwrap();
+    assert!(r.contains("0.24609"), "got: {}", r);
+
+    // poisson pmf: P(2 | lambda=2) = 2 e^{-2}
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("dist poisson 2 2", ctx).unwrap().unwrap();
+    assert!(r.contains("0.27067"), "got: {}", r);
+}
+
+#[test]
+fn ttest_repl_dispatch() {
+    // one-sample: data 1..5 vs mu = 0
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("ttest 0 1 2 3 4 5", ctx).unwrap().unwrap();
+    assert!(r.contains("one-sample t-test"), "got: {}", r);
+    assert!(r.contains("df=4"), "got: {}", r);
+
+    // two-sample Welch: [1,2,3] vs [4,5,6]
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("ttest 1 2 3 | 4 5 6", ctx).unwrap().unwrap();
+    assert!(r.contains("welch t-test"), "got: {}", r);
+
+    // paired
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("ttest paired 8 7 6 9 10 | 6 7 5 7 8", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(r.contains("paired t-test"), "got: {}", r);
+}
+
+#[test]
+fn chitest_anova_repl_dispatch() {
+    // uniform chi-squared: 6 cells, total 88 -> chi2 = 2.0
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("chitest 16 18 16 14 12 12", ctx).unwrap().unwrap();
+    assert!(r.contains("stat=2"), "got: {}", r);
+    assert!(r.contains("df=5"), "got: {}", r);
+
+    // anova: [1,2,3] [4,5,6] [7,8,9] -> F = 27, df = (2, 6)
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("anova 1 2 3 | 4 5 6 | 7 8 9", ctx).unwrap().unwrap();
+    assert!(r.contains("one-way ANOVA"), "got: {}", r);
+    assert!(r.contains("df=(2, 6)"), "got: {}", r);
+}
+
+#[test]
+fn dists_library_pipeline() {
+    // beta_inc CDF identity: binomial tail via incomplete beta
+    let p = mathr::dists::binomial_cdf(5, 10, 0.3);
+    let sum: f64 = (0..=5).map(|k| mathr::dists::binomial_pmf(k, 10, 0.3)).sum();
+    assert!(close(p, sum, 1e-12));
+
+    // F(1, nu) cdf at t^2 equals two-sided central t probability
+    let p_f = mathr::dists::f_cdf(6.25, 1.0, 12.0);
+    let p_t = 2.0 * mathr::dists::student_t_cdf(2.5, 12.0) - 1.0;
+    assert!(close(p_f, p_t, 1e-12));
+
+    // normal quantile round-trip
+    let x = mathr::dists::normal_ppf(0.975);
+    assert!(close(mathr::stats::normal_cdf(x, 0.0, 1.0), 0.975, 1e-10));
+}
+
+#[test]
+fn qtile_repl_dispatch() {
+    // standard normal critical value
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("qtile normal 0.975", ctx).unwrap().unwrap();
+    assert!(r.contains("1.95996"), "got: {}", r);
+
+    // t critical value: t_{0.975}(10) = 2.2281388...
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("qtile t 0.975 10", ctx).unwrap().unwrap();
+    assert!(r.contains("2.22813"), "got: {}", r);
+
+    // chi2 critical value: chi2_{0.95}(2) = -2 ln(0.05) = 5.99146...
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("qtile chi2 0.95 2", ctx).unwrap().unwrap();
+    assert!(r.contains("5.99146"), "got: {}", r);
+
+    // normal with mu/sigma
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("qtile normal 0.975 10 2", ctx).unwrap().unwrap();
+    assert!(r.contains("13.9199"), "got: {}", r);
+
+    // discrete dists rejected
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("qtile poisson 0.95 2", ctx);
+    assert!(r.is_err());
+}
+
+#[test]
+fn qtile_cdf_round_trip_pipeline() {
+    // p-values <-> critical values agree across the dists module
+    let mut ctx = mathr::eval::Context::standard();
+    let stat = 2.5_f64;
+    let r = mathr::repl::dispatch_str("dist t 2.5 12", ctx.clone()).unwrap().unwrap();
+    let cdf: f64 = r
+        .lines()
+        .find(|l| l.starts_with("cdf"))
+        .and_then(|l| l.split('=').nth(1))
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap();
+    let q = mathr::dists::student_t_ppf(cdf, 12.0);
+    // cdf passes through the REPL's 12-significant-digit display snapping,
+    // so the round trip can only recover ~1e-9, not full f64 precision
+    assert!(close(q, stat, 1e-8), "q={q}");
+    let _ = &mut ctx;
+}
+
+#[test]
+fn fit_repl_dispatch() {
+    // exact linear fit with explicit guesses
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("fit a*x + b with a=1, b=1 0 1 1 3 2 5", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(r.contains("a = 2"), "got: {}", r);
+    assert!(r.contains("b = 1"), "got: {}", r);
+    assert!(r.contains("converged"), "got: {}", r);
+
+    // inferred parameters (all variables except the independent one), `in t`
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("fit a*t + b in t 0 1 1 3 2 5", ctx).unwrap().unwrap();
+    assert!(r.contains("a = 2"), "got: {}", r);
+    assert!(r.contains("b = 1"), "got: {}", r);
+
+    // nonlinear model recovers rounded-off data parameters
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str(
+        "fit a*exp(-b*x) in x with a=3, b=0.5 0 3 1 1.4957 2 0.7458 3 0.3717 4 0.1852",
+        ctx,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(r.contains("a = 3.0000"), "got: {}", r);
+    assert!(r.contains("b = 0.696"), "got: {}", r);
+    assert!(r.contains("converged"), "got: {}", r);
+}
+
+#[test]
+fn curve_fit_library_matches_regression() {
+    // library-level: LM equals closed-form linear regression
+    let data = [(0.0, 1.0), (1.0, 2.1), (2.0, 2.9), (3.0, 4.2)];
+    let fit = mathr::curvefit::curve_fit(
+        |x, p| Ok(p[0] * x + p[1]),
+        &data,
+        &[0.5, 0.5],
+        &mathr::curvefit::LmOptions::default(),
+    )
+    .unwrap();
+    let (slope, intercept) =
+        mathr::stats::linear_regression(&[0.0, 1.0, 2.0, 3.0], &[1.0, 2.1, 2.9, 4.2]).unwrap();
+    assert!(close(fit.params[0], slope, 1e-8));
+    assert!(close(fit.params[1], intercept, 1e-8));
+    assert!(fit.converged);
+}
+
+#[test]
+fn nonparametric_repl_dispatch() {
+    // Mann-Whitney: perfect separation of 8v8
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("mwu 1 2 3 4 5 6 7 8 | 9 10 11 12 13 14 15 16", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(r.contains("mann-whitney U"), "got: {}", r);
+    assert!(r.contains("stat=0"), "got: {}", r);
+    assert!(r.contains("p=0.00093"), "got: {}", r);
+
+    // Wilcoxon paired: a = [8,7,6,9,10] vs b = [6,7,5,7,8] -> W+ = 10
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("wilcoxon 8 7 6 9 10 | 6 7 5 7 8", ctx).unwrap().unwrap();
+    assert!(r.contains("wilcoxon signed-rank"), "got: {}", r);
+    assert!(r.contains("stat=10"), "got: {}", r);
+
+    // Kruskal-Wallis textbook triple -> H = 7.2
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("kw 2 4 3 | 5 6 7 | 8 10 9", ctx).unwrap().unwrap();
+    assert!(r.contains("kruskal-wallis"), "got: {}", r);
+    assert!(r.contains("stat=7.2"), "got: {}", r);
+    assert!(r.contains("df=2"), "got: {}", r);
+}
+
+#[test]
+fn spearman_bootstrap_dispatch() {
+    // Spearman via library (monotone data -> 1)
+    let rho = mathr::dists::spearman_corr(&[1.0, 2.0, 3.0, 4.0], &[2.0, 4.0, 6.0, 8.0]).unwrap();
+    assert!(close(rho, 1.0, 1e-14));
+
+    // bootstrap REPL: median CI of 1..9 is within [2, 8] and contains 5
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("boot median 1 2 3 4 5 6 7 8 9", ctx).unwrap().unwrap();
+    assert!(r.contains("median = 5"), "got: {}", r);
+    assert!(r.contains("95% ci = ["), "got: {}", r);
+    assert!(r.contains("iters = 10000"), "got: {}", r);
+}
+
+#[test]
+fn logit_repl_dispatch() {
+    // balanced grouped design: closed form b0=-3ln2, b1=2ln2
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("logit 0 0 1 0 1 1 with 1 1 1 2 2 2", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(r.contains("intercept = -2.0794415"), "got: {}", r);
+    assert!(r.contains("b1 = 1.38629435"), "got: {}", r);
+    assert!(r.contains("converged"), "got: {}", r);
+
+    // multivariate with '|' column separator: x1 has no effect
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str(
+        "logit 0 1 0 0 1 0 0 1 1 1 0 1 with 0 0 1 1 2 2 3 3 4 4 5 5 | 0 0 0 0 0 0 1 1 1 1 1 1",
+        ctx,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(r.contains("b1 = 0."), "got: {}", r);
+    assert!(r.contains("b2 = 1.3862943603"), "got: {}", r);
+
+    // library-level closed form + predict_proba round trip
+    let x = [&[1.0, 1.0, 1.0, 2.0, 2.0, 2.0][..]];
+    let y = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0];
+    let fit = mathr::logit::logistic_regression(&x, &y, &mathr::logit::LogitOptions::default())
+        .unwrap();
+    assert!(close(
+        fit.coefficients[1],
+        2.0 * std::f64::consts::LN_2,
+        1e-8
+    ));
+    let p = mathr::logit::predict_proba(&fit.coefficients, &[2.0]).unwrap();
+    assert!(close(p, 2.0 / 3.0, 1e-8));
+}
+
+#[test]
+fn pchip_repl_dispatch() {
+    // linear data reproduced exactly
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("pchip 0 1 1 3 2 5 0.5", ctx).unwrap().unwrap();
+    assert!(r.contains("pchip(0.5) = 2"), "got: {}", r);
+
+    // monotone data with a steep rise: value stays within the local knot range
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("pchip 0 0 1 0 2 0.3 3 4 4 4.2 2.5", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(r.contains("pchip(2.5) = 2.17"), "got: {}", r);
+
+    // library-level: interpolates knots exactly, clamps outside
+    let p = mathr::pchip::Pchip::new(&[0.0, 1.0, 2.0], &[1.0, 3.0, 5.0]).unwrap();
+    assert!(close(p.eval(1.0), 3.0, 1e-14));
+    assert_eq!(p.eval(9.0), 5.0);
+}
+
+#[test]
+fn minimize_repl_dispatch() {
+    // quadratic with closed-form vertex x = 1.5
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("minimize x^2 - 3*x + 2 x 0 5", ctx).unwrap().unwrap();
+    assert!(r.contains("x* = 1.5"), "got: {}", r);
+    assert!(r.contains("= -0.25"), "got: {}", r);
+
+    // sin on [3, 5]: minimum at 3pi/2 ~ 4.712
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("minimize sin(x) x 3 5", ctx).unwrap().unwrap();
+    assert!(r.contains("4.7123"), "got: {}", r);
+
+    // library-level Nelder-Mead on Rosenbrock
+    let rosen = |p: &[f64]| {
+        let (a, b) = (p[0] - 1.0, p[0] * p[0] - p[1]);
+        a * a + 100.0 * b * b
+    };
+    let res = mathr::optim::nelder_mead(&rosen, &[-1.2, 1.0], &mathr::optim::OptOptions::default())
+        .unwrap();
+    assert!(res.converged);
+    assert!(close(res.x[0], 1.0, 1e-4) && close(res.x[1], 1.0, 1e-4));
 }

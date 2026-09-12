@@ -185,8 +185,10 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "int ", "romberg ", "fft ", "conv ", "plot ", "stats ",
         "poly-roots ", "isolate-roots ", "lu ", "qr ", "cholesky ", "svd ",
         "eig ", "symlig ", "hessenberg ", "schur ", "rank ", "tikhonov ",
-        "spline ", "chebyshev ", "legendre ", "fourier ", "mc ",
-        "sample ", "dist ", "pdiff ", "gradient ", "let ", "fn ",
+        "spline ", "pchip ", "minimize ", "chebyshev ", "legendre ", "fourier ", "mc ",
+        "bspline ", "hermite ",
+        "sample ", "dist ", "qtile ", "fit ", "ttest ", "chitest ", "anova ", "mwu ", "wilcoxon ",
+        "kw ", "boot ", "logit ", "pdiff ", "gradient ", "let ", "fn ",
         "gcd ", "lcm ", "is-prime ", "factor ", "fib ", "binom ",
         "fact ", "mr-prime ", "jacobi ", "cf ", "diophantine ", "dlog ",
         "det ",
@@ -198,6 +200,8 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "mathml ",
         "serialize ",
         "interval ",
+        "spcg ",
+        "spbicg ",
     ];
     if cmd_keywords.iter().any(|kw| line.starts_with(kw)) || line == "vars" || line == "funcs" {
         let result = dispatch_inner(line, &mut ctx.clone())?;
@@ -519,6 +523,36 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("dist ") {
         return do_dist(rest.trim());
     }
+    if let Some(rest) = line.strip_prefix("qtile ") {
+        return do_qtile(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("fit ") {
+        return do_fit(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("ttest ") {
+        return do_ttest(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("chitest ") {
+        return do_chitest(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("anova ") {
+        return do_anova(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("mwu ") {
+        return do_mwu(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("wilcoxon ") {
+        return do_wilcoxon(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("kw ") {
+        return do_kw(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("boot ") {
+        return do_boot(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("logit ") {
+        return do_logit(rest.trim());
+    }
     if let Some(rest) = line.strip_prefix("gcd ") {
         return do_numtheory(rest.trim(), "gcd");
     }
@@ -564,6 +598,12 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("tikhonov ") {
         return do_tikhonov(rest.trim());
     }
+    if let Some(rest) = line.strip_prefix("spcg ") {
+        return do_spcg(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("spbicg ") {
+        return do_spbicg(rest.trim());
+    }
     if let Some(rest) = line.strip_prefix("rank ") {
         return do_rank(rest.trim());
     }
@@ -576,6 +616,18 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("spline ") {
         return do_spline(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("pchip ") {
+        return do_pchip(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("bspline ") {
+        return do_bspline(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("hermite ") {
+        return do_hermite(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("minimize ") {
+        return do_minimize(rest.trim(), ctx);
     }
     if let Some(rest) = line.strip_prefix("jacobi ") {
         return do_numtheory(rest.trim(), "jacobi");
@@ -1224,30 +1276,486 @@ fn do_dist(rest: &str) -> Result<Option<String>> {
         crate::error::MathError::Eval("x must be a number".into())
     })?;
     let params = &tokens[2..];
-    let (pdf, cdf) = match dist {
+    let need = |n: usize| -> Result<Vec<f64>> {
+        if params.len() != n {
+            return Err(crate::error::MathError::Eval(format!(
+                "`{dist}` expects {n} parameter(s)"
+            )));
+        }
+        params
+            .iter()
+            .map(|p| p.parse::<f64>().map_err(|_| crate::error::MathError::Eval("parameters must be numbers".into())))
+            .collect()
+    };
+    let (density_label, density, cdf) = match dist {
         "normal" => {
-            if params.len() != 2 {
-                return Err(crate::error::MathError::Eval("normal needs: mean sigma".into()));
-            }
-            let mu: f64 = params[0].parse().map_err(|_| crate::error::MathError::Eval("mean must be a number".into()))?;
-            let sigma: f64 = params[1].parse().map_err(|_| crate::error::MathError::Eval("sigma must be a number".into()))?;
-            (crate::stats::normal_pdf(x, mu, sigma), crate::stats::normal_cdf(x, mu, sigma))
+            let p = need(2)?;
+            ( "pdf", crate::stats::normal_pdf(x, p[0], p[1]), crate::stats::normal_cdf(x, p[0], p[1]))
         }
         "exponential" | "exp" => {
-            if params.len() != 1 {
-                return Err(crate::error::MathError::Eval("exponential needs: lambda".into()));
+            let p = need(1)?;
+            ("pdf", crate::stats::exp_pdf(x, p[0]), crate::stats::exp_cdf(x, p[0]))
+        }
+        "uniform" => {
+            let p = need(2)?;
+            ("pdf", crate::dists::uniform_pdf(x, p[0], p[1]), crate::dists::uniform_cdf(x, p[0], p[1]))
+        }
+        "t" | "student" => {
+            let p = need(1)?;
+            ("pdf", crate::dists::student_t_pdf(x, p[0]), crate::dists::student_t_cdf(x, p[0]))
+        }
+        "chi2" | "chisq" => {
+            let p = need(1)?;
+            ("pdf", crate::dists::chi2_pdf(x, p[0]), crate::dists::chi2_cdf(x, p[0]))
+        }
+        "f" => {
+            let p = need(2)?;
+            ("pdf", crate::dists::f_pdf(x, p[0], p[1]), crate::dists::f_cdf(x, p[0], p[1]))
+        }
+        "binom" | "binomial" => {
+            let p = need(2)?;
+            let (n, k) = (p[0], x);
+            if n.fract() != 0.0 || n < 0.0 || k.fract() != 0.0 || k < 0.0 || k > n {
+                return Err(crate::error::MathError::Eval("binomial needs integer 0 <= k <= n".into()));
             }
-            let lambda: f64 = params[0].parse().map_err(|_| crate::error::MathError::Eval("lambda must be a number".into()))?;
-            (crate::stats::exp_pdf(x, lambda), crate::stats::exp_cdf(x, lambda))
+            (
+                "pmf",
+                crate::dists::binomial_pmf(k as u64, n as u64, p[1]),
+                crate::dists::binomial_cdf(k as u64, n as u64, p[1]),
+            )
+        }
+        "poisson" => {
+            let p = need(1)?;
+            let k = x;
+            if k.fract() != 0.0 || k < 0.0 {
+                return Err(crate::error::MathError::Eval("poisson k must be a non-negative integer".into()));
+            }
+            ("pmf", crate::dists::poisson_pmf(k as u64, p[0]), crate::dists::poisson_cdf(k as u64, p[0]))
         }
         _ => {
             return Err(crate::error::MathError::Eval(format!(
-                "unknown distribution '{}': use normal or exponential",
+                "unknown distribution '{}': use normal, exp, uniform, t, chi2, f, binom, or poisson",
                 dist
             )));
         }
     };
-    Ok(Some(format!("pdf = {}\ncdf = {}", format_value(pdf), format_value(cdf))))
+    Ok(Some(format!(
+        "{density_label} = {}\ncdf = {}",
+        format_value(density),
+        format_value(cdf)
+    )))
+}
+
+fn do_fit(rest: &str) -> Result<Option<String>> {
+    // Syntax: fit <expr> [in <var>] [with p=v, ...] x1 y1 x2 y2 ...
+    // Data is always the trailing run of numeric tokens (x y pairs).
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let mut end = tokens.len();
+    while end > 0 && tokens[end - 1].parse::<f64>().is_ok() {
+        end -= 1;
+    }
+    if end == tokens.len() || (tokens.len() - end) % 2 != 0 {
+        return Err(crate::error::MathError::Eval(
+            "`fit` needs x y data pairs at the end: fit <expr> [in <var>] [with p=v,...] x1 y1 x2 y2 ...".into(),
+        ));
+    }
+    let mut data = Vec::with_capacity((tokens.len() - end) / 2);
+    let mut k = end;
+    while k < tokens.len() {
+        let x: f64 = tokens[k].parse().map_err(|_| crate::error::MathError::Eval("data must be numbers".into()))?;
+        let y: f64 = tokens[k + 1].parse().map_err(|_| crate::error::MathError::Eval("data must be numbers".into()))?;
+        data.push((x, y));
+        k += 2;
+    }
+    let head = tokens[..end].join(" ");
+    let (head, assignments) = match head.rfind(" with ") {
+        Some(pos) => (head[..pos].to_string(), head[pos + 6..].to_string()),
+        None => (head, String::new()),
+    };
+    let (expr_src, var) = match head.rfind(" in ") {
+        Some(pos) => (
+            head[..pos].trim().to_string(),
+            head[pos + 4..].trim().to_string(),
+        ),
+        None => (head.trim().to_string(), "x".to_string()),
+    };
+    let expr = Parser::parse(&expr_src)?;
+
+    // Parameters: explicit `with p=v, ...` guesses, or inferred as every
+    // free variable except the independent one (initial value 1).
+    let (names, init): (Vec<String>, Vec<f64>) = if assignments.is_empty() {
+        let mut names: Vec<String> = expr
+            .variables()
+            .into_iter()
+            .filter(|v| *v != var)
+            .collect();
+        names.sort();
+        if names.is_empty() {
+            return Err(crate::error::MathError::Eval(
+                "no free parameters to fit; expression must contain at least one variable besides the data variable".into(),
+            ));
+        }
+        let init = vec![1.0; names.len()];
+        (names, init)
+    } else {
+        let mut names = Vec::new();
+        let mut init = Vec::new();
+        for a in split_assignments(&assignments) {
+            let (name, val) = a.split_once('=').ok_or_else(|| {
+                crate::error::MathError::Eval(format!("`with` entry '{a}' must be name=value"))
+            })?;
+            names.push(name.trim().to_string());
+            init.push(val.trim().parse().map_err(|_| {
+                crate::error::MathError::Eval(format!("initial guess '{val}' is not a number"))
+            })?);
+        }
+        if names.is_empty() {
+            return Err(crate::error::MathError::Eval("`with` needs at least one parameter".into()));
+        }
+        (names, init)
+    };
+
+    let mut mctx = Context::standard();
+    let var_c = var.clone();
+    let names_c = names.clone();
+    let expr_c = expr.clone();
+    let model = move |x: f64, p: &[f64]| -> Result<f64> {
+        mctx.set(var_c.clone(), x);
+        for (name, v) in names_c.iter().zip(p.iter()) {
+            mctx.set(name.clone(), *v);
+        }
+        eval(&expr_c, &mctx)
+    };
+    let fit = crate::curvefit::curve_fit(model, &data, &init, &crate::curvefit::LmOptions::default())?;
+
+    let mut out = String::new();
+    for (name, (v, se)) in names
+        .iter()
+        .zip(fit.params.iter().zip(fit.std_errors.iter()))
+    {
+        out.push_str(&format!("{name} = {} ± {}\n", format_value(*v), format_value(*se)));
+    }
+    for (name, v) in names.iter().zip(fit.params.iter()).skip(fit.std_errors.len()) {
+        out.push_str(&format!("{name} = {}\n", format_value(*v)));
+    }
+    out.push_str(&format!(
+        "sse = {}\niterations = {} ({})",
+        format_value(fit.sse),
+        fit.iterations,
+        if fit.converged { "converged" } else { "NOT converged" }
+    ));
+    Ok(Some(out))
+}
+
+fn do_mwu(rest: &str) -> Result<Option<String>> {
+    let groups = split_groups(rest)?;
+    if groups.len() != 2 {
+        return Err(crate::error::MathError::Eval(
+            "`mwu` needs: mwu <group1...> | <group2...>".into(),
+        ));
+    }
+    let (a, b) = (parse_group(groups[0])?, parse_group(groups[1])?);
+    let r = crate::dists::mann_whitney_u(&a, &b)?;
+    Ok(Some(format_test_result(&r)))
+}
+
+fn do_wilcoxon(rest: &str) -> Result<Option<String>> {
+    let groups = split_groups(rest)?;
+    if groups.len() != 2 {
+        return Err(crate::error::MathError::Eval(
+            "`wilcoxon` needs: wilcoxon <before...> | <after...> (paired)".into(),
+        ));
+    }
+    let (a, b) = (parse_group(groups[0])?, parse_group(groups[1])?);
+    let r = crate::dists::wilcoxon_signed_rank(&a, &b)?;
+    Ok(Some(format_test_result(&r)))
+}
+
+fn do_kw(rest: &str) -> Result<Option<String>> {
+    let groups = split_groups(rest)?;
+    if groups.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`kw` needs: kw <group1...> | <group2...> [| ...]".into(),
+        ));
+    }
+    let parsed: Vec<Vec<f64>> = groups.iter().map(|g| parse_group(g)).collect::<Result<_>>()?;
+    let refs: Vec<&[f64]> = parsed.iter().map(|g| g.as_slice()).collect();
+    let r = crate::dists::kruskal_wallis(&refs)?;
+    Ok(Some(format_test_result(&r)))
+}
+
+fn do_boot(rest: &str) -> Result<Option<String>> {
+    use crate::stats::{mean, median};
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`boot` needs: boot <mean|median> <values...> [seed <n>]".into(),
+        ));
+    }
+    // optional trailing `seed <n>` keyword (a bare trailing number is data)
+    let mut seed = 42u64;
+    let mut end = tokens.len();
+    if end > 3 && tokens[end - 2] == "seed" {
+        seed = tokens[end - 1].parse::<u64>().map_err(|_| {
+            crate::error::MathError::Eval("seed must be a positive integer".into())
+        })?;
+        end -= 2;
+    }
+    let values = parse_floats(&tokens[1..end])?;
+    const ITERS: usize = 10_000;
+    const CONF: f64 = 0.95;
+    let (stat_name, lo, hi, point) = match tokens[0] {
+        "mean" => {
+            let (lo, hi) = crate::dists::bootstrap_ci(&values, |s| mean(s).unwrap(), ITERS, CONF, seed)?;
+            ("mean", lo, hi, mean(&values)?)
+        }
+        "median" => {
+            let (lo, hi) = crate::dists::bootstrap_ci(&values, |s| median(s).unwrap(), ITERS, CONF, seed)?;
+            ("median", lo, hi, median(&values)?)
+        }
+        other => {
+            return Err(crate::error::MathError::Eval(format!(
+                "unknown statistic '{}': use mean or median",
+                other
+            )));
+        }
+    };
+    Ok(Some(format!(
+        "{stat_name} = {}\n95% ci = [{}, {}]\niters = {} (seed {})",
+        format_value(point),
+        format_value(lo),
+        format_value(hi),
+        ITERS,
+        seed
+    )))
+}
+
+fn do_logit(rest: &str) -> Result<Option<String>> {
+    let (resp_str, cols_str) = rest.split_once(" with ").ok_or_else(|| {
+        crate::error::MathError::Eval(
+            "`logit` needs: logit <y0 1...> with <x1...> [| <x2...>]".into(),
+        )
+    })?;
+    let y_tokens: Vec<&str> = resp_str.split_whitespace().collect();
+    let y = parse_floats(&y_tokens)?;
+    let cols: Vec<Vec<f64>> = cols_str.split('|').map(parse_group).collect::<Result<_>>()?;
+    if cols.iter().any(|c| c.len() != y.len()) {
+        return Err(crate::error::MathError::Eval(
+            "each predictor column must have the same length as the response".into(),
+        ));
+    }
+    let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_slice()).collect();
+    let fit =
+        crate::logit::logistic_regression(&refs, &y, &crate::logit::LogitOptions::default())?;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "intercept = {} ± {}\n",
+        format_value(fit.coefficients[0]),
+        format_value(fit.std_errors[0])
+    ));
+    for (j, (b, se)) in fit.coefficients[1..]
+        .iter()
+        .zip(fit.std_errors[1..].iter())
+        .enumerate()
+    {
+        out.push_str(&format!("b{} = {} ± {}\n", j + 1, format_value(*b), format_value(*se)));
+    }
+    out.push_str(&format!(
+        "log-lik = {}\niterations = {} ({})\n",
+        format_value(fit.log_likelihood),
+        fit.iterations,
+        if fit.converged { "converged" } else { "NOT converged" }
+    ));
+    let probs: Vec<String> = (0..y.len())
+        .map(|i| {
+            let features: Vec<f64> = cols.iter().map(|c| c[i]).collect();
+            format_value(crate::logit::predict_proba(&fit.coefficients, &features).unwrap())
+        })
+        .collect();
+    let shown: Vec<String> = probs.iter().take(12).cloned().collect();
+    out.push_str(&format!("p = {}", shown.join(", ")));
+    if probs.len() > 12 {
+        out.push_str(", …");
+    }
+    Ok(Some(out))
+}
+
+fn do_qtile(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`qtile` needs: qtile <dist> <p> <params...>".into(),
+        ));
+    }
+    let dist = tokens[0];
+    let p: f64 = tokens[1].parse().map_err(|_| {
+        crate::error::MathError::Eval("p must be a probability in (0, 1)".into())
+    })?;
+    let params = &tokens[2..];
+    let need = |n: usize| -> Result<Vec<f64>> {
+        if params.len() != n {
+            return Err(crate::error::MathError::Eval(format!(
+                "`{dist}` expects {n} parameter(s)"
+            )));
+        }
+        params
+            .iter()
+            .map(|t| t.parse::<f64>().map_err(|_| crate::error::MathError::Eval("parameters must be numbers".into())))
+            .collect()
+    };
+    let x = match dist {
+        "normal" => {
+            // optional mu sigma (default 0, 1)
+            match params.len() {
+                0 => crate::dists::normal_ppf(p),
+                2 => {
+                    let ps = need(2)?;
+                    crate::dists::normal_ppf(p) * ps[1] + ps[0]
+                }
+                _ => return Err(crate::error::MathError::Eval("`normal` expects 0 or 2 parameters ([mu] [sigma])".into())),
+            }
+        }
+        "uniform" => {
+            let ps = need(2)?;
+            crate::dists::uniform_ppf(p, ps[0], ps[1])
+        }
+        "t" | "student" => {
+            let ps = need(1)?;
+            crate::dists::student_t_ppf(p, ps[0])
+        }
+        "chi2" | "chisq" => {
+            let ps = need(1)?;
+            crate::dists::chi2_ppf(p, ps[0])
+        }
+        "f" => {
+            let ps = need(2)?;
+            crate::dists::f_ppf(p, ps[0], ps[1])
+        }
+        "binom" | "binomial" | "poisson" => {
+            return Err(crate::error::MathError::Eval(
+                "discrete distributions have no continuous quantile; use `dist` for pmf/cdf".into(),
+            ));
+        }
+        _ => {
+            return Err(crate::error::MathError::Eval(format!(
+                "unknown distribution '{}': use normal, uniform, t, chi2, or f",
+                dist
+            )));
+        }
+    };
+    Ok(Some(format!("q = {}", format_value(x))))
+}
+
+fn do_ttest(rest: &str) -> Result<Option<String>> {
+    let (paired, rest) = match rest.strip_prefix("paired ") {
+        Some(r) => (true, r),
+        None => (false, rest),
+    };
+    let groups = split_groups(rest)?;
+    let r = match (paired, groups.len()) {
+        (false, 1) => {
+            let tokens: Vec<&str> = groups[0].split_whitespace().collect();
+            if tokens.len() < 2 {
+                return Err(crate::error::MathError::Eval(
+                    "`ttest` needs: ttest <mu> <values...>  or  ttest <values...> | <values...>".into(),
+                ));
+            }
+            let mu: f64 = tokens[0].parse().map_err(|_| {
+                crate::error::MathError::Eval(
+                    "first token must be the tested mean mu (or use `|` for two-sample)".into(),
+                )
+            })?;
+            let values = parse_floats(&tokens[1..])?;
+            crate::dists::t_test_one(&values, mu)?
+        }
+        (false, 2) => {
+            let (a, b) = (parse_group(groups[0])?, parse_group(groups[1])?);
+            crate::dists::t_test_two(&a, &b)?
+        }
+        (true, 2) => {
+            let (a, b) = (parse_group(groups[0])?, parse_group(groups[1])?);
+            crate::dists::t_test_paired(&a, &b)?
+        }
+        _ => {
+            return Err(crate::error::MathError::Eval(
+                "`ttest` needs 1 group (with mu) or 2 groups separated by '|'".into(),
+            ));
+        }
+    };
+    Ok(Some(format_test_result(&r)))
+}
+
+fn do_chitest(rest: &str) -> Result<Option<String>> {
+    let groups = split_groups(rest)?;
+    let r = match groups.len() {
+        1 => {
+            let obs = parse_group(groups[0])?;
+            crate::dists::chi_square_uniform(&obs)?
+        }
+        2 => {
+            let obs = parse_group(groups[0])?;
+            let exp = parse_group(groups[1])?;
+            crate::dists::chi_square_gof(&obs, &exp)?
+        }
+        _ => {
+            return Err(crate::error::MathError::Eval(
+                "`chitest` needs: chitest <observed...> [| <expected...>]".into(),
+            ));
+        }
+    };
+    Ok(Some(format_test_result(&r)))
+}
+
+fn do_anova(rest: &str) -> Result<Option<String>> {
+    let groups = split_groups(rest)?;
+    if groups.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`anova` needs: anova <group1...> | <group2...> [| <group3...> ...]".into(),
+        ));
+    }
+    let parsed: Vec<Vec<f64>> = groups.iter().map(|g| parse_group(g)).collect::<Result<_>>()?;
+    let refs: Vec<&[f64]> = parsed.iter().map(|g| g.as_slice()).collect();
+    let r = crate::dists::anova_oneway(&refs)?;
+    Ok(Some(format_test_result(&r)))
+}
+
+/// Split a REPL argument string into groups on unquoted `|` separators.
+fn split_groups(s: &str) -> Result<Vec<&str>> {
+    let groups: Vec<&str> = s.split('|').collect();
+    if groups.len() < 2 {
+        return Ok(vec![s]);
+    }
+    Ok(groups)
+}
+
+fn parse_group(s: &str) -> Result<Vec<f64>> {
+    let tokens: Vec<&str> = s.split_whitespace().collect();
+    parse_floats(&tokens)
+}
+
+fn parse_floats(tokens: &[&str]) -> Result<Vec<f64>> {
+    tokens
+        .iter()
+        .map(|t| {
+            t.parse::<f64>()
+                .map_err(|_| crate::error::MathError::Eval(format!("'{}' is not a number", t)))
+        })
+        .collect()
+}
+
+fn format_test_result(r: &crate::dists::TestResult) -> String {
+    let df_str = match (r.df, r.df2) {
+        (Some(d1), Some(d2)) => format!("df=({}, {})", format_value(d1), format_value(d2)),
+        (Some(d1), None) => format!("df={}", format_value(d1)),
+        (None, _) => String::new(),
+    };
+    let mut out = format!("{}: stat={}\n", r.name, format_value(r.statistic));
+    if !df_str.is_empty() {
+        out.push_str(&df_str);
+        out.push('\n');
+    }
+    out.push_str(&format!("p={}", format_value(r.p_value)));
+    out
 }
 
 fn do_numtheory(rest: &str, op: &str) -> Result<Option<String>> {
@@ -2263,6 +2771,180 @@ fn do_tikhonov(rest: &str) -> Result<Option<String>> {
     Ok(Some(format!("x = [{}]", x_strs.join(", "))))
 }
 
+/// `bspline x1 y1 x2 y2 ... x_at` — clamped B-spline interpolant (cubic for
+/// 4+ points, reduced degree for 2-3) evaluated at x_at.
+fn do_bspline(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 5 || tokens.len() % 2 == 0 {
+        return Err(crate::error::MathError::Eval(
+            "bspline expects: x1 y1 x2 y2 ... x_at (at least 3 points)".into(),
+        ));
+    }
+    let pts: Vec<(f64, f64)> = (0..(tokens.len() / 2))
+        .map(|i| {
+            let x: f64 = tokens[2 * i].parse().map_err(|_| {
+                crate::error::MathError::Eval(format!("bad x at {}", tokens[2 * i]))
+            })?;
+            let y: f64 = tokens[2 * i + 1].parse().map_err(|_| {
+                crate::error::MathError::Eval(format!("bad y at {}", tokens[2 * i + 1]))
+            })?;
+            Ok((x, y))
+        })
+        .collect::<Result<_>>()?;
+    let last = *tokens.last().unwrap();
+    let x_at: f64 = last
+        .parse()
+        .map_err(|_| crate::error::MathError::Eval(format!("bad x_at: {last}")))?;
+    let xs: Vec<f64> = pts.iter().map(|p| p.0).collect();
+    let ys: Vec<f64> = pts.iter().map(|p| p.1).collect();
+    let s = crate::bspline::cubic_bspline_interp(&xs, &ys)?;
+    Ok(Some(format!(
+        "bspline({}) = {} (degree {})",
+        x_at,
+        format_value(s.eval(x_at)),
+        s.degree()
+    )))
+}
+
+/// `hermite x1 y1 d1 x2 y2 d2 ... x_at` — piecewise cubic Hermite with
+/// given slopes evaluated at x_at.
+fn do_hermite(rest: &str) -> Result<Option<String>> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 7 || (tokens.len() - 1) % 3 != 0 {
+        return Err(crate::error::MathError::Eval(
+            "hermite expects: x1 y1 d1 x2 y2 d2 ... x_at (at least 2 points)"
+                .into(),
+        ));
+    }
+    let n = (tokens.len() - 1) / 3;
+    let mut xs = Vec::with_capacity(n);
+    let mut ys = Vec::with_capacity(n);
+    let mut ds = Vec::with_capacity(n);
+    for i in 0..n {
+        let x: f64 = tokens[3 * i]
+            .parse()
+            .map_err(|_| crate::error::MathError::Eval(format!("bad x at {}", tokens[3 * i])))?;
+        let y: f64 = tokens[3 * i + 1].parse().map_err(|_| {
+            crate::error::MathError::Eval(format!("bad y at {}", tokens[3 * i + 1]))
+        })?;
+        let d: f64 = tokens[3 * i + 2].parse().map_err(|_| {
+            crate::error::MathError::Eval(format!("bad slope at {}", tokens[3 * i + 2]))
+        })?;
+        xs.push(x);
+        ys.push(y);
+        ds.push(d);
+    }
+    let last = *tokens.last().unwrap();
+    let x_at: f64 = last
+        .parse()
+        .map_err(|_| crate::error::MathError::Eval(format!("bad x_at: {last}")))?;
+    let h = crate::interpolate::CubicHermite::new(&xs, &ys, &ds)?;
+    Ok(Some(format!(
+        "hermite({}) = {}",
+        x_at,
+        format_value(h.eval(x_at))
+    )))
+}
+
+/// `spcg [jacobi] <rows> | <b...>` — solve Ax = b via conjugate gradient on
+/// the sparse (CSR) representation of A. A must be symmetric positive-definite.
+/// The optional `jacobi` keyword enables diagonal preconditioning.
+fn do_spcg(rest: &str) -> Result<Option<String>> {
+    let (jacobi, rest) = match rest.strip_prefix("jacobi ") {
+        Some(tail) => (true, tail),
+        None => (false, rest),
+    };
+    let parts: Vec<&str> = rest.split('|').collect();
+    if parts.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`spcg` needs: [jacobi] <rows...> | <b...>".into(),
+        ));
+    }
+    let b: Vec<f64> = parts[parts.len() - 1]
+        .split_whitespace()
+        .map(|s| {
+            s.parse::<f64>()
+                .map_err(|_| crate::error::MathError::Eval("b values must be numbers".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let rows: Vec<Vec<f64>> = parts[..parts.len() - 1]
+        .iter()
+        .map(|s| {
+            s.split_whitespace()
+                .map(|x| {
+                    x.parse::<f64>().map_err(|_| {
+                        crate::error::MathError::Eval("matrix entries must be numbers".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let m = crate::matrix::Matrix::from_rows(&rows)?;
+    let a = crate::sparse::Csr::from_dense(&m);
+    let res = if jacobi {
+        crate::sparse::conjugate_gradient_jacobi(&a, &b, 1e-12, 1000)?
+    } else {
+        crate::sparse::conjugate_gradient(&a, &b, 1e-12, 1000)?
+    };
+    let x_strs: Vec<String> = res.x.iter().map(|v| format_value(*v)).collect();
+    Ok(Some(format!(
+        "x = [{}]  ({} iterations, residual {:.2e})",
+        x_strs.join(", "),
+        res.iterations,
+        res.residual
+    )))
+}
+
+/// `spbicg [ilu] <rows> | <b...>` — solve Ax = b via Jacobi-preconditioned
+/// BiCGStab on the sparse (CSR) representation of A. No symmetry requirement.
+/// The optional `ilu` keyword switches to ILU(0) preconditioning.
+fn do_spbicg(rest: &str) -> Result<Option<String>> {
+    let (ilu, rest) = match rest.strip_prefix("ilu ") {
+        Some(tail) => (true, tail),
+        None => (false, rest),
+    };
+    let parts: Vec<&str> = rest.split('|').collect();
+    if parts.len() < 2 {
+        return Err(crate::error::MathError::Eval(
+            "`spbicg` needs: <rows...> | <b...>".into(),
+        ));
+    }
+    let b: Vec<f64> = parts[parts.len() - 1]
+        .split_whitespace()
+        .map(|s| {
+            s.parse::<f64>()
+                .map_err(|_| crate::error::MathError::Eval("b values must be numbers".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let rows: Vec<Vec<f64>> = parts[..parts.len() - 1]
+        .iter()
+        .map(|s| {
+            s.split_whitespace()
+                .map(|x| {
+                    x.parse::<f64>().map_err(|_| {
+                        crate::error::MathError::Eval("matrix entries must be numbers".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let m = crate::matrix::Matrix::from_rows(&rows)?;
+    let a = crate::sparse::Csr::from_dense(&m);
+    let res = if ilu {
+        let fact = crate::sparse::Ilu0::factorize(&a)?;
+        crate::sparse::bicgstab_ilu(&a, &b, 1e-12, 1000, &fact)?
+    } else {
+        crate::sparse::bicgstab(&a, &b, 1e-12, 1000)?
+    };
+    let x_strs: Vec<String> = res.x.iter().map(|v| format_value(*v)).collect();
+    Ok(Some(format!(
+        "x = [{}]  ({} iterations, residual {:.2e})",
+        x_strs.join(", "),
+        res.iterations,
+        res.residual
+    )))
+}
+
 fn do_rank(rest: &str) -> Result<Option<String>> {
     let m = parse_matrix(rest)?;
     let r = m.rank(1e-10);
@@ -2329,6 +3011,88 @@ fn do_spline(rest: &str) -> Result<Option<String>> {
         crate::error::MathError::Eval(format!("bad x_at: {}", last))
     })?;
     Ok(Some(format!("spline({}) = {}", x_at, format_value(sp.eval(x_at)))))
+}
+
+fn do_pchip(rest: &str) -> Result<Option<String>> {
+    // Format: "x1 y1 x2 y2 ... x_at" (same shape as `spline`)
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 5 || tokens.len() % 2 == 0 {
+        return Err(crate::error::MathError::Eval(
+            "pchip expects: x1 y1 x2 y2 ... x_at (at least 3 points)".into(),
+        ));
+    }
+    let pts: Vec<(f64, f64)> = (0..(tokens.len() / 2))
+        .map(|i| {
+            let x: f64 = tokens[2 * i].parse().map_err(|_| {
+                crate::error::MathError::Eval(format!("bad x at {}", tokens[2 * i]))
+            })?;
+            let y: f64 = tokens[2 * i + 1].parse().map_err(|_| {
+                crate::error::MathError::Eval(format!("bad y at {}", tokens[2 * i + 1]))
+            })?;
+            Ok((x, y))
+        })
+        .collect::<Result<_>>()?;
+    let last = *tokens.last().unwrap();
+    let x_at: f64 = last
+        .parse()
+        .map_err(|_| crate::error::MathError::Eval(format!("bad x_at: {last}")))?;
+    let xs: Vec<f64> = pts.iter().map(|p| p.0).collect();
+    let ys: Vec<f64> = pts.iter().map(|p| p.1).collect();
+    let p = crate::pchip::Pchip::new(&xs, &ys)?;
+    Ok(Some(format!(
+        "pchip({}) = {}",
+        x_at,
+        format_value(p.eval(x_at))
+    )))
+}
+
+fn do_minimize(rest: &str, ctx: &Context) -> Result<Option<String>> {
+    // Format: "minimize <expr> [var] a b" — golden-section search on [a, b]
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return Err(crate::error::MathError::Eval(
+            "`minimize` needs: minimize <expr> [var] a b".into(),
+        ));
+    }
+    let b: f64 = tokens[tokens.len() - 1]
+        .parse()
+        .map_err(|_| crate::error::MathError::Eval("b must be a number".into()))?;
+    let a: f64 = tokens[tokens.len() - 2]
+        .parse()
+        .map_err(|_| crate::error::MathError::Eval("a must be a number".into()))?;
+    let mut var = "x".to_string();
+    let mut expr_end = tokens.len() - 2;
+    if expr_end > 1 {
+        let candidate = tokens[expr_end - 1];
+        if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+            var = candidate.to_string();
+            expr_end -= 1;
+        }
+    }
+    let expr_src = tokens[..expr_end].join(" ");
+    let e = Parser::parse(&expr_src)?;
+    // bind all other free variables from the REPL context
+    let mctx = ctx.clone();
+    for v in e.variables() {
+        if v != var && !["pi", "e", "tau", "inf"].contains(&v.as_str()) && !mctx.vars.contains_key(&v)
+        {
+            return Err(crate::error::MathError::UnknownVariable(v));
+        }
+    }
+    let var_c = var.clone();
+    let mut call_ctx = mctx.clone();
+    let obj = move |x: f64| -> f64 {
+        call_ctx.set(var_c.clone(), x);
+        eval(&e, &call_ctx).unwrap_or(f64::INFINITY)
+    };
+    let (x_star, fx) = crate::optim::golden_section(obj, a, b, 1e-10)?;
+    Ok(Some(format!(
+        "{}* = {}\nf({}) = {}",
+        var,
+        format_value(x_star),
+        format_value(x_star),
+        format_value(fx)
+    )))
 }
 
 fn parse_f64_list(rest: &str) -> Result<Vec<f64>> {
@@ -2434,8 +3198,33 @@ commands:
                       Monte Carlo integral over [a, b] with N samples
   sample <dist> <params...> N [seed]
                       random sampling (uniform/normal/exponential)
-  dist <dist> <x> <params...>
-                      PDF and CDF (normal/exponential)
+   dist <dist> <x> <params...>
+                       PDF and CDF (normal/exponential/uniform/t/chi2/f/binom/poisson)
+   qtile <dist> <p> <params...>
+                       quantile / critical value (normal [mu sigma]/uniform/t/chi2/f)
+   fit <expr> [in <var>] [with p=v,...] x1 y1 ...
+                       Levenberg-Marquardt curve fit; params inferred or
+                       initialized via `with` (e.g. fit a*exp(-b*x) with a=1, b=1)
+   ttest <mu> <values...>
+                       one-sample t-test (two-sided)
+   ttest <values...> | <values...>
+                       two-sample Welch t-test
+   ttest paired <values...> | <values...>
+                       paired t-test
+   chitest <observed...> [| <expected...>]
+                       chi-squared test (uniform expectation by default)
+   anova <group1...> | <group2...> [| ...]
+                       one-way ANOVA F-test
+   mwu <group1...> | <group2...>
+                       Mann-Whitney U test (nonparametric two-sample)
+   wilcoxon <before...> | <after...>
+                       Wilcoxon signed-rank test (paired)
+   kw <group1...> | <group2...> [| ...]
+                       Kruskal-Wallis H test (nonparametric ANOVA)
+   boot <mean|median> <values...> [seed <n>]
+                       bootstrap 95% confidence interval (10000 resamples)
+   logit <y0 1...> with <x1...> [| <x2...>]
+                       logistic regression (IRLS) with Wald standard errors
   fft <numbers...>    magnitude spectrum of a real signal
   conv <a...> x <b...>  convolution of two signals
   stats <numbers...>  descriptive statistics
@@ -2445,14 +3234,30 @@ commands:
                       computes determinant and inverse
   qr <rows>           matrix QR decomposition (Householder reflections)
                       prints Q (orthogonal) and R (upper-triangular)
-  tikhonov <rows> | <b...> <lambda>
-                      Tikhonov-regularised solve (Ax≈b with L2 penalty)
+   tikhonov <rows> | <b...> <lambda>
+                       Tikhonov-regularised solve (Ax≈b with L2 penalty)
+   spcg [jacobi] <rows> | <b...>
+                       sparse conjugate-gradient solve of Ax = b (A must be
+                       symmetric positive-definite); `jacobi` enables
+                       diagonal preconditioning
+   spbicg [ilu] <rows> | <b...>
+                       sparse BiCGStab solve of Ax = b (no symmetry
+                       requirement); `ilu` enables ILU(0) preconditioning
   rank <rows>         matrix rank
   cond <rows>         condition number (2-norm, from SVD)
   null <rows>         nullspace basis of a homogeneous system A·x = 0
   det <rows>          matrix determinant
-  spline x1 y1 x2 y2 ... x_at
-                      natural cubic spline interpolant at x_at
+   spline x1 y1 x2 y2 ... x_at
+                       natural cubic spline interpolant at x_at
+   pchip x1 y1 x2 y2 ... x_at
+                        monotone piecewise cubic (no overshoot) at x_at
+   bspline x1 y1 x2 y2 ... x_at
+                        clamped B-spline interpolant at x_at (cubic for 4+
+                        points, reduced degree for 2-3)
+   hermite x1 y1 d1 x2 y2 d2 ... x_at
+                        piecewise cubic Hermite with given slopes at x_at
+   minimize <expr> [var] a b
+                       golden-section minimum of expr on [a, b]
   cholesky <rows>     Cholesky decomposition of symmetric positive-definite
   eig <rows>          dominant eigenvalue + eigenvector (power iteration)
   svd <rows>          singular value decomposition

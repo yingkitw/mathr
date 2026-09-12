@@ -539,6 +539,106 @@ pub fn gauss_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
     (nodes, weights)
 }
 
+/// Piecewise cubic Hermite interpolant with user-supplied slopes.
+///
+/// Each interval `[x_i, x_{i+1}]` carries the cubic determined by
+/// `(y_i, y'_i, y_{i+1}, y'_{i+1})` — the same Hermite basis [`crate::pchip::Pchip`]
+/// uses, but with explicit endpoint derivatives instead of Fritsch–Carlson
+/// estimates. Passes through every knot and matches every given slope
+/// exactly; evaluation outside the knots clamps to the end segments.
+#[derive(Debug, Clone)]
+pub struct CubicHermite {
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+    ds: Vec<f64>,
+}
+
+impl CubicHermite {
+    /// Build from knots, values, and first-derivative estimates (equal lengths,
+    /// at least 2 strictly increasing knots).
+    pub fn new(xs: &[f64], ys: &[f64], ds: &[f64]) -> Result<Self> {
+        let n = xs.len();
+        if n < 2 {
+            return Err(MathError::InvalidArgument(
+                "need at least 2 knots".into(),
+            ));
+        }
+        if ys.len() != n || ds.len() != n {
+            return Err(MathError::InvalidArgument(format!(
+                "lengths differ: {} knots, {} values, {} slopes",
+                n,
+                ys.len(),
+                ds.len()
+            )));
+        }
+        for w in xs.windows(2) {
+            if w[1] <= w[0] {
+                return Err(MathError::InvalidArgument(format!(
+                    "knots must be strictly increasing, found {} then {}",
+                    w[0], w[1]
+                )));
+            }
+        }
+        Ok(CubicHermite {
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+            ds: ds.to_vec(),
+        })
+    }
+
+    /// The supplied slopes `y'_i`.
+    pub fn slopes(&self) -> &[f64] {
+        &self.ds
+    }
+
+    /// Evaluate the interpolant at `x` (clamped outside the knots).
+    pub fn eval(&self, x: f64) -> f64 {
+        let (i, t, h) = self.locate(x);
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+        let h10 = t3 - 2.0 * t2 + t;
+        let h01 = -2.0 * t3 + 3.0 * t2;
+        let h11 = t3 - t2;
+        h00 * self.ys[i] + h10 * h * self.ds[i] + h01 * self.ys[i + 1] + h11 * h * self.ds[i + 1]
+    }
+
+    /// Evaluate the first derivative at `x` (clamped outside the knots).
+    pub fn derivative(&self, x: f64) -> f64 {
+        let (i, t, h) = self.locate(x);
+        let t2 = t * t;
+        let h00 = 6.0 * t2 - 6.0 * t;
+        let h10 = 3.0 * t2 - 4.0 * t + 1.0;
+        let h01 = -h00;
+        let h11 = 3.0 * t2 - 2.0 * t;
+        (h00 * self.ys[i] + h01 * self.ys[i + 1]) / h + h10 * self.ds[i] + h11 * self.ds[i + 1]
+    }
+
+    /// Locate the segment containing `x`. Returns `(index, t, h)` with
+    /// `t = (x - x_i)/h` clamped into `[0, 1]`.
+    fn locate(&self, x: f64) -> (usize, f64, f64) {
+        let n = self.xs.len();
+        if x <= self.xs[0] {
+            return (0, 0.0, self.xs[1] - self.xs[0]);
+        }
+        if x >= self.xs[n - 1] {
+            return (n - 2, 1.0, self.xs[n - 1] - self.xs[n - 2]);
+        }
+        let mut lo = 0usize;
+        let mut hi = n - 1;
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if self.xs[mid] > x {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let h = self.xs[lo + 1] - self.xs[lo];
+        (lo, (x - self.xs[lo]) / h, h)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,5 +910,74 @@ mod tests {
                 assert!(x >= -1.0 && x <= 1.0, "n={} x={}", n, x);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cubic_hermite_tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn hermite_matches_quadratic_with_exact_slopes() {
+        // y = x² on [0, 1]: y0 = 0, y1 = 1, y0' = 0, y1' = 2.
+        let h = CubicHermite::new(&[0.0, 1.0], &[0.0, 1.0], &[0.0, 2.0]).unwrap();
+        for k in 0..=20 {
+            let x = k as f64 / 20.0;
+            assert_abs_diff_eq!(h.eval(x), x * x, epsilon = 1e-12);
+        }
+        assert_abs_diff_eq!(h.derivative(0.5), 1.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn hermite_is_knot_and_slope_exact() {
+        let xs = [0.0, 1.0, 3.0];
+        let ys = [0.0, 1.0, 2.0];
+        let ds = [1.0, 0.5, -1.0];
+        let h = CubicHermite::new(&xs, &ys, &ds).unwrap();
+        for i in 0..3 {
+            assert_abs_diff_eq!(h.eval(xs[i]), ys[i], epsilon = 1e-12);
+        }
+        // Derivative at interior knot from both sides must equal the slope.
+        assert_abs_diff_eq!(h.derivative(1.0), 0.5, epsilon = 1e-10);
+        assert_abs_diff_eq!(h.derivative(0.0), 1.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(h.derivative(3.0), -1.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn hermite_linear_data_with_constant_slopes_is_exact() {
+        // y = 1 + x through all three knots.
+        let xs = [0.0, 2.0, 5.0];
+        let ys = [1.0, 3.0, 6.0];
+        let ds = [1.0, 1.0, 1.0];
+        let h = CubicHermite::new(&xs, &ys, &ds).unwrap();
+        for k in 0..=50 {
+            let x = k as f64 / 10.0;
+            assert_abs_diff_eq!(h.eval(x), 1.0 + x, epsilon = 1e-12);
+            assert_abs_diff_eq!(h.derivative(x), 1.0, epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn hermite_midpoint_value_with_zero_slopes() {
+        // Flat-end-slope single interval: symmetric, value 0.5 at midpoint.
+        let h = CubicHermite::new(&[0.0, 1.0], &[0.0, 1.0], &[0.0, 0.0]).unwrap();
+        assert_abs_diff_eq!(h.eval(0.5), 0.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(h.eval(0.25), 0.15625, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn hermite_clamps_outside_knots() {
+        let h = CubicHermite::new(&[0.0, 1.0, 2.0], &[0.0, 1.0, 0.0], &[0.0, 0.0, 0.0]).unwrap();
+        assert_abs_diff_eq!(h.eval(-3.0), 0.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(h.eval(9.0), 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn hermite_validates_input() {
+        assert!(CubicHermite::new(&[0.0], &[1.0], &[0.0]).is_err());
+        assert!(CubicHermite::new(&[0.0, 1.0], &[1.0], &[0.0, 0.0]).is_err());
+        assert!(CubicHermite::new(&[0.0, 1.0], &[1.0, 2.0], &[0.0]).is_err());
+        assert!(CubicHermite::new(&[1.0, 1.0], &[1.0, 2.0], &[0.0, 0.0]).is_err());
     }
 }

@@ -1,5 +1,7 @@
 /target
 **/*.rs.bk
+AGENTS.md
+MEMORY.md
 
 # IDE / editor
 .idea/

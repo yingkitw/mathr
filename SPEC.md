@@ -23,11 +23,29 @@
 | `fourier` | `mathr fourier <expr> <L> <N> [x]` | Fourier series on [-L, L] with N terms |
 | `mc` | `mathr mc <expr> <a> <b> <N> [seed]` | Monte Carlo integral over [a, b] |
 | `sample` | `mathr sample <dist> <params...> <N> [seed]` | Random sampling (uniform/normal/exponential) |
-| `dist` | `mathr dist <dist> <x> <params...>` | PDF and CDF (normal/exponential) |
+| `dist` | `mathr dist <dist> <x> <params...>` | PDF and CDF (`normal`/`exp`/`uniform`/`t`/`chi2`/`f`/`binom`/`poisson`) |
+| `qtile` | `mathr qtile <dist> <p> <params...>` | Quantile / critical value (`normal [mu sigma]`/`uniform`/`t`/`chi2`/`f`) |
+| `logit` | `mathr logit <y0 1...> with <x1...> [\| <x2...>]` | Logistic regression (IRLS) with Wald standard errors and fitted probabilities |
+| `fit` | `mathr fit <expr> [in <var>] [with p=v,...] x1 y1 ...` | Levenberg–Marquardt nonlinear least-squares curve fit |
+| `ttest` | `mathr ttest <mu> <values...>` | One-sample t-test (two-sided) |
+| `ttest` | `mathr ttest <values...> \| <values...>` | Two-sample Welch t-test |
+| `ttest` | `mathr ttest paired <values...> \| <values...>` | Paired t-test |
+| `chitest` | `mathr chitest <observed...> [\| <expected...>]` | Chi-squared test (uniform expectation by default) |
+| `anova` | `mathr anova <group1...> \| <group2...> [\| ...]` | One-way ANOVA F-test |
+| `mwu` | `mathr mwu <group1...> \| <group2...>` | Mann–Whitney U test (nonparametric two-sample) |
+| `wilcoxon` | `mathr wilcoxon <before...> \| <after...>` | Wilcoxon signed-rank test (paired) |
+| `kw` | `mathr kw <group1...> \| <group2...> [\| ...]` | Kruskal–Wallis H test (nonparametric ANOVA) |
+| `boot` | `mathr boot <mean\|median> <values...> [seed <n>]` | Bootstrap 95% confidence interval (10000 resamples, default seed 42) |
 | `stats` | `mathr stats <data...>` | Descriptive statistics |
 | `matrix` | `mathr matrix <op> <rows...>` | `lu`/`qr`/`cholesky`/`svd`/`eig`/`symlig`/`hessenberg`/`schur`/`rank`/`cond`/`null`/`det`/`solve` |
 | `tikhonov` | `mathr tikhonov <rows...> \| <b...> <lambda>` | Tikhonov-regularised solve |
+| `spcg` | `mathr spcg [jacobi] <rows...> \| <b...>` | Sparse conjugate-gradient solve of `Ax = b` (A must be symmetric positive-definite; `jacobi` = diagonal preconditioning) |
+| `spbicg` | `mathr spbicg [ilu] <rows...> \| <b...>` | Sparse BiCGStab solve (nonsymmetric OK; `ilu` = ILU(0) preconditioning, default Jacobi) |
 | `interp` | `mathr interp <op> ...` | `lagrange`/`newton`/`spline`/`chebyshev`/`legendre` |
+| `pchip` | `mathr pchip x1 y1 x2 y2 ... x_at` | Monotone piecewise cubic Hermite interpolation (no overshoot) |
+| `bspline` | `mathr bspline x1 y1 x2 y2 ... x_at` | Clamped B-spline interpolant (cubic for 4+ points) |
+| `hermite` | `mathr hermite x1 y1 d1 x2 y2 d2 ... x_at` | Piecewise cubic Hermite with given slopes |
+| `minimize` | `mathr minimize <expr> [var] a b` | Golden-section minimum of expr on `[a, b]` |
 | `gcd` | `mathr gcd <n1> <n2> [...]` | GCD of integers |
 | `lcm` | `mathr lcm <n1> <n2> [...]` | LCM of integers |
 | `is-prime` | `mathr is-prime <n>` | Primality test |
@@ -260,6 +278,193 @@ mathr> apart 1/(x^3+x^2)
 - Denominator degree is capped at 32; repeated roots carry the numerical fuzz inherent to multiple-root finding (coefficients may be off in the last digits).
 - Factorization is numeric, so exact rational coefficients are approximated (typically ~12 significant digits).
 
+### Curve Fitting (Levenberg–Marquardt)
+
+Fits `y = f(x, params)` to data by minimizing squared residuals with the LM damped Gauss–Newton algorithm (numeric central-difference Jacobian, Marquardt diagonal scaling).
+
+```
+mathr> fit a*x + b with a=1, b=1 0 1 1 3 2 5
+a = 2 ± 0
+b = 1 ± 0
+sse = 0
+iterations = 4 (converged)
+mathr> fit a*exp(-b*x) in x with a=3, b=0.5 0 3 1 1.4957 2 0.7458 3 0.3717 4 0.1852
+a = 3.0000170211 ± 0.0001123634
+b = 0.6960330223 ± 0.000051804
+sse = 0.0000000401
+iterations = 5 (converged)
+```
+
+Syntax: `fit <expr> [in <var>] [with p=v, ...] x1 y1 x2 y2 ...`
+
+- Data is the trailing run of `x y` pairs (independent variable defaults to `x`; `in <var>` selects another).
+- Parameters come from `with p=v, ...` initial guesses; if omitted, they are inferred as every free variable except the data variable (initial value 1).
+- Output: fitted parameters with approximate 1-sigma standard errors (`σ²·(JᵀJ)⁻¹`, only when there are residual degrees of freedom), SSE, iteration count, convergence status.
+
+**Limitations**: local minima (e.g. frequency fitting `sin(w·x)` has a spurious optimum near `w = 0` — start near the expected value); models are evaluated over the expression evaluator, so convergence tolerances are ~1e-12.
+
+### Logistic Regression
+
+Binary classification via IRLS (Newton on the log-likelihood), with Wald standard errors and overflow-safe log-likelihood. The `logit` REPL command takes the 0/1 response followed by `with` and one or more predictor columns separated by `|`:
+
+```
+mathr> logit 0 0 1 0 1 1 with 1 1 1 2 2 2
+intercept = -2.0794415395 ± 2.7386127872
+b1 = 1.3862943598 ± 1.7320508074
+log-lik = -3.8190850098
+iterations = 5 (converged)
+p = 0.3333333333, 0.3333333333, 0.3333333334, 0.6666666666, 0.6666666666, 0.6666666667
+```
+
+Balanced grouped designs have a closed form (empirical logits): the example gives `b1 = 2 ln 2`, `b0 = −3 ln 2`. Complete separation reports huge coefficients/standard errors (the MLE does not exist); a `1e-10` ridge keeps the solves well-defined.
+
+**Limitations**: no regularization options (beyond the numerical ridge), no factor predictors (encode numerically first), normal-approximation Wald intervals.
+
+### Stiff ODE Solvers
+
+Library-only (`stiff` module; the explicit solvers in `ode` are likewise library-only): backward (implicit) Euler — first order, L-stable — implicit trapezoidal / Crank–Nicolson — second order, A-stable — and BDF2 — second order, A-stable, fixed step with one trapezoidal startup step — for systems `dy/dt = f(t, y)`. Each step solves the implicit equation by Newton's method with a central-difference numeric Jacobian; linear solves go through `Matrix::solve`.
+
+- `implicit_euler_system(f, t0, t1, y0, n) -> Vec<f64>` — state at `t1`
+- `implicit_euler_trajectory(...) -> Vec<(f64, Vec<f64>)>` — full trajectory
+- `trapezoid_system` / `trapezoid_trajectory` — same shapes for Crank–Nicolson
+- `bdf2_system` / `bdf2_trajectory` — same shapes for fixed-step BDF2
+
+All are unconditionally stable on stiff decays (e.g. `y' = −1000(y−1)` with `h = 0.01`, where explicit Euler amplifies by 9× per step and blows up). Validated by mass conservation through the Robertson problem, exact amplification factors, and observed convergence orders (2.01 / 4.00 / 3.96 error ratios for Euler / trapezoidal / BDF2).
+
+### Optimization
+
+Derivative-free minimization (`optim` module):
+
+- `golden_section(f, a, b, tol) -> (x, fx)` — 1-D unimodal minimization on a bracket; the bracket shrinks by φ = (√5−1)/2 per iteration.
+- `nelder_mead(f, start, opts) -> OptResult` — N-dimensional simplex method (reflection/expansion/contraction/shrink), returning `x`, `fx`, `iterations`, `converged`. Tuning via `OptOptions { max_iter, tol, init_step }`.
+
+The `minimize <expr> [var] a b` REPL command runs golden-section search on an expression over `[a, b]` (the single-letter variable may be given just before the bracket; omit both it and brackets ending in a bare variable to default to `x`):
+
+```
+mathr> minimize x^2 - 3*x + 2 x 0 5
+x* = 1.5000000137
+f(1.5000000137) = -0.25
+mathr> minimize sin(x) x 3 5
+x* = 4.7123889909
+f(4.7123889909) = -1
+```
+
+**Limitations**: golden-section assumes unimodality on the bracket; Nelder–Mead finds local minima (validated on Rosenbrock to 1e-4); near-flat minima are noise-limited to ~1e-8 accuracy.
+
+### Sparse Matrices & Conjugate Gradient
+
+Sparse storage for large systems (`sparse` module):
+
+- `Csr::from_triplets(rows, cols, &[(r, c, v)...])` — CSR from coordinate triplets; duplicates summed, rows in canonical ascending-column order.
+- `Csr::from_dense(&Matrix)` / `to_dense()` — dense conversion (exact zeros dropped).
+- `matvec(&[f64])` — matrix–vector product; `transpose() -> Csc` — CSC layout (same matrix, column-compressed).
+- `Csc::to_csr()`, `Csc::matvec`, `Csc::to_dense` — CSC counterparts (a CSC's buffers reinterpreted as CSR give the transpose matrix).
+- `multiply(&Csr)` — sparse × sparse product (row-wise SpGEMM, canonical output).
+- `conjugate_gradient(&Csr, b, tol, max_iter) -> CgResult { x, iterations, residual }` — iterative solve of `A·x = b` for symmetric positive-definite `A`. Symmetry is verified structurally (1e-10 relative); indefiniteness surfaces as a non-positive-curvature breakdown. Converged when `‖r‖₂ ≤ tol · max(1, ‖b‖₂`.
+- `conjugate_gradient_jacobi(&Csr, b, tol, max_iter)` — Jacobi (diagonal) preconditioning; requires a nonzero diagonal. Provably performs the same iteration count as plain CG under diagonal scaling `(S·A·S, S·b) ↔ (A, b)`.
+- `bicgstab(&Csr, b, tol, max_iter) -> BicgstabResult { x, iterations, residual }` — Jacobi-preconditioned BiCGStab for general (including nonsymmetric) square matrices; no symmetry requirement. Explicit breakdown guards (`rho = 0`, `rhat·v = 0`, `A·shat = 0`, `omega = 0`) return `NotConvergent`.
+- `Ilu0::factorize(&Csr) -> Ilu0` — incomplete LU with zero fill-in over A's sparsity pattern (row-wise IKJ); errors on missing diagonals and zero pivots. `ilu.solve(&r)` applies `M⁻¹` via forward/back substitution. Exact for no-fill matrices (tridiagonal, diagonal).
+- `bicgstab_ilu(&Csr, b, tol, max_iter, &Ilu0)` — ILU(0)-preconditioned BiCGStab; converges in 1 iteration when the factorization is exact.
+
+```
+mathr> spcg 2 1 | 1 3 | 3 4
+x = [1, 1]  (2 iterations, residual 0.00e0)
+mathr> spcg jacobi 2 1 | 1 3 | 3 4
+x = [1, 1]  (2 iterations, residual 5.53e-16)
+mathr> spbicg 2 1 | 0 3 | 3 4
+x = [0.8333333333, 1.3333333333]  (2 iterations, residual 2.78e-17)
+mathr> spbicg ilu 2 1 | 0 3 | 3 4
+x = [0.8333333333, 1.3333333333]  (1 iterations, residual 1.07e-14)
+```
+
+**Limitations**: CG requires symmetric positive-definite matrices (nonsymmetric input is rejected; indefinite input breaks down); BiCGStab has no monotone residual guarantee and can stagnate on strongly nonsymmetric problems; ILU(0) is fill-limited (strongly coupled grids may need drop-tolerance ILU) and breaks down on zero pivots; the REPL accepts dense row input and sparsifies internally (triplets are the library-level entry point for genuinely large systems).
+
+### Monotone Interpolation (PCHIP)
+
+`pchip x1 y1 x2 y2 ... x_at` evaluates the Fritsch–Carlson monotone piecewise cubic Hermite interpolant at `x_at`. Unlike natural cubic splines it never overshoots the local knot range on monotone data, has zero slope at local extrema, and reproduces linear data exactly. Evaluation outside the knots clamps to the endpoint values.
+
+```
+mathr> pchip 0 0 1 0 2 0.3 3 4 4 4.2 2.5
+pchip(2.5) = 2.1719391026
+```
+
+Accuracy is ~O(h³) on smooth data (the slopes approximate f′). The library type is `pchip::Pchip` (`new`, `eval`, `slopes`).
+
+### B-Spline & Hermite Interpolation
+
+More spline types (`bspline` module + `interpolate::CubicHermite`):
+
+- `bspline x1 y1 x2 y2 ... x_at` — clamped B-spline interpolant evaluated at `x_at`: cubic for 4+ points (de Boor knot averaging guarantees a nonsingular banded collocation system), degree reduced for 2-3 points (linear/quadratic). Passes through every data point; clamps outside `[x_0, x_{n-1}]`.
+- `hermite x1 y1 d1 x2 y2 d2 ... x_at` — piecewise cubic Hermite with user-supplied slopes at every knot; knot- and slope-exact, clamps outside the knots.
+- Library: `basis_function(i, p, knots, t)` (Cox–de Boor, left-limit at the final knot), `BSpline::new(degree, knots, coeffs)` / `eval` (de Boor, affine parameter map), `cubic_bspline_interp(xs, ys)`, `interpolate::CubicHermite::new(xs, ys, ds)` / `eval` / `derivative`.
+
+```
+mathr> bspline 0 0 1 1 2 4 3 9 1.5
+bspline(1.5) = 2.25 (degree 3)
+mathr> hermite 0 0 0 1 1 2 0.5
+hermite(0.5) = 0.25
+```
+
+**Limitations**: interpolation only (no least-squares/approximation B-splines, no 2-D surfaces); uniform-in-x parameterization (no chord-length option); a 4-point clamped cubic reproduces any cubic exactly, but general accuracy is ~O(h⁴); Hermite requires slopes as input (use `pchip` for estimated monotone slopes).
+
+### Distributions & Hypothesis Testing
+
+Continuous distributions with PDF and CDF: normal (also via `stats`), exponential, uniform, Student's t, chi-squared, F. Discrete distributions with PMF and CDF: binomial, Poisson.
+
+```
+mathr> dist t 2.228 10
+pdf = 0.0423946247
+cdf = 0.9749941141
+mathr> dist binom 5 10 0.5
+pmf = 0.24609375
+cdf = 0.623046875
+```
+
+The library also exposes `normal_ppf` (inverse standard normal CDF), `student_t_ppf`, `chi2_ppf`, `f_ppf`, and `uniform_ppf` quantile functions (critical values), and `beta_inc` (regularized incomplete beta function). The `qtile <dist> <p> <params...>` REPL command gives critical values directly:
+
+```
+mathr> qtile t 0.975 10
+q = 2.228138852
+mathr> qtile normal 0.975 10 2
+q = 13.91992797
+```
+
+Hypothesis tests return the statistic, degrees of freedom, and p-value:
+
+- `ttest <mu> <values...>` — two-sided one-sample t-test
+- `ttest <values...> | <values...>` — two-sided Welch (unequal-variance) t-test
+- `ttest paired <values...> | <values...>` — two-sided paired t-test on differences
+- `chitest <observed...>` — chi-squared test against uniform cell probabilities
+- `chitest <observed...> | <expected...>` — chi-squared goodness-of-fit
+- `anova <g1...> | <g2...> [| ...]` — one-way ANOVA F-test
+- `mwu <g1...> | <g2...>` — Mann–Whitney U rank-sum test (normal approximation, continuity + tie corrected; reliable for group sizes >= 8)
+- `wilcoxon <before...> | <after...>` — Wilcoxon signed-rank paired test (zeros dropped, normal approximation; needs >= 2 non-zero differences)
+- `kw <g1...> | <g2...> [| ...]` — Kruskal–Wallis H test by ranks (chi-squared with `k−1` df; reliable for group sizes >= 5)
+
+Also: `spearman_corr(x, y)` (library; Pearson correlation of average ranks) and
+`boot <mean|median> <values...> [seed <n>]` — percentile bootstrap 95% confidence
+interval from 10000 seeded resamples:
+
+```
+mathr> boot median 1 2 3 4 5 6 7 8 9
+median = 5
+95% ci = [2, 8]
+iters = 10000 (seed 42)
+```
+
+```
+mathr> ttest 0 1 2 3 4 5
+one-sample t-test: stat=4.2426406871
+df=4
+p=0.0132355996
+mathr> anova 1 2 3 | 4 5 6 | 7 8 9
+one-way ANOVA: stat=27
+df=(2, 6)
+p=0.001
+```
+
+**Method**: chi-squared and Poisson CDFs reuse the regularized incomplete gamma; Student-t, F, and binomial CDFs use the regularized incomplete beta (continued fraction). ANOVA uses the classical between/within sum-of-squares decomposition.
+
 ### Numbers
 
 - Integers: `42`
@@ -310,7 +515,12 @@ mathr> apart 1/(x^3+x^2)
 | `fourier <expr> L N [x]` | Fourier series on [-L, L] |
 | `mc <expr> a b N [seed]` | Monte Carlo integral |
 | `sample <dist> <params...> N [seed]` | Random sampling |
-| `dist <dist> <x> <params...>` | PDF and CDF |
+| `dist <dist> <x> <params...>` | PDF and CDF (normal/exponential/uniform/t/chi2/f/binom/poisson) |
+| `ttest <mu> <values...>` | One-sample t-test |
+| `ttest <values...> \| <values...>` | Two-sample Welch t-test |
+| `ttest paired <values...> \| <values...>` | Paired t-test |
+| `chitest <observed...> [\| <expected...>]` | Chi-squared test |
+| `anova <group1...> \| <group2...> [\| ...]` | One-way ANOVA |
 | `fft <numbers...>` | Magnitude spectrum |
 | `conv <a...> x <b...>` | Convolution |
 | `stats <numbers...>` | Descriptive statistics |
@@ -319,6 +529,8 @@ mathr> apart 1/(x^3+x^2)
 | `lu <rows...>` | LU decomposition (rows separated by `\|`) |
 | `qr <rows...>` | QR decomposition (Householder reflections; prints Q and R) |
 | `tikhonov <rows...> \| <b...> <lambda>` | Tikhonov-regularised solve |
+| `spcg [jacobi] <rows...> \| <b...>` | Sparse conjugate-gradient solve (SPD; `jacobi` = diagonal preconditioning; reports iterations and residual) |
+| `spbicg [ilu] <rows...> \| <b...>` | Sparse BiCGStab solve (nonsymmetric OK; `ilu` = ILU(0) preconditioning, default Jacobi) |
 | `cholesky <rows...>` | Cholesky decomposition |
 | `svd <rows...>` | Singular value decomposition |
 | `eig <rows...>` | Dominant eigenpair (power iteration) |
