@@ -160,7 +160,7 @@ fn builtins() -> Vec<(&'static str, fn(&[f64]) -> Result<f64>)> {
         ("ln", |a| unary(a, |x| domain(x > 0.0, "ln", x).map(|x| x.ln()))),
         ("log", |a| match a {
             [x, b] if *x > 0.0 && *b > 0.0 && *b != 1.0 => Ok(x.log(*b)),
-            _ => Err(MathError::Domain(format!("log({}, {})", a.get(0).copied().unwrap_or(0.0), a.get(1).copied().unwrap_or(0.0)))),
+            _ => Err(MathError::Domain(format!("log({}, {})", a.first().copied().unwrap_or(0.0), a.get(1).copied().unwrap_or(0.0)))),
         }),
         ("log2", |a| unary(a, |x| domain(x > 0.0, "log2", x).map(|x| x.log2()))),
         ("log10", |a| unary(a, |x| domain(x > 0.0, "log10", x).map(|x| x.log10()))),

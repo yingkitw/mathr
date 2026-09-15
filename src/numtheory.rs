@@ -52,12 +52,12 @@ pub fn is_prime(n: u64) -> bool {
     if n < 4 {
         return true;
     }
-    if n % 2 == 0 || n % 3 == 0 {
+    if n.is_multiple_of(2) || n.is_multiple_of(3) {
         return false;
     }
     let mut i = 5u64;
     while i * i <= n {
-        if n % i == 0 || n % (i + 2) == 0 {
+        if n.is_multiple_of(i) || n.is_multiple_of(i + 2) {
             return false;
         }
         i += 6;
@@ -68,13 +68,13 @@ pub fn is_prime(n: u64) -> bool {
 /// Prime factorization via trial division. Returns factors in ascending order.
 pub fn prime_factors(mut n: u64) -> Vec<u64> {
     let mut factors = Vec::new();
-    while n % 2 == 0 {
+    while n.is_multiple_of(2) {
         factors.push(2);
         n /= 2;
     }
     let mut i = 3u64;
     while i * i <= n {
-        while n % i == 0 {
+        while n.is_multiple_of(i) {
             factors.push(i);
             n /= i;
         }
@@ -130,7 +130,7 @@ pub fn fibonacci(n: u64) -> u64 {
         let (a, b) = fib(n / 2);
         let c = a * (2 * b - a);
         let d = a * a + b * b;
-        if n % 2 == 0 {
+        if n.is_multiple_of(2) {
             (c, d)
         } else {
             (d, c + d)
@@ -169,8 +169,8 @@ pub fn euler_totient(n: u64) -> u64 {
     let mut m = n;
     let mut p = 2u64;
     while p * p <= m {
-        if m % p == 0 {
-            while m % p == 0 {
+        if m.is_multiple_of(p) {
+            while m.is_multiple_of(p) {
                 m /= p;
             }
             result -= result / p;
@@ -381,14 +381,14 @@ pub fn is_prime_miller_rabin(n: u64, k: usize) -> bool {
     if n == 2 || n == 3 {
         return true;
     }
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         return false;
     }
 
     // Write n-1 as 2^r * d
     let mut d = n - 1;
     let mut r = 0u32;
-    while d % 2 == 0 {
+    while d.is_multiple_of(2) {
         d /= 2;
         r += 1;
     }

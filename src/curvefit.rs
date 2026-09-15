@@ -406,11 +406,11 @@ mod tests {
 
     #[test]
     fn validation_errors() {
-        assert!(curve_fit(|x, p| Ok(p[0]), &[], &[1.0], &LmOptions::default()).is_err());
-        assert!(curve_fit(|x, p| Ok(p[0]), &[(1.0, 1.0)], &[], &LmOptions::default()).is_err());
+        assert!(curve_fit(|_x, p| Ok(p[0]), &[], &[1.0], &LmOptions::default()).is_err());
+        assert!(curve_fit(|_x, p| Ok(p[0]), &[(1.0, 1.0)], &[], &LmOptions::default()).is_err());
         // more parameters than data points
         assert!(
-            curve_fit(|x, p| Ok(p[0] + p[1]), &[(1.0, 1.0)], &[1.0, 1.0], &LmOptions::default())
+            curve_fit(|_x, p| Ok(p[0] + p[1]), &[(1.0, 1.0)], &[1.0, 1.0], &LmOptions::default())
                 .is_err()
         );
         // model error propagates

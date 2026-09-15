@@ -112,7 +112,7 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **868 inline unit tests** + 226 integration tests — all passing
+- [x] **946 inline unit tests** + 256 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
 
 ### Fast math
@@ -156,15 +156,47 @@
 - [x] **Sparse matrices (CSR/CSC)** — `sparse` module: `Csr`/`Csc` compressed storage from coordinate triplets (duplicates summed, canonical order) or dense matrices, `matvec`, `transpose` (scatter layout conversion), row-wise sparse×sparse `multiply` (SpGEMM), and `conjugate_gradient` (structural symmetry check, non-positive-curvature breakdown detection, relative-residual stopping). `spcg <rows> | <b...>` REPL command; `sparse_demo` example; validated against dense `Matrix::solve` and the 1-D Poisson system.
 - [x] **Preconditioned CG + BiCGStab** — `conjugate_gradient_jacobi` (diagonal preconditioning; provably iteration-invariant under diagonal scaling) and `bicgstab` (general nonsymmetric systems, Jacobi-preconditioned, four explicit breakdown guards). REPL: `spcg jacobi ...` flag + `spbicg <rows> | <b...>`; validated against dense solves, convection-diffusion stencils, and singular-inconsistent breakdown. ILU(0) added 2026-09-12 (see Low Priority Done).
 
+- [x] **Summation & product (Σ/∏)** — `sumprod` module: `summation`/`product` over inclusive integer bounds in three tiers — O(1) closed forms (var-independent, arithmetic series, Faulhaber k²/k³ via i128-exact formulas, geometric `c^var`), exact rational term loop (`eval_rational` accumulation cross-checked against the f64 pass because i64-backed Rationals silently overflow on denominator-heavy sums like Σ1/k past k≈43), and f64 fallback. `sum`/`prod <expr> [<var>] <a> <b>` REPL commands (minimize-style trailing bounds); empty ranges = 0 / 1; 1M-term cap. (2026-09-15, from the qalculate competitive pass)
+- [x] **Doc-sync enforcement** — `tests/docs_sync.rs` makes doc drift a test failure: AGENTS.md project structure must list every `pub mod` in `lib.rs`, and the TODO.md Done test counts must match actual `#[test]` occurrences in `src/` and `tests/` (counted as attribute-led lines; the claim must match what `cargo test` reports, including the checker itself). Wired into AGENTS.md Steps 2, 6, and the audit scorecard (2026-09-15).
+
 ## Brainstorming
 
+### Codebase Scorecard (2026-09-15, /30 per AGENTS.md Step 7)
+| Dimension | Score | Evidence |
+|---|---|---|
+| Correctness & coverage | 5 | 920 unit + 236 integration + 13 doc-tests green; examples compile |
+| Numerical fidelity | 5 | Validated vs reference values throughout (see MEMORY.md) |
+| Maintainability | 2 → 4 | Was: `cargo clippy` hard-failed (8 approx_constant errors once all targets compiled) + ~60 warnings. Fixed: all errors, gate exits 0, mechanical warnings auto-fixed; remaining ~40 stylistic warnings in frozen mature modules documented as accepted debt. Bonus: `identical if blocks` lint exposed a real silent-wrong-answer parsing bug in `romberg` (fixed + 3 regression tests) |
+| Docs alignment | 3 | TODO.md test counts were stale (fixed 2026-09-15); AGENTS.md structure missing 7 newer modules (fixed 2026-09-15); SPEC/README otherwise aligned |
+| Wiring & ergonomics | 5 | 40 modules declared in lib.rs, prelude + REPL dispatch complete |
+| Footprint | 4 | 9 runtime deps, all justified |
+
+Next weakest: Docs alignment → now enforced: `tests/docs_sync.rs` (2026-09-15) makes module-list/test-count drift a `cargo test` failure.
+
+### Codebase Scorecard — second pass (2026-09-15, /30)
+| Dimension | Score | Delta vs baseline |
+|---|---|---|
+| Correctness & coverage | 5 | — (937 unit + 247 integration + 13 doc-tests; +19 tests since baseline) |
+| Numerical fidelity | 5 | — (new modules validated via closed forms: Euler identity, asin(2), qsolve back-substitution) |
+| Maintainability | 4 | +2 (clippy gate exits 0; 53 stylistic warnings in frozen modules = documented debt per Mature Module Policy) |
+| Docs alignment | 5 | +2 (AGENTS tree + ARCHITECTURE mentions + TODO counts all enforced by `docs_sync`; SPEC/README updated per feature) |
+| Wiring & ergonomics | 5 | — (44 modules, prelude exports, dispatch + steps complete) |
+| Footprint | 4 | — (9 deps unchanged; ceval/qsolve added zero new deps) |
+
+**Total: 28/30** (baseline 19/30). Remaining 2 points: dependency footprint at its practical ceiling, clippy style debt frozen by policy. Next improvement lever: competitive intelligence to seed features users feel (the 3 speculative Low items stay parked).
+
 ### High Priority
-(none currently — optimization completed this cycle)
+(none currently — Σ/∏ completed this cycle)
 
 ### Medium Priority
-(none currently)
+- [ ] **Implicit differentiation** — `dy/dx` for `F(x, y) = 0` as `-F_x/F_y` (thin over existing partials; classic Calc-1 topic, step-by-step in the notebook). (From qalculate pass.)
+- [ ] **Dot/cross product REPL commands** — thin over `Matrix` arithmetic. (From qalculate pass.)
+- [ ] **Number-base conversion** — `base <n> <bin|oct|hex|base<B>>` output conversion + exact `n to base` formatting; parser literal support (`0x..`) deliberately deferred (mature module). (From qalculate pass.)
+- [x] **Complex-number expression evaluation** — `ceval` module: `eval_complex`/`eval_complex_str` over the Expr AST (`Var("i")` = imaginary unit, no parser changes), principal-branch ln/sqrt/pow/exp/trig/inverse-trig/hyperbolic, exact integer powers, `cval <expr> [with <var>=<val>,...]` REPL command, pretty `format_complex` (snaps IEEE −0.0 and noise so `exp(i*pi)` renders `-1`). Validated by Euler identity, principal branches, identity cross-checks (`sin(2i) = i·sinh 2`), and `asin(2)` closed form. (2026-09-15)
 
 ### Low Priority
+- [ ] **Exact symbolic linear system solve** (qalculate's `multisolve`) — 2–4 variables via `to_poly` + rational Gaussian elimination; falls back to the numeric `solve-system`. (From qalculate pass.)
+- [x] **Symbolic quadratic solving** — `qsolve` module: `solve_symbolic(&Expr, var)` extracts coefficients via `to_poly` after simplification, classifies by discriminant (perfect-square → exact integer roots, zero → double root, negative → complex-conjugate roots as Exprs with the `i` literal, evaluable by `ceval`), 12-sig snapping otherwise. `qsolve <expr> [= rhs]` REPL command with step-by-step output (equation → coefficients → discriminant → roots); exactly one inferred variable (avoids the trailing-token ambiguity class). Cubic+ via radicals out of scope. (2026-09-15)
 - [x] **ILU(0)-preconditioned Krylov solvers** — `Ilu0::factorize` (zero-fill LU over A's sparsity pattern, row-wise IKJ) + triangular solves; `bicgstab_ilu` preconditioned BiCGStab via a generic preconditioner-closure core. Exact (1 iteration) on no-fill matrices like tridiagonals; `spbicg ilu` REPL flag.
 - [x] **Stiff ODE solvers (implicit BDF)** — `bdf2_system`/`bdf2_trajectory` in `stiff.rs`: fixed-step BDF2 (A-stable, 2nd order) with one trapezoidal startup step, reusing the shared Newton core; validated by order-2 convergence ratio, stiff-decay stability, and Robertson mass conservation
 - [x] **B-spline / Hermite interpolation** — `bspline` module (basis functions, de Boor eval, cubic interpolation via knot averaging) + `CubicHermite`; `bspline`/`hermite` REPL commands

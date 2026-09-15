@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     // Check for "notebook" subcommand
     if input == "notebook" || input.starts_with("notebook ") {
         let args: Vec<&str> = input.split_whitespace().collect();
-        let file = args.get(1).map(|s| std::path::PathBuf::from(s));
+        let file = args.get(1).map(std::path::PathBuf::from);
         let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(3000);
         return run_notebook(file, port).map_err(Into::into);
     }

@@ -40,7 +40,7 @@ pub fn integrate_trap<F: Fn(f64) -> f64>(f: F, a: f64, b: f64, n: usize) -> f64 
 /// Simpson's 1/3 rule for definite integrals over `[a, b]` using `n` panels.
 /// `n` must be even.
 pub fn integrate_simpson<F: Fn(f64) -> f64>(f: F, a: f64, b: f64, n: usize) -> Result<f64> {
-    if n == 0 || n % 2 != 0 {
+    if n == 0 || !n.is_multiple_of(2) {
         return Err(MathError::InvalidArgument(
             "Simpson's rule requires n > 0 and even".into(),
         ));
@@ -473,7 +473,7 @@ mod tests {
         // ∫_0^1 exp(-x²) dx ≈ 0.7468241328124270
         let f = |x: f64| (-x * x).exp();
         let v = integrate_romberg(f, 0.0, 1.0, 10).unwrap();
-        assert!((v - 0.7468241328124270).abs() < 1e-10, "got {}", v);
+        assert!((v - 0.746_824_132_812_427).abs() < 1e-10, "got {}", v);
     }
 
     #[test]

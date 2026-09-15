@@ -179,9 +179,7 @@ impl Matrix {
             }
             if pivot != col {
                 for c in 0..=n {
-                    let tmp = a[col * (n + 1) + c];
-                    a[col * (n + 1) + c] = a[pivot * (n + 1) + c];
-                    a[pivot * (n + 1) + c] = tmp;
+                    a.swap(col * (n + 1) + c, pivot * (n + 1) + c);
                 }
             }
             let piv = a[col * (n + 1) + col];
@@ -327,9 +325,7 @@ impl Matrix {
             }
             if pivot != row {
                 for c in col..m {
-                    let tmp = a[row * m + c];
-                    a[row * m + c] = a[pivot * m + c];
-                    a[pivot * m + c] = tmp;
+                    a.swap(row * m + c, pivot * m + c);
                 }
             }
             let piv = a[row * m + col];
@@ -1350,7 +1346,7 @@ impl Lu {
             }
             e[i] = 0.0;
         }
-        Ok(Matrix::from_row_major(n, n, inv)?)
+        Matrix::from_row_major(n, n, inv)
     }
 }
 
@@ -1860,7 +1856,7 @@ mod tests {
         ]).unwrap();
         let fact = a.lu().unwrap();
         assert!(close(fact.determinant(), -2.0));
-        let x = fact.solve(&vec![4.0, 5.0]).unwrap();
+        let x = fact.solve(&[4.0, 5.0]).unwrap();
         // 2*x2 = 4 => x2 = 2; x1 + 3*x2 = 5 => x1 = -1
         assert!(vec_close(&x, &[-1.0, 2.0]));
     }

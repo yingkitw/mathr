@@ -3,6 +3,8 @@
 
 use mathr::fastmath::{fast_cos, fast_exp, fast_log, fast_sin, fast_sqrt, fast_tan, ChebyshevApprox};
 
+const PI: f64 = std::f64::consts::PI;
+
 fn main() {
     println!("=== ChebyshevApprox: custom function ===");
     let approx = ChebyshevApprox::new(|x| x.sin() * x.cos(), -3.0, 3.0, 12);
@@ -13,14 +15,14 @@ fn main() {
     }
 
     println!("\n=== fast_sin vs std sin ===");
-    for x in [0.0, 0.5, 1.0, 2.0, 3.14159, 10.0, 100.0, -7.0] {
+    for x in [0.0, 0.5, 1.0, 2.0, PI, 10.0, 100.0, -7.0] {
         let fast = fast_sin(x);
         let exact = x.sin();
         println!("  sin({:8.5}) = {:.15}  (exact: {:.15}, err: {:.2e})", x, fast, exact, (fast - exact).abs());
     }
 
     println!("\n=== fast_cos vs std cos ===");
-    for x in [0.0, 0.5, 1.0, 2.0, 3.14159, 10.0, 100.0, -7.0] {
+    for x in [0.0, 0.5, 1.0, 2.0, PI, 10.0, 100.0, -7.0] {
         let fast = fast_cos(x);
         let exact = x.cos();
         println!("  cos({:8.5}) = {:.15}  (exact: {:.15}, err: {:.2e})", x, fast, exact, (fast - exact).abs());

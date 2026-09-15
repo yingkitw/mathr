@@ -69,6 +69,7 @@
 //! and command keywords like `diff`, `solve`, `int`, `gcd`, etc.
 
 pub mod calculus;
+pub mod ceval;
 pub mod complex;
 pub mod curvefit;
 pub mod error;
@@ -109,6 +110,8 @@ pub mod bigdec;
 pub mod limit;
 pub mod poly;
 pub mod apart;
+pub mod qsolve;
+pub mod sumprod;
 
 pub use error::{MathError, Result};
 
@@ -137,6 +140,9 @@ pub mod prelude {
         jacobian as ad_jacobian, Dual,
     };
     pub use crate::mathml::{from_mathml, to_mathml, to_mathml_doc};
+    pub use crate::ceval::{eval_complex, eval_complex_str};
+    pub use crate::qsolve::solve_symbolic;
+    pub use crate::sumprod::{product, summation};
     pub use crate::serialize::{from_json, from_rpn, from_sexpr, to_json, to_rpn, to_sexpr};
     pub use crate::interval::{Interval, eval_interval};
     pub use crate::bigdec::{eval_decimal, BigDecimal};

@@ -32,7 +32,7 @@ fn main() {
 
     // --- sinc function ---
     println!("\n--- sinc function ---");
-    for x in [-1.0, -0.5, 0.0, 0.5, 1.0, 3.14159] {
+    for x in [-1.0, -0.5, 0.0, 0.5, 1.0, std::f64::consts::PI] {
         let e = Parser::parse(&format!("sinc({})", x)).unwrap();
         let v = eval(&e, &ctx).unwrap();
         println!("  sinc({:7.5}) = {:.10}", x, v);

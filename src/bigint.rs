@@ -233,7 +233,7 @@ fn pollard_rho(n: &BigInt) -> Option<BigInt> {
 
 /// f(x) = x^2 + c (mod n)
 fn pollard_f(x: &BigInt, c: &BigInt, n: &BigInt) -> BigInt {
-    ((x * x + c) % n).into()
+    (x * x + c) % n
 }
 
 /// Factorial of n: n! = 1 * 2 * ... * n.
@@ -263,7 +263,7 @@ fn fib_pair(n: u64) -> (BigInt, BigInt) {
     let f2k = &a * ((&b + &b) - &a);
     // F(2k+1) = F(k)^2 + F(k+1)^2
     let f2k1 = &a * &a + &b * &b;
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (f2k, f2k1)
     } else {
         let next = &f2k + &f2k1;

@@ -210,6 +210,57 @@ mathr> dec x*2 + 1 with x=1.5 prec 10
 - Decimal exponents beyond ±1,000,000 (i.e. 10^±1000000) are rejected.
 - Results are correctly rounded to `prec` significant digits but are not interval-certified (no outward rounding).
 
+### Complex Evaluation
+
+`cval` evaluates expressions over the complex numbers. The parser needs no changes: `i` parses as a variable and is interpreted as the imaginary unit (implicit multiplication makes `1 + 2i` natural); other variables bind real values via `with`. Integer powers are exact; `ln`, `sqrt`, powers, and inverse trigonometric functions use the principal branch (`arg` in `(-pi, pi]`).
+
+```
+mathr> cval exp(i*pi)
+-1
+mathr> cval (1 + 2i) * (3 - i)
+5 + 5i
+mathr> cval sqrt(-1)
+i
+mathr> cval ln(-1)
+3.1415926536i
+mathr> cval x*i - y with x=2, y=-1
+1 + 2i
+```
+
+Supported functions: `sqrt`, `exp`, `ln`, `log`, `log10`, `log2`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `abs`. Tiny components (below `1e-12`) are snapped away in output.
+
+### Symbolic Quadratic Solve
+
+`qsolve` solves `expr = 0` (or `lhs = rhs`) symbolically for a single inferred variable when the equation is linear or quadratic after expansion. Discriminant classification: perfect-square discriminant → exact integer roots; zero → double root; negative → complex-conjugate roots written with the `i` literal (evaluate them with `cval`); otherwise roots are snapped to 12 significant digits.
+
+```
+mathr> qsolve x^2 - 4
+x = 2, x = -2
+mathr> qsolve x^2 = 2x + 3
+x = 3, x = -1
+mathr> qsolve x^2 - 2x + 5
+x = 1 + 2*i, x = 1 - 2*i
+mathr> qsolve 2x - 6
+x = 3
+```
+
+Limitations: degree > 2 is rejected (use `poly-roots` for numeric roots), non-polynomial expressions are rejected (use the numeric `solve`), and irrational roots are decimal approximations.
+
+### Summation & Product
+
+`sum` and `prod` evaluate Σ/∏ over inclusive integer bounds. Bounds come from the last two tokens; the variable is inferred (or given as a single-letter token before the bounds). Evaluation tiers: O(1) closed forms (var-independent → `expr·count`, `var` → arithmetic series, `var^2`/`var^3` → Faulhaber, `c^var` → geometric), an exact rational term loop (result shown as a fraction, e.g. `Σ 1/k, k=1..10 = 7381/2520`), else f64. Empty range: Σ = 0, ∏ = 1. Max 1,000,000 terms.
+
+```
+mathr> sum k 1 100
+5050
+mathr> sum 1/k 1 10
+7381/2520
+mathr> sum 2^x 0 10
+2047
+mathr> prod x 1 5
+120
+```
+
 ### Limits
 
 The `limit` module computes two-sided limits `lim x→a f(x)` for finite points and for `x → ±∞`, using a three-stage strategy:
@@ -512,6 +563,10 @@ p=0.001
 | `taylor <expr> [a] [order]` | Taylor series |
 | `laurent <expr> [a] [k] [N]` | Laurent series around a pole |
 | `rat <a> <op> <b>` | Exact rational arithmetic |
+| `cval <expr> [with <var>=<val>,...]` | Complex evaluation (`i` = imaginary unit, principal branch) |
+| `qsolve <expr> [= rhs]` | Symbolic linear/quadratic solve (one variable, roots exact when the discriminant is a perfect square) |
+| `sum <expr> [<var>] <a> <b>` | Σ over inclusive integer bounds (exact rational results when possible; closed forms for arithmetic/geometric/Faulhaber patterns) |
+| `prod <expr> [<var>] <a> <b>` | ∏ over inclusive integer bounds |
 | `fourier <expr> L N [x]` | Fourier series on [-L, L] |
 | `mc <expr> a b N [seed]` | Monte Carlo integral |
 | `sample <dist> <params...> N [seed]` | Random sampling |

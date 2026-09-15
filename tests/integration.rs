@@ -7,7 +7,7 @@ use mathr::fft;
 use mathr::interpolate;
 use mathr::laurent;
 use mathr::matrix::Matrix;
-use mathr::notebook::{Notebook, NotebookCell};
+use mathr::notebook::Notebook;
 use mathr::numtheory;
 use mathr::parser::Parser;
 use mathr::ode;
@@ -1765,7 +1765,7 @@ fn fastmath_repl_dispatch() {
 fn plot_function_to_bytes_produces_valid_png() {
     use mathr::plot::plot_function_to_bytes;
     let expr = Parser::parse("sin(x)").unwrap();
-    let bytes = plot_function_to_bytes(&expr, "x", 0.0, 3.14159, 100, "y = sin(x)").unwrap();
+    let bytes = plot_function_to_bytes(&expr, "x", 0.0, std::f64::consts::PI, 100, "y = sin(x)").unwrap();
     // PNG magic bytes
     assert_eq!(&bytes[..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
     assert!(bytes.len() > 1000, "PNG should be substantial: {} bytes", bytes.len());
@@ -2087,7 +2087,7 @@ fn gcd_lcm_as_functions_eval() {
 }
 
 #[test]
-fn binomial_C_function_eval() {
+fn binomial_c_function_eval() {
     let ctx = mathr::eval::Context::standard();
     assert_eq!(mathr::repl::dispatch_str("C(5, 2)", ctx.clone()).unwrap().unwrap(), "10");
     assert_eq!(mathr::repl::dispatch_str("C(10, 3)", ctx).unwrap().unwrap(), "120");
@@ -2259,6 +2259,129 @@ fn serialize_bad_format_repl() {
 }
 
 // =========================================================================
+// Interval arithmetic
+// =========================================================================
+
+// Complex evaluation
+// =========================================================================
+
+#[test]
+fn cval_repl_euler_identity() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("cval exp(i*pi)", ctx).unwrap().unwrap();
+    assert_eq!(result, "-1");
+}
+
+#[test]
+fn cval_repl_arithmetic_display() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("cval (1 + 2i) * (3 - i)", ctx).unwrap().unwrap();
+    assert_eq!(result, "5 + 5i");
+}
+
+#[test]
+fn cval_repl_sqrt_negative() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("cval sqrt(-1)", ctx).unwrap().unwrap();
+    assert_eq!(result, "i");
+}
+
+#[test]
+fn cval_repl_variables() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("cval x*i - y with x=2, y=-1", ctx).unwrap().unwrap();
+    assert_eq!(result, "1 + 2i");
+}
+
+#[test]
+fn cval_repl_error_on_unknown_var() {
+    let ctx = mathr::eval::Context::standard();
+    assert!(mathr::repl::dispatch_str("cval i + nosuchvar", ctx).is_err());
+}
+
+// Symbolic quadratic solve
+// =========================================================================
+
+#[test]
+fn qsolve_repl_integer_roots() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qsolve x^2 - 4", ctx).unwrap().unwrap();
+    assert_eq!(result, "x = 2, x = -2");
+}
+
+#[test]
+fn qsolve_repl_rhs_form() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qsolve x^2 = 2x + 3", ctx).unwrap().unwrap();
+    assert_eq!(result, "x = 3, x = -1");
+}
+
+#[test]
+fn qsolve_repl_complex_roots() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qsolve x^2 - 2x + 5", ctx).unwrap().unwrap();
+    assert_eq!(result, "x = 1 + 2*i, x = 1 - 2*i");
+}
+
+#[test]
+fn qsolve_repl_linear() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qsolve 2x - 6", ctx).unwrap().unwrap();
+    assert_eq!(result, "x = 3");
+}
+
+#[test]
+fn qsolve_repl_steps_have_discriminant() {
+    let ctx = mathr::eval::Context::standard();
+    let steps = mathr::repl::dispatch_steps("qsolve x^2 - 2x + 5", ctx).unwrap();
+    assert!(steps.len() >= 4);
+    assert!(steps.iter().any(|s| s.contains("discriminant")));
+    assert!(steps.last().unwrap().contains("1 + 2*i"));
+}
+
+#[test]
+fn qsolve_repl_rejects_non_polynomial() {
+    let ctx = mathr::eval::Context::standard();
+    assert!(mathr::repl::dispatch_str("qsolve sin(x) = 0", ctx).is_err());
+}
+
+// Summation / product
+// =========================================================================
+
+#[test]
+fn sum_repl_arithmetic_series() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("sum k 1 100", ctx).unwrap().unwrap();
+    assert_eq!(result, "5050");
+}
+
+#[test]
+fn sum_repl_huge_range_exact() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("sum x 1 1000000", ctx).unwrap().unwrap();
+    assert_eq!(result, "500000500000");
+}
+
+#[test]
+fn sum_repl_exact_rational() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("sum 1/k 1 10", ctx).unwrap().unwrap();
+    assert_eq!(result, "7381/2520");
+}
+
+#[test]
+fn prod_repl_basic() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("prod x 1 5", ctx).unwrap().unwrap();
+    assert_eq!(result, "120");
+}
+
+#[test]
+fn sum_repl_rejects_huge_range() {
+    let ctx = mathr::eval::Context::standard();
+    assert!(mathr::repl::dispatch_str("sum x 1 2000000", ctx).is_err());
+}
+
 // Interval arithmetic
 // =========================================================================
 
@@ -2957,7 +3080,7 @@ fn minimize_repl_dispatch() {
         let (a, b) = (p[0] - 1.0, p[0] * p[0] - p[1]);
         a * a + 100.0 * b * b
     };
-    let res = mathr::optim::nelder_mead(&rosen, &[-1.2, 1.0], &mathr::optim::OptOptions::default())
+    let res = mathr::optim::nelder_mead(rosen, &[-1.2, 1.0], &mathr::optim::OptOptions::default())
         .unwrap();
     assert!(res.converged);
     assert!(close(res.x[0], 1.0, 1e-4) && close(res.x[1], 1.0, 1e-4));

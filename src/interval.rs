@@ -1300,7 +1300,7 @@ mod tests {
             let e = Parser::parse(src).unwrap();
             let vars = HashMap::new();
             let r = eval_interval(&e, &vars).unwrap();
-            assert!(r.is_empty == false);
+            assert!(!r.is_empty);
             assert_abs_diff_eq!(r.lo, expected);
             assert_abs_diff_eq!(r.hi, expected);
         }

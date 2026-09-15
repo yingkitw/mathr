@@ -9,14 +9,14 @@ use std::f64::consts::PI;
 /// Lanczos approximation coefficients (g=7, n=9).
 const LANCZOS_G: f64 = 7.0;
 const LANCZOS_C: [f64; 9] = [
-    0.99999999999980993,
+    0.999_999_999_999_809_9,
     676.5203681218851,
     -1259.1392167224028,
-    771.32342877765313,
-    -176.61502916214059,
+    771.323_428_777_653_1,
+    -176.615_029_162_140_6,
     12.507343278686905,
     -0.13857109526572012,
-    9.9843695780195716e-6,
+    9.984_369_578_019_572e-6,
     1.5056327351493116e-7,
 ];
 
@@ -283,7 +283,7 @@ pub fn incomplete_gamma_p(a: f64, x: f64) -> f64 {
         let mut f = d;
         for n in 1..300 {
             let an = -(n as f64) * (n as f64 - a);
-            b = b + 2.0;
+            b += 2.0;
             d = an * d + b;
             if d.abs() < tiny {
                 d = tiny;
@@ -429,7 +429,7 @@ mod tests {
         // J_0(0) = 1
         assert!(close(bessel_j0(0.0), 1.0, 1e-12));
         // J_0 has its first zero near x = 2.4048
-        assert!(close(bessel_j0(2.4048255576957727), 0.0, 1e-6));
+        assert!(close(bessel_j0(2.404_825_557_695_773), 0.0, 1e-6));
         // J_0(5) ≈ -0.17759677131434
         assert!(close(bessel_j0(5.0), -0.17759677131434, 1e-8));
     }
@@ -570,7 +570,7 @@ pub fn polygamma(m: u32, x: f64) -> f64 {
         0 => digamma(x),
         1 => trigamma(x),
         _ => {
-            let sign: f64 = if (m + 1) % 2 == 0 { 1.0 } else { -1.0 };
+            let sign: f64 = if (m + 1).is_multiple_of(2) { 1.0 } else { -1.0 };
             let mfact: f64 = (1..=m as u64).product::<u64>() as f64;
             sign * mfact * hurwitz_zeta(m as f64 + 1.0, x)
         }
@@ -790,7 +790,7 @@ mod zeta_gamma_tests {
         // ψ(2) = 1 − γ
         assert!(close(digamma(2.0), 0.4227843350984671, 1e-13));
         // ψ(10) = 2.251752589066721…
-        assert!(close(digamma(10.0), 2.2517525890667211, 1e-11));
+        assert!(close(digamma(10.0), 2.251_752_589_066_721, 1e-11));
         // reflection: ψ(−0.5) = ψ(1.5) + π/tan(π·0.5)... ψ(−0.5) = 2·ln 2 − γ
         assert!(close(digamma(-0.5), 0.03648997397857652, 1e-13));
         assert!(digamma(0.0).is_nan());
@@ -886,7 +886,7 @@ mod zeta_gamma_tests {
         assert!(close(elliptic_k(0.0), FRAC_PI_2, 1e-14));
         assert!(close(elliptic_e(0.0), FRAC_PI_2, 1e-14));
         // K(½) = 1.6857503548125960 (modulus k = 0.5, parameter m = 0.25)
-        assert!(close(elliptic_k(0.5), 1.6857503548125960, 1e-13));
+        assert!(close(elliptic_k(0.5), 1.685_750_354_812_596, 1e-13));
         // E(½) = 1.4674622093394272
         assert!(close(elliptic_e(0.5), 1.4674622093394272, 1e-13));
         // K(0.9) = 2.2805491384227702
@@ -922,7 +922,7 @@ mod zeta_gamma_tests {
         assert!(close(eval_str("zeta(2)", &ctx), std::f64::consts::PI.powi(2) / 6.0, 1e-12));
         assert!(close(eval_str("harmonic(10)", &ctx), 2.9289682539682538, 1e-14));
         assert!(close(eval_str("digamma(1) + 0.5772156649015329", &ctx), 0.0, 1e-13));
-        assert!(close(eval_str("elliptic_k(0.5)", &ctx), 1.6857503548125960, 1e-12));
+        assert!(close(eval_str("elliptic_k(0.5)", &ctx), 1.685_750_354_812_596, 1e-12));
         assert!(close(eval_str("polygamma(2, 1)", &ctx), -2.0 * zeta(3.0), 1e-12));
     }
 

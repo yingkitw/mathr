@@ -461,7 +461,7 @@ pub fn isolate_real_roots(coeffs: &[i64]) -> Result<Vec<(f64, f64)>> {
     // Negative roots: use p(-x) with identity Möbius (1, 0, 0, 1).
     // Root at 0 is already found above, so skip it here.
     let mut neg_coeffs: Vec<i128> = p.iter().enumerate().map(|(i, &c)| {
-        if (p.len() - 1 - i) % 2 == 0 { c } else { -c }
+        if (p.len() - 1 - i).is_multiple_of(2) { c } else { -c }
     }).collect();
     neg_coeffs = trim_leading_zeros(&neg_coeffs);
     if neg_coeffs.len() > 1 {
@@ -651,7 +651,7 @@ mod tests {
         // (x-1)(x-2)(x-3) = x^3 - 6x^2 + 11x - 6
         let intervals = isolate_real_roots(&[1, -6, 11, -6]).unwrap();
         assert_eq!(intervals.len(), 3, "expected 3 roots, got {:?}", intervals);
-        let roots = vec![1.0, 2.0, 3.0];
+        let roots = [1.0, 2.0, 3.0];
         for (i, r) in roots.iter().enumerate() {
             let (lo, hi) = intervals[i];
             assert!(lo <= *r && *r <= hi, "root {} not in interval ({}, {})", r, lo, hi);
@@ -663,7 +663,7 @@ mod tests {
         // (x+2)(x-1)(x-3) = x^3 - 2x^2 - 5x + 6
         let intervals = isolate_real_roots(&[1, -2, -5, 6]).unwrap();
         assert_eq!(intervals.len(), 3, "expected 3 roots, got {:?}", intervals);
-        let roots = vec![-2.0, 1.0, 3.0];
+        let roots = [-2.0, 1.0, 3.0];
         for (i, r) in roots.iter().enumerate() {
             let (lo, hi) = intervals[i];
             assert!(lo <= *r && *r <= hi, "root {} not in interval ({}, {})", r, lo, hi);
@@ -692,7 +692,7 @@ mod tests {
         // (x-1)^2 = x^2 - 2x + 1 — repeated root at 1
         let intervals = isolate_real_roots(&[1, -2, 1]).unwrap();
         // Descartes' rule counts repeated roots as one interval
-        assert!(intervals.len() >= 1, "expected at least 1 root, got {:?}", intervals);
+        assert!(!intervals.is_empty(), "expected at least 1 root, got {:?}", intervals);
         let (lo, hi) = intervals[0];
         assert!(lo <= 1.0 && 1.0 <= hi, "root 1 not in interval ({}, {})", lo, hi);
     }
@@ -702,7 +702,7 @@ mod tests {
         // (x+1)(x-1)(x-2)(x+3) = x^4 + x^3 - 7x^2 - x + 6
         let intervals = isolate_real_roots(&[1, 1, -7, -1, 6]).unwrap();
         assert_eq!(intervals.len(), 4, "expected 4 roots, got {:?}", intervals);
-        let roots = vec![-3.0, -1.0, 1.0, 2.0];
+        let roots = [-3.0, -1.0, 1.0, 2.0];
         for (i, r) in roots.iter().enumerate() {
             let (lo, hi) = intervals[i];
             assert!(lo <= *r && *r <= hi, "root {} not in interval ({}, {})", r, lo, hi);

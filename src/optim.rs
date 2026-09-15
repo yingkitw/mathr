@@ -318,7 +318,7 @@ mod tests {
     fn nelder_mead_quadratic() {
         // f = (x-3)^2 + 2(y+1)^2: minimum (3, -1), value 0
         let f = |p: &[f64]| (p[0] - 3.0) * (p[0] - 3.0) + 2.0 * (p[1] + 1.0) * (p[1] + 1.0);
-        let r = nelder_mead(&f, &[0.0, 0.0], &OptOptions::default()).unwrap();
+        let r = nelder_mead(f, &[0.0, 0.0], &OptOptions::default()).unwrap();
         assert!(r.converged);
         assert!(close(r.x[0], 3.0, 1e-6), "x={:?}", r.x);
         assert!(close(r.x[1], -1.0, 1e-6), "y={:?}", r.x);
@@ -332,7 +332,7 @@ mod tests {
             let (a, b) = (p[0] - 1.0, p[0] * p[0] - p[1]);
             a * a + 100.0 * b * b
         };
-        let r = nelder_mead(&rosen, &[-1.2, 1.0], &OptOptions::default()).unwrap();
+        let r = nelder_mead(rosen, &[-1.2, 1.0], &OptOptions::default()).unwrap();
         assert!(r.converged, "iters={}", r.iterations);
         assert!(close(r.x[0], 1.0, 1e-4), "x={:?}", r.x);
         assert!(close(r.x[1], 1.0, 1e-4), "y={:?}", r.x);
@@ -347,7 +347,7 @@ mod tests {
                 .map(|i| (p[i] - (i + 1) as f64) * (p[i] - (i + 1) as f64))
                 .sum::<f64>()
         };
-        let r = nelder_mead(&f, &[0.0, 0.0, 0.0], &OptOptions::default()).unwrap();
+        let r = nelder_mead(f, &[0.0, 0.0, 0.0], &OptOptions::default()).unwrap();
         assert!(r.converged);
         for (i, xi) in r.x.iter().enumerate() {
             assert!(close(*xi, (i + 1) as f64, 1e-5), "x[{i}]={xi}");
@@ -359,7 +359,7 @@ mod tests {
         // one-dimensional with a tiny iteration budget
         let f = |p: &[f64]| (p[0] - 1.0) * (p[0] - 1.0);
         let opts = OptOptions { max_iter: 1, ..OptOptions::default() };
-        let r = nelder_mead(&f, &[0.0], &opts).unwrap();
+        let r = nelder_mead(f, &[0.0], &opts).unwrap();
         assert!(!r.converged);
         assert_eq!(r.iterations, 1);
     }
@@ -367,9 +367,9 @@ mod tests {
     #[test]
     fn nelder_mead_validation() {
         let f = |p: &[f64]| p.iter().sum();
-        assert!(nelder_mead(&f, &[], &OptOptions::default()).is_err());
-        assert!(nelder_mead(&f, &[f64::NAN], &OptOptions::default()).is_err());
+        assert!(nelder_mead(f, &[], &OptOptions::default()).is_err());
+        assert!(nelder_mead(f, &[f64::NAN], &OptOptions::default()).is_err());
         let opts = OptOptions { init_step: Some(vec![1.0, 1.0]), ..OptOptions::default() };
-        assert!(nelder_mead(&f, &[1.0], &opts).is_err()); // step length mismatch
+        assert!(nelder_mead(f, &[1.0], &opts).is_err()); // step length mismatch
     }
 }

@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn to_f64_round_trip() {
-        assert!((to_f64(&dec("3.14159")) - 3.14159).abs() < 1e-14);
+        assert!((to_f64(&dec("123.456")) - 123.456).abs() < 1e-14);
         assert!(to_f64(&dec("1e-400")).is_infinite() || to_f64(&dec("1e-400")) == 0.0);
     }
 
@@ -1160,11 +1160,11 @@ mod tests {
     fn ln_tiny_and_huge() {
         // ln(0.001) = -3*ln(10) ≈ -6.9078
         let v = ln(&dec("0.001"), 30).unwrap();
-        assert!(close_dec(&v, -3.0 * 2.302585092994046, 1e-2), "ln(0.001): {}", to_f64(&v));
+        assert!(close_dec(&v, -3.0 * std::f64::consts::LN_10, 1e-2), "ln(0.001): {}", to_f64(&v));
 
         // ln(1000) = 3*ln(10) ≈ 6.9078
         let v2 = ln(&dec("1000"), 30).unwrap();
-        assert!(close_dec(&v2, 3.0 * 2.302585092994046, 1e-2), "ln(1000): {}", to_f64(&v2));
+        assert!(close_dec(&v2, 3.0 * std::f64::consts::LN_10, 1e-2), "ln(1000): {}", to_f64(&v2));
     }
 
     #[test]

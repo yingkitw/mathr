@@ -634,6 +634,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // "3.14" is a decimal-parsing fixture, not pi
     fn numbers_and_vars() {
         assert_eq!(p("3"), Expr::num(3.0));
         assert_eq!(p("3.14"), Expr::num(3.14));

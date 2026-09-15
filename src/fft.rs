@@ -138,14 +138,14 @@ fn reverse_bits(x: usize, bits: usize) -> usize {
         table
     };
 
-    let b0 = REV_BYTE[(x & 0xFF) as usize] as usize;
-    let b1 = REV_BYTE[((x >> 8) & 0xFF) as usize] as usize;
-    let b2 = REV_BYTE[((x >> 16) & 0xFF) as usize] as usize;
-    let b3 = REV_BYTE[((x >> 24) & 0xFF) as usize] as usize;
-    let b4 = REV_BYTE[((x >> 32) & 0xFF) as usize] as usize;
-    let b5 = REV_BYTE[((x >> 40) & 0xFF) as usize] as usize;
-    let b6 = REV_BYTE[((x >> 48) & 0xFF) as usize] as usize;
-    let b7 = REV_BYTE[((x >> 56) & 0xFF) as usize] as usize;
+    let b0 = REV_BYTE[x & 0xFF] as usize;
+    let b1 = REV_BYTE[(x >> 8) & 0xFF] as usize;
+    let b2 = REV_BYTE[(x >> 16) & 0xFF] as usize;
+    let b3 = REV_BYTE[(x >> 24) & 0xFF] as usize;
+    let b4 = REV_BYTE[(x >> 32) & 0xFF] as usize;
+    let b5 = REV_BYTE[(x >> 40) & 0xFF] as usize;
+    let b6 = REV_BYTE[(x >> 48) & 0xFF] as usize;
+    let b7 = REV_BYTE[(x >> 56) & 0xFF] as usize;
 
     let reversed = (b0 << 56) | (b1 << 48) | (b2 << 40) | (b3 << 32)
                  | (b4 << 24) | (b5 << 16) | (b6 << 8)  |  b7;
@@ -347,8 +347,8 @@ mod tests {
 
     #[test]
     fn power_of_two_check() {
-        assert!(fft(&vec![Complex::ZERO; 3]).is_err());
-        assert!(fft(&vec![Complex::ZERO; 8]).is_ok());
+        assert!(fft(&[Complex::ZERO; 3]).is_err());
+        assert!(fft(&[Complex::ZERO; 8]).is_ok());
     }
 
     #[test]

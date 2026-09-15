@@ -146,7 +146,7 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
 
     // apart: partial fraction decomposition steps
     if let Some(rest) = line.strip_prefix("apart ") {
-        return Ok(crate::apart::apart_steps_str(rest.trim())?);
+        return crate::apart::apart_steps_str(rest.trim());
     }
 
     // solve: show equation, method, root
@@ -176,7 +176,12 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
 
     // limit: show substitution / L'Hôpital / probe steps
     if let Some(rest) = line.strip_prefix("limit ") {
-        return Ok(limit_steps_str(rest.trim())?);
+        return limit_steps_str(rest.trim());
+    }
+
+    // qsolve: show equation, coefficients, discriminant, roots
+    if let Some(rest) = line.strip_prefix("qsolve ") {
+        return crate::qsolve::qsolve_steps_str(rest.trim());
     }
 
     // For all other REPL commands (int, romberg, fft, plot, stats, etc.),
@@ -200,6 +205,10 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "mathml ",
         "serialize ",
         "interval ",
+        "cval ",
+        "qsolve ",
+        "sum ",
+        "prod ",
         "spcg ",
         "spbicg ",
     ];
@@ -709,6 +718,34 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("interval ") {
         return do_interval(rest.trim());
+    }
+    if line == "cval" {
+        return Err(crate::error::MathError::Eval(
+            "cval needs: <expr> [with <var>=<val>,...]".into(),
+        ));
+    }
+    if let Some(rest) = line.strip_prefix("cval ") {
+        return do_cval(rest.trim());
+    }
+    if line == "qsolve" {
+        return Err(crate::error::MathError::Eval(
+            "qsolve needs: <expr> [= rhs]  (linear/quadratic, one variable)".into(),
+        ));
+    }
+    if let Some(rest) = line.strip_prefix("qsolve ") {
+        let mut steps = crate::qsolve::qsolve_steps_str(rest.trim())?;
+        return Ok(Some(steps.pop().unwrap_or_default()));
+    }
+    if line == "sum" || line == "prod" {
+        return Err(crate::error::MathError::Eval(
+            "sum/prod need: <expr> [<var>] <a> <b>".into(),
+        ));
+    }
+    if let Some(rest) = line.strip_prefix("sum ") {
+        return do_sumprod(rest.trim(), true);
+    }
+    if let Some(rest) = line.strip_prefix("prod ") {
+        return do_sumprod(rest.trim(), false);
     }
 
     // Default: evaluate the expression and print the value
@@ -1354,7 +1391,7 @@ fn do_fit(rest: &str) -> Result<Option<String>> {
     while end > 0 && tokens[end - 1].parse::<f64>().is_ok() {
         end -= 1;
     }
-    if end == tokens.len() || (tokens.len() - end) % 2 != 0 {
+    if end == tokens.len() || !(tokens.len() - end).is_multiple_of(2) {
         return Err(crate::error::MathError::Eval(
             "`fit` needs x y data pairs at the end: fit <expr> [in <var>] [with p=v,...] x1 y1 x2 y2 ...".into(),
         ));
@@ -2368,6 +2405,45 @@ fn do_interval(rest: &str) -> Result<Option<String>> {
     Ok(Some(result.to_string()))
 }
 
+fn do_cval(rest: &str) -> Result<Option<String>> {
+    let z = crate::ceval::eval_complex_str(rest)?;
+    Ok(Some(crate::ceval::format_complex(z)))
+}
+
+/// Σ/∏ over integer bounds: `<expr> [<var>] <a> <b>` with bounds from the end.
+fn do_sumprod(rest: &str, is_sum: bool) -> Result<Option<String>> {
+    let (src, var, a, b) = crate::sumprod::parse_bounds(rest)?;
+    let e = Parser::parse(src.trim())?;
+    let var = if var.is_empty() {
+        let mut vs = e.variables();
+        match vs.len() {
+            1 => vs.remove(0),
+            0 => String::new(), // constant term — handled by the closed form
+            _ => {
+                return Err(crate::error::MathError::InvalidArgument(format!(
+                    "multiple variables ({}) — specify one: {} <expr> <var> {} {}",
+                    vs.join(", "),
+                    if is_sum { "sum" } else { "prod" },
+                    a,
+                    b
+                )))
+            }
+        }
+    } else {
+        var
+    };
+    let result = if is_sum {
+        crate::sumprod::summation(&e, &var, a, b)?
+    } else {
+        crate::sumprod::product(&e, &var, a, b)?
+    };
+    let out = match &result {
+        Expr::Num(v) => format_value(*v),
+        other => other.to_string(),
+    };
+    Ok(Some(out))
+}
+
 /// Split `var=[lo,hi], var=[lo,hi], ...` into individual assignments, respecting
 /// `[...]` brackets so the comma inside an interval is not treated as a separator.
 fn split_assignments(s: &str) -> Vec<String> {
@@ -2503,23 +2579,17 @@ fn do_ad(rest: &str, ctx: &Context) -> Result<Option<String>> {
 }
 
 fn do_romberg(rest: &str) -> Result<Option<String>> {
-    // Format: "<expr> a b [levels=8]"
+    // Format: "<expr> a b" (expr may contain spaces; fixed 8 Romberg levels)
     let tokens: Vec<&str> = rest.split_whitespace().collect();
     if tokens.len() < 3 {
-        return Err(crate::error::MathError::Eval("romberg needs: <expr> a b [levels]".into()));
+        return Err(crate::error::MathError::Eval("romberg needs: <expr> a b".into()));
     }
     let b: f64 = tokens[tokens.len() - 1].parse()
         .map_err(|_| crate::error::MathError::Eval("bad b".into()))?;
     let a: f64 = tokens[tokens.len() - 2].parse()
         .map_err(|_| crate::error::MathError::Eval("bad a".into()))?;
-    let levels: usize = if tokens.len() >= 4 {
-        tokens[tokens.len() - 3].parse().unwrap_or(8)
-    } else {
-        8
-    };
-    let levels = if tokens.len() == 3 { 8 } else if tokens.len() == 4 { 8 } else { levels };
-    let expr_end = if tokens.len() >= 4 { tokens.len() - 3 } else { tokens.len() - 2 };
-    let expr_src = tokens[..expr_end].join(" ");
+    let levels: usize = 8;
+    let expr_src = tokens[..tokens.len() - 2].join(" ");
     let e = Parser::parse(&expr_src)?;
     let ctx2 = Context::standard();
     let f = move |x: f64| {
@@ -2775,7 +2845,7 @@ fn do_tikhonov(rest: &str) -> Result<Option<String>> {
 /// 4+ points, reduced degree for 2-3) evaluated at x_at.
 fn do_bspline(rest: &str) -> Result<Option<String>> {
     let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.len() < 5 || tokens.len() % 2 == 0 {
+    if tokens.len() < 5 || tokens.len().is_multiple_of(2) {
         return Err(crate::error::MathError::Eval(
             "bspline expects: x1 y1 x2 y2 ... x_at (at least 3 points)".into(),
         ));
@@ -2810,7 +2880,7 @@ fn do_bspline(rest: &str) -> Result<Option<String>> {
 /// given slopes evaluated at x_at.
 fn do_hermite(rest: &str) -> Result<Option<String>> {
     let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.len() < 7 || (tokens.len() - 1) % 3 != 0 {
+    if tokens.len() < 7 || !(tokens.len() - 1).is_multiple_of(3) {
         return Err(crate::error::MathError::Eval(
             "hermite expects: x1 y1 d1 x2 y2 d2 ... x_at (at least 2 points)"
                 .into(),
@@ -2989,7 +3059,7 @@ fn do_det(rest: &str) -> Result<Option<String>> {
 fn do_spline(rest: &str) -> Result<Option<String>> {
     // Format: "x1 y1 x2 y2 ...  [eval x_value]"
     let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.len() < 3 || tokens.len() % 2 == 0 {
+    if tokens.len() < 3 || tokens.len().is_multiple_of(2) {
         return Err(crate::error::MathError::Eval(
             "spline expects: x1 y1 x2 y2 ... [x_at]".into(),
         ));
@@ -3016,7 +3086,7 @@ fn do_spline(rest: &str) -> Result<Option<String>> {
 fn do_pchip(rest: &str) -> Result<Option<String>> {
     // Format: "x1 y1 x2 y2 ... x_at" (same shape as `spline`)
     let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.len() < 5 || tokens.len() % 2 == 0 {
+    if tokens.len() < 5 || tokens.len().is_multiple_of(2) {
         return Err(crate::error::MathError::Eval(
             "pchip expects: x1 y1 x2 y2 ... x_at (at least 3 points)".into(),
         ));
@@ -3277,7 +3347,14 @@ commands:
   mathml import <ml> import Presentation MathML to expression
   serialize <fmt> <expr>      export expression (fmt: sexpr | json | rpn)
   serialize <fmt> import <t>  import from format and show the expression
-  interval <expr> with <var>=[lo,hi],...  rigorous bounds via interval arithmetic
+   interval <expr> with <var>=[lo,hi],...  rigorous bounds via interval arithmetic
+   cval <expr> [with <var>=<val>,...]
+                          complex evaluation (i = imaginary unit)
+   qsolve <expr> [= rhs]  symbolic linear/quadratic solve (one variable)
+   sum <expr> [<var>] <a> <b>
+                          summation over integer bounds (exact when possible)
+   prod <expr> [<var>] <a> <b>
+                          product over integer bounds
   legendre n [x]      Legendre P_n(x), or Gauss–Legendre n-node weights
   integrate <expr> [var]
                       symbolic integration of <expr> with respect to var
@@ -3354,6 +3431,29 @@ mod tests {
         let steps = dispatch_steps("rat 1/2 + 1/3", Context::standard()).unwrap();
         assert_eq!(steps.len(), 1);
         assert!(steps[0].contains("5/6"));
+    }
+
+    #[test]
+    fn romberg_basic() {
+        let out = dispatch_str("romberg x^2 0 1", Context::standard()).unwrap().unwrap();
+        assert!(out.contains("0.3333"), "got: {out}");
+    }
+
+    #[test]
+    fn romberg_multitoken_expr() {
+        // regression: multi-token expressions were truncated at the old expr_end
+        let out = dispatch_str("romberg x^2 + 1 0 1", Context::standard()).unwrap().unwrap();
+        assert!(out.contains("1.3333"), "got: {out}");
+    }
+
+    #[test]
+    fn romberg_trailing_tokens_bound_parse() {
+        // regression: bounds ALWAYS come from the last two tokens (previously a
+        // 4th token silently changed which numbers were treated as a and b);
+        // extra tokens fold into the expr by implicit multiplication (x^2*0 = 0)
+        let out = dispatch_str("romberg x^2 0 1 12", Context::standard()).unwrap().unwrap();
+        assert!(out.contains("(1, 12;"), "got: {out}");
+        assert!(out.contains("= 0"), "got: {out}");
     }
 
     #[test]

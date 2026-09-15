@@ -19,8 +19,10 @@ use std::path::Path;
 
 /// Type of a notebook cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum CellType {
     /// A math expression or REPL command — evaluated and rendered with KaTeX.
+    #[default]
     Math,
     /// A text/markdown cell — displayed as-is, not evaluated.
     Text,
@@ -48,11 +50,6 @@ impl CellType {
     }
 }
 
-impl Default for CellType {
-    fn default() -> Self {
-        CellType::Math
-    }
-}
 
 /// A single notebook cell.
 #[derive(Debug, Clone)]

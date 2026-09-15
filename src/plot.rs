@@ -145,12 +145,12 @@ pub fn plot_function<P: AsRef<Path>>(
         .draw_series(LineSeries::new(points, &RED))
         .map_err(p_err)?
         .label(title)
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], RED));
 
     chart
         .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
         .draw()
         .map_err(p_err)?;
     Ok(())
@@ -221,19 +221,19 @@ pub fn plot_multi<P: AsRef<Path>>(
         let name = &item.0;
         let points = &data[idx];
         let color = palette[idx % palette.len()];
-        let legend_color = color.clone();
+        let legend_color = color;
         chart
-            .draw_series(LineSeries::new(points.iter().copied(), color.clone()))
+            .draw_series(LineSeries::new(points.iter().copied(), color))
             .map_err(p_err)?
             .label(name.as_str())
             .legend(move |(x, y)| {
-                PathElement::new(vec![(x, y), (x + 20, y)], legend_color.clone())
+                PathElement::new(vec![(x, y), (x + 20, y)], legend_color)
             });
     }
     chart
         .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
         .draw()
         .map_err(p_err)?;
     Ok(())
@@ -295,8 +295,8 @@ pub fn plot_scatter<P: AsRef<Path>>(
         .legend(|(x, y)| Circle::new((x + 10, y), 3, BLUE.filled()));
     chart
         .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
         .draw()
         .map_err(p_err)?;
     Ok(())
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn plot_function_to_bytes_produces_png() {
         let expr = Parser::parse("sin(x)").unwrap();
-        let bytes = plot_function_to_bytes(&expr, "x", 0.0, 3.14159, 100, "y = sin(x)").unwrap();
+        let bytes = plot_function_to_bytes(&expr, "x", 0.0, std::f64::consts::PI, 100, "y = sin(x)").unwrap();
         assert!(bytes.len() > 100, "PNG should have content");
         assert_eq!(&bytes[..8], &[137, 80, 78, 71, 13, 10, 26, 10], "should be PNG");
     }

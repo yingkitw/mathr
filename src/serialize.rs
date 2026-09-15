@@ -1102,6 +1102,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is a round-trip fixture, not pi
     fn sexpr_decimal_number() {
         let e = Expr::num(3.14);
         assert_eq!(to_sexpr(&e), "(num 3.14)");

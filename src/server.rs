@@ -208,9 +208,7 @@ fn handle_connection(
                 .map(|(k, v)| format!("{}: {}", k, v))
                 .collect();
             let funcs: Vec<String> = ctx
-                .funcs
-                .iter()
-                .map(|(k, _)| k.clone())
+                .funcs.keys().cloned()
                 .collect();
             let json = format!(
                 "{{\"vars\": [{}], \"funcs\": [{}]}}",
@@ -322,7 +320,7 @@ fn handle_plot_inline(line: &str) -> Result<String> {
 /// Base64-encode a byte slice (standard alphabet, with padding).
 fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0];
         let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };

@@ -334,7 +334,7 @@ mod tests {
         // non-degenerate fit: log-likelihood strictly negative and finite
         assert!(fit.log_likelihood.is_finite() && fit.log_likelihood < 0.0);
         // score equations hold at the MLE
-        let mut grad = vec![0.0; 3];
+        let mut grad = [0.0; 3];
         for i in 0..y.len() {
             let p = predict_proba(&fit.coefficients, &[x[0][i], x[1][i]]).unwrap();
             grad[0] += y[i] - p;

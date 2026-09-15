@@ -438,7 +438,7 @@ mod tests {
         let mut rng = Rng::new(42);
         for _ in 0..1000 {
             let x = rng.next_f64();
-            assert!(x >= 0.0 && x < 1.0, "out of range: {}", x);
+            assert!((0.0..1.0).contains(&x), "out of range: {}", x);
         }
     }
 
@@ -447,7 +447,7 @@ mod tests {
         let mut rng = Rng::new(42);
         for _ in 0..1000 {
             let x = rng.uniform(-5.0, 5.0);
-            assert!(x >= -5.0 && x < 5.0, "out of range: {}", x);
+            assert!((-5.0..5.0).contains(&x), "out of range: {}", x);
         }
     }
 

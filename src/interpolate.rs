@@ -798,7 +798,7 @@ mod tests {
             let nodes = chebyshev_nodes(n);
             assert_eq!(nodes.len(), n);
             for &x in &nodes {
-                assert!(x >= -1.0 && x <= 1.0);
+                assert!((-1.0..=1.0).contains(&x));
             }
         }
     }
@@ -907,7 +907,7 @@ mod tests {
             let (xs, _) = gauss_legendre(n);
             assert_eq!(xs.len(), n);
             for &x in &xs {
-                assert!(x >= -1.0 && x <= 1.0, "n={} x={}", n, x);
+                assert!((-1.0..=1.0).contains(&x), "n={} x={}", n, x);
             }
         }
     }
