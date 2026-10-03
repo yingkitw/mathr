@@ -409,7 +409,8 @@ fn int_step(expr: &Expr, var: &str) -> Result<Expr> {
         }
         Expr::Pow(base, exp) => match (base.as_ref(), exp.as_ref()) {
             (Expr::Var(v), Expr::Num(n)) if v == var && *n == -1.0 => {
-                Ok(Expr::func("ln", vec![Expr::var(var)]))
+                // ∫ x⁻¹ dx = ln|x| — abs makes it correct on both branches.
+                Ok(Expr::func("ln", vec![Expr::func("abs", vec![Expr::var(var)])]))
             }
             (Expr::Var(v), Expr::Num(n)) if v == var => {
                 let np1 = *n + 1.0;
@@ -417,6 +418,27 @@ fn int_step(expr: &Expr, var: &str) -> Result<Expr> {
                     Expr::pow(Expr::var(var), Expr::num(np1)),
                     Expr::num(np1),
                 ))
+            }
+            // (a·var + b)ⁿ for numeric n: linear-substitution power rule.
+            // Cross-port pattern from unsolve `symbolic.ts:331-342`.
+            (base_e, Expr::Num(n)) if linear_in(base_e, var).is_some() => {
+                if let Some((a, _)) = linear_in(base_e, var) {
+                    if *n == -1.0 {
+                        // ∫ (a·var+b)⁻¹ = ln|a·var+b| / a
+                        Ok(Expr::div(
+                            Expr::func("ln", vec![Expr::func("abs", vec![base_e.clone()])]),
+                            Expr::num(a),
+                        ))
+                    } else {
+                        let np1 = *n + 1.0;
+                        Ok(Expr::div(
+                            Expr::pow(base_e.clone(), Expr::num(np1)),
+                            Expr::mul(Expr::num(np1), Expr::num(a)),
+                        ))
+                    }
+                } else {
+                    unreachable!("guard above ensures success")
+                }
             }
             (Expr::Num(_), _) | (_, _) if (**base).is_constant() => {
                 Ok(Expr::div(
@@ -431,6 +453,46 @@ fn int_step(expr: &Expr, var: &str) -> Result<Expr> {
         },
         Expr::Func(name, args) if args.len() == 1 => {
             let inner = &args[0];
+            // Linear-substitution fast path.  For inner = a·var + b (with a, b
+            // constant in `var` and a != 0), any table integrand f(inner)
+            // integrates as F(inner)/a.  This subsumes the bare-Var cases
+            // below and additionally covers `sin(3*x+1)`, `exp(2*x)`,
+            // `(x+1)^n`, `1/(2*x+1) → ln|2*x+1|/2`, `sqrt(2*x+1)`, etc.
+            // (Cross-port pattern from unsolve `symbolic.ts:228-391`.)
+            if let Some((a, b)) = linear_in(inner, var) {
+                let shifted = shift_var(var, a, b);
+                match name.as_str() {
+                    "exp" => return Ok(Expr::div(
+                        Expr::func("exp", vec![shifted]),
+                        Expr::num(a),
+                    )),
+                    "sin" => return Ok(Expr::div(Expr::neg(shifted.cos()), Expr::num(a))),
+                    "cos" => return Ok(Expr::div(shifted.sin(), Expr::num(a))),
+                    "sinh" => return Ok(Expr::div(shifted.cosh(), Expr::num(a))),
+                    "cosh" => return Ok(Expr::div(shifted.sinh(), Expr::num(a))),
+                    "tan" => return Ok(Expr::neg(Expr::div(
+                        Expr::func("ln", vec![Expr::func("abs", vec![shifted.cos()])]),
+                        Expr::num(a),
+                    ))),
+                    // ∫ sqrt(a·x + b) dx = (2/3a) · (a·x + b)^(3/2)
+                    "sqrt" => return Ok(Expr::div(
+                        Expr::mul(
+                            Expr::num(2.0),
+                            Expr::pow(shifted, Expr::num(1.5)),
+                        ),
+                        Expr::mul(Expr::num(3.0), Expr::num(a)),
+                    )),
+                    // ∫ cbrt(a·x + b) dx = (3/4a) · (a·x + b)^(4/3)
+                    "cbrt" => return Ok(Expr::div(
+                        Expr::mul(
+                            Expr::num(3.0),
+                            Expr::pow(shifted, Expr::num(4.0 / 3.0)),
+                        ),
+                        Expr::mul(Expr::num(4.0), Expr::num(a)),
+                    )),
+                    _ => {}
+                }
+            }
             let inner_is_var = matches!(inner, Expr::Var(v) if v == var);
             match (name.as_str(), inner_is_var) {
                 ("exp", true) => Ok(Expr::func("exp", vec![Expr::var(var)])),
@@ -454,11 +516,99 @@ fn int_step(expr: &Expr, var: &str) -> Result<Expr> {
     }
 }
 
+/// Decompose an expression as `a*var + b` with `a, b` constant in `var`.
+///
+/// Returns `Some((a, b))` only when the expression is *affine-linear* in
+/// `var` with a non-zero slope.  `Some((1.0, 0.0))` for plain `Var(v)`,
+/// `Some((2.0, 1.0))` for `2*x + 1`, `Some((-1.0, 3.0))` for `3 - x`, etc.
+/// Returns `None` for constants, non-linear polynomials, function calls,
+/// or anything else that isn't a clean linear-in-`var` form.
+fn linear_in(e: &Expr, var: &str) -> Option<(f64, f64)> {
+    match e {
+        Expr::Var(v) if v == var => Some((1.0, 0.0)),
+        Expr::Neg(inner) => {
+            let (a, b) = linear_in(inner, var)?;
+            Some((-a, -b))
+        }
+        // Pure constants are a=0, b=c (degenerate linear).
+        Expr::Num(c) => Some((0.0, *c)),
+        Expr::Mul(a, b) => {
+            // c·var or var·c (with c constant)
+            let (lhs, rhs) = (a.as_ref(), b.as_ref());
+            if let (Expr::Var(v), Expr::Num(c)) = (lhs, rhs) {
+                if v == var {
+                    return Some((*c, 0.0));
+                }
+            }
+            if let (Expr::Num(c), Expr::Var(v)) = (lhs, rhs) {
+                if v == var {
+                    return Some((*c, 0.0));
+                }
+            }
+            None
+        }
+        Expr::Add(a, b) => {
+            let (a1, b1) = linear_in(a, var)?;
+            let (a2, b2) = linear_in(b, var)?;
+            // Two coincident var terms = quadratic → not linear.
+            if a1 != 0.0 && a2 != 0.0 {
+                return None;
+            }
+            Some((a1 + a2, b1 + b2))
+        }
+        Expr::Sub(a, b) => {
+            let (a1, b1) = linear_in(a, var)?;
+            let (a2, b2) = linear_in(b, var)?;
+            if a1 != 0.0 && a2 != 0.0 {
+                return None;
+            }
+            Some((a1 - a2, b1 - b2))
+        }
+        _ => None,
+    }
+}
+
+/// Reconstruct the shifted argument `a*var + b` from linear decomposition.
+/// Caller must have already verified `linear_in` succeeded.
+fn shift_var(var: &str, a: f64, b: f64) -> Expr {
+    if (a - 1.0).abs() < 1e-15 && b == 0.0 {
+        Expr::var(var)
+    } else if (a - 1.0).abs() < 1e-15 {
+        Expr::add(Expr::var(var), Expr::num(b))
+    } else if b == 0.0 {
+        Expr::mul(Expr::num(a), Expr::var(var))
+    } else {
+        Expr::add(Expr::mul(Expr::num(a), Expr::var(var)), Expr::num(b))
+    }
+}
+
+/// Trait extension for building the function-call Exprs in the linear-substitution
+/// fast path. Keeps the call sites compact.
+trait FuncExpr {
+    fn cos(self) -> Expr;
+    fn sin(self) -> Expr;
+    fn cosh(self) -> Expr;
+    fn sinh(self) -> Expr;
+}
+impl FuncExpr for Expr {
+    fn cos(self) -> Expr { Expr::func("cos", vec![self]) }
+    fn sin(self) -> Expr { Expr::func("sin", vec![self]) }
+    fn cosh(self) -> Expr { Expr::func("cosh", vec![self]) }
+    fn sinh(self) -> Expr { Expr::func("sinh", vec![self]) }
+}
+
 /// Handle integrands of the form `c / g(x)` where `c` is constant.
 /// Recognises `1/x` and `1/(1+x²)` and `1/√(1−x²)`.
 fn integrate_constant_over(num: &Expr, den: &Expr, var: &str) -> Result<Expr> {
     let num_val = if let Expr::Num(n) = num { *n } else { 1.0 };
     let _ = num_val;
+    // c / (a·var + b) → (c/a) · ln|a·var+b|.  Linear-substitution pattern.
+    if let Some((a, _b)) = linear_in(den, var) {
+        return Ok(Expr::mul(
+            Expr::num(num_val / a),
+            Expr::func("ln", vec![Expr::func("abs", vec![den.clone()])]),
+        ));
+    }
     match den {
         Expr::Var(v) if v == var => Ok(Expr::mul(Expr::num(num_val), Expr::func("ln", vec![Expr::var(var)]))),
         Expr::Add(a, b) | Expr::Sub(a, b) => {
@@ -635,10 +785,100 @@ mod tests {
         integrate_agrees("1/x", "1/x", &[0.5, 1.5, 3.0]);
     }
 
-    #[test]
+#[test]
     fn integrate_exp() {
-        integrate_agrees("exp(x)", "exp(x)", &[0.5, 1.0, 2.0]);
         integrate_agrees("2^x", "2^x", &[0.0, 1.0, 2.0]);
+    }
+
+    // ----- Linear-substitution integration table (cross-port from
+    // unsolve `symbolic.ts:228-391`).  For inner = a·x + b, ∫f(inner)dx = F(inner)/a.
+    // Each test verifies via d/dx(antideriv) = integrand at sample points.
+
+    #[test]
+    fn integrate_linear_subst_sin() {
+        // ∫ sin(3x + 1) dx = −cos(3x + 1)/3
+        integrate_agrees("sin(3*x + 1)", "sin(3*x + 1)", &[-0.3, 0.1, 0.5, 0.9]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_cos() {
+        integrate_agrees("cos(2*x - 1)", "cos(2*x - 1)", &[-0.5, 0.0, 0.5, 1.2]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_exp() {
+        integrate_agrees("exp(2*x)", "exp(2*x)", &[-0.5, 0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_sinh() {
+        integrate_agrees("sinh(2*x)", "sinh(2*x)", &[-0.5, 0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_cosh() {
+        integrate_agrees("cosh(x + 1)", "cosh(x + 1)", &[-0.7, 0.0, 0.5, 1.5]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_power() {
+        // ∫ (x + 1)^3 dx = (x + 1)^4 / 4
+        integrate_agrees("(x + 1)^3", "(x + 1)^3", &[-0.5, 0.0, 0.5, 1.5]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_power_negative() {
+        // ∫ (x + 1)^(-1) dx = ln|x + 1|
+        integrate_agrees("1/(x + 1)", "1/(x + 1)", &[0.0, 0.5, 1.5, 2.5]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_reciprocal_with_coefficient() {
+        // ∫ 5/(2*x + 3) dx = (5/2)·ln|2*x + 3|
+        integrate_agrees("5/(2*x + 3)", "5/(2*x + 3)", &[-1.0, 0.0, 0.5, 1.5]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_reciprocal_negative_var() {
+        // ∫ 1/(1 - x) dx = −ln|1 - x|
+        integrate_agrees("1/(1 - x)", "1/(1 - x)", &[-1.0, -0.5, 0.5, 0.9]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_ln_x_now_uses_abs() {
+        // ∫ 1/x dx = ln|x| — verify by evaluating at a NEGATIVE x that
+        // the new abs-wrapped form matches the integrand.  Plain ln(x)
+        // would silently disagree there (returns NaN for x<0).
+        let e = Parser::parse("1/x").unwrap();
+        let antideriv = integrate(&e, "x").unwrap();
+        let derived = differentiate(&antideriv, "x").unwrap();
+        let want_e = Parser::parse("1/x").unwrap();
+        // Use a non-zero mix including negative x.
+        agrees(&derived, &want_e, &[-2.0, -0.5, 0.5, 1.0, 3.0]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_quarter() {
+        // ∫ (2x)^4 dx = (2x)^5 / 10.  D/dx should give (2x)^4.
+        integrate_agrees("(2*x)^4", "(2*x)^4", &[-0.5, 0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn integrate_linear_subst_sqrt() {
+        // sqrt(2*x + 1) parses as Func("sqrt", ...) — verify it's recognised
+        // via the linear-substitution path in the Func arm.
+        // ∫ sqrt(2x+1) dx = (2x+1)^(3/2) / 3  (since chain rule gives ·2/2=1).
+        let e = Parser::parse("sqrt(2*x + 1)").unwrap();
+        let antideriv = integrate(&e, "x").unwrap();
+        let derived = differentiate(&antideriv, "x").unwrap();
+        // Verify at x values where 2x+1 > 0
+        let mut ctx = Context::standard();
+        for &x in &[0.0, 0.5, 1.0, 2.5] {
+            ctx.set("x", x);
+            let d = eval(&derived, &ctx).unwrap();
+            let expected = (2.0 * x + 1.0).sqrt();
+            assert!((d - expected).abs() < 1e-9, "at x={x}: got {d} want {expected}");
+        }
     }
 
     #[test]

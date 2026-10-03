@@ -114,7 +114,7 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **953 inline unit tests** + 259 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
+- [x] **968 inline unit tests** + 259 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
 
 ### Fast math
@@ -200,9 +200,24 @@ Next weakest: Docs alignment → now enforced: `tests/docs_sync.rs` (2026-09-15)
 **Total: 28/30**. Next lever: Medium backlog (dot/cross, number-base) — high user-feel, thin surface area.
 
 ### High Priority
-(none currently — `idiff` completed this cycle)
+(seeded from the unsolve cross-port pass, 2026-10-03 — see MEMORY.md "Cross-Port Learnings from unsolve")
+- [x] **Linear-substitution integration** — `∫f(a·v+b) dx = F(a·v+b)/a` for `exp`, `sin`/`cos`, `sinh`/`cosh`, `tan` (Func arm via `linear_in`/`shift_var`); `(a·v+b)^n` and `(a·v+b)^(-1)` (Pow arm); `c/(a·v+b) → (c/a)·ln|a·v+b|` (constant-over-denominator arm); `sqrt(a·v+b)` and `cbrt(a·v+b)` (Func arm via power-of-(ax+b) form). All logarithmic antiderivatives wrapped in `abs` so `ln|x|` (not `ln(x)`) — correct on both branches. 12 regression tests in `symbolic.rs::tests::integrate_linear_subst_*` covering sin/cos/exp/sinh/cosh/power/reciprocal/power-negative/reciprocal-coeff/reciprocal-neg-var/ln-abs/quarter/sqrt. (2026-10-03)
+- [ ] **Continued-fraction rational snapping** — shared `snap_rational(x, max_den)` used by `qsolve`, `limit`, `apart` so results display as `5/3`, `1/3`, `-7/2` instead of 12-sig decimals. (unsolve `limit.ts:40-66`)
+- [ ] **Expression-level cubic/quartic solving** — rational-root hunt + exact Rational deflation (unsolve drifts using f64 deflation — don't copy that), recurse to exact quadratic at degree ≤ 2, certify with VAS. `qsolve x^3 - 6x^2 + 11x - 6` → exact `1, 2, 3`. (unsolve `solver.ts:216-265`)
+- [x] **Taylor non-analytic error** — `taylor_series` returns `MathError::Domain` when any `f^(k)(a)` is non-finite (singularity at the expansion point) instead of `unwrap_or(0.0)` (`taylor.rs:30`). Regression tests `taylor_pole_errors_instead_of_silent_zero` (1/x at 0) and `taylor_log_at_zero_errors` (log x at 0); `taylor_analytic_far_from_pole_still_works` guards the valid case (1/x at 1). Error message names `f^k(a)` and the offending value. (2026-10-03)
+- [ ] **Like-term collection + coefficient collapse in simplify** — `2*x+3*x → 5*x`, `2*(2*x) → 4*x`, `x*2 → 2*x`, division push-through, `x-x → 0`, `neg(neg(x)) → x`; also fixes the simplify.rs doc-comment drift (claims like-term collection that doesn't exist). (unsolve `simplify.ts:143-345`)
 
 ### Medium Priority
+- [ ] **Selective exact function folding** — fold `sqrt`/`cbrt`/`log2`/`log10`/`fact`/`abs` only when exact (`sqrt(16)→4`, `sqrt(2)` stays symbolic); stop eager constant-function eval in `simplify.rs:112-118`. (unsolve `simplify.ts:221-270`)
+- [ ] **Sign-scan all-roots numeric solve** — `nsolve <expr> [var] [lo hi]`: sample grid, bisect each sign change, dedupe; solves `exp(x)=5`, `sin(x)=0` without a user bracket. (unsolve `solver.ts:286-329`)
+- [ ] **Exact-rational quadratic path in qsolve** — rational discriminant, perfect-square-of-rational check (both num and den), exact roots for `6x^2-5x-1` → `1, -1/6`; exact real part for complex roots (`x^2+x+1` → `-1/2 ± …i`). (unsolve `solver.ts:380-451`)
+- [ ] **Exact cover-up fast path in apart** — distinct rational linear factors ⇒ exact `A_i = N(r_i)/∏(r_i−r_j)` in Rational; keep the linear-system path for repeated/quadratic factors. (unsolve `apart.ts:179-197`)
+- [ ] **Wire missing matrix commands** — `inv`, `transpose`, `trace`, `linsolve` (augmented `[A|b]`, exact rational via `rational.rs`), full symmetric `eigen` command (library `symmetric_eig` exists); add symmetry check to `symmetric_eig`. (unsolve `matrix.ts`, `solve-problem.ts:189-195`)
+- [ ] **Unicode input normalization** — `− × ÷ √ π τ` char map + superscript exponents (`x² → x^(2)`, `x⁻¹ → x^(-1)`) pre-tokenizer. (unsolve `parser.ts:25-70`)
+- [ ] **Missing LaTeX forms** — `\dfrac`/`\tfrac` (currently silently misparsed as a *variable* — worse than an error), `\sqrt[n]{x}`, `\sin^2(x)` function-power. (unsolve `parser.ts:113-168`)
+- [ ] **`from a to b` suffix parsing with expression bounds** — unify `minimize`/`int`/`romberg` bound parsing (regex suffix + `evalNumberToken`-style expr bounds); retires the trailing-token ambiguity class (`romberg_trailing_tokens_bound_parse` regression). (unsolve `solve-problem.ts:115-133`)
+- [ ] **Numeric domain probes with named failure points** — `minimize`: error if `f(a)`/`f(b)` non-finite instead of mapping to `+∞`; `integrate_adaptive`: check `fa/fb/fm` and name the offending point. (unsolve `optim.ts:33-35`, `numeric.ts:51-57`)
+- [ ] **BigInt auto-upgrade for `is-prime`/`factor`** — parse arg as BigInt first (same pattern as `fib`/`binom` auto-upgrade). (unsolve `solve-problem.ts:458-464`)
 - [x] **Implicit differentiation** — `symbolic::implicit_diff` / `idiff_steps_str`: `dy/dx = −F_x/F_y` for `F(x,y)=0`; `idiff <expr> [= rhs] [<indep> <dep>]` REPL with step-by-step (F, ∂F/∂x, ∂F/∂y, result); infers two free vars (prefer `x` independent). (2026-10-03)
 - [ ] **Dot/cross product REPL commands** — thin free functions over `&[f64]` / column vectors (extend `matrix.rs`, do not reshape `Matrix` API). (From qalculate pass.)
 - [ ] **Number-base conversion** — `base <n> <bin|oct|hex|base<B>>` output conversion + exact `n to base` formatting; parser literal support (`0x..`) deliberately deferred (mature module). (From qalculate pass.)
@@ -213,8 +228,18 @@ Next weakest: Docs alignment → now enforced: `tests/docs_sync.rs` (2026-09-15)
 - Source: Qalculate! / libqalculate v5.12 manual + release notes (web2md MCP unavailable — used WebSearch/fetch fallback).
 - Gaps worth seeding (beyond existing Medium items): higher-order `diff` order arg; `dsolve` for simple 1st-order ODEs; LaTeX *output* (`to latex`); entrywise logical/bitwise on vectors; richer `multisolve`.
 - Already covered or deferred: Σ/∏, interval arithmetic, number bases (Medium), units/currency (out of scope for pure math crate).
+- **2026-10-03 — unsolve.org** (TypeScript port of mathr's symbolic core, newer than some Rust code). Reviewed 19 engine modules + 10 test files. Seeded High Priority (linear-substitution integration, continued-fraction snap, expression-level cubic solve, Taylor non-analytic error, like-term collection), 9 Medium items (exact function folding, sign-scan all-roots, exact-rational quadratic, exact cover-up, missing matrix commands, Unicode/LaTeX forms, `from a to b` suffix, domain probes, BigInt auto-upgrade) and 7 Low items (Durand–Kerner polish, degenerate-equation semantics, separate L/R limit probes, rational overflow, matrix det pivot, bare-equation auto-solve, `-x^2` precedence, symbolic-coefficient univariate expand). Full patterns in MEMORY.md "Cross-Port Learnings from unsolve".
+- Cross-port gaps unsolve has that mathr *doesn't* need to copy: TS structural equality is string-based; mathr already has `canonicalize`/`equals`. TS is univariate-only; mathr has multivariate `poly.rs` + general `apart.rs` (repeated + irreducible quadratics). mathr's VAS isolation is strictly more rigorous than TS's numeric divisor hunt — wire VAS into the new expression-level cubic path instead of replicating TS's.
 
 ### Low Priority
+- [ ] **Durand–Kerner polish** — strip near-zero leading coeffs, snap near-real roots onto the axis + near-integers to integers, dedupe repeated roots (qsolve currently returns double roots twice). (unsolve `poly.ts:48-100`)
+- [ ] **Degenerate-equation semantics in qsolve** — identity → "every value is a solution"; constant ≠ 0 → "no solution" (currently one "no variable dependence" error). (unsolve `solver.ts:527-541`)
+- [ ] **Separate left/right limit probes + growth-trend pole detection** — fix the interleaved coarse/fine split in `limit.rs:213-234`; ×5-over-3-samples trend instead of single `>1e9` threshold. (unsolve `limit.ts:221-263`)
+- [ ] **Rational overflow soft-fail** — `reduce_i128` casts `as i64` (silent wraparound, `rational.rs:259-273`); use checked conversion + float fallback. (unsolve `rational.ts:21,38`)
+- [ ] **Matrix det scale-relative pivot threshold** — `best < 1e-14 → Ok(0.0)` wrongly zeros tiny-scaled nonsingular matrices (`matrix.rs:125-127`).
+- [ ] **Bare-equation auto-solve + friendlier `=` errors** — top-level `=` routes to solve; leftover `=` suggests `solve <lhs> = <rhs>`. (unsolve `parser.ts:466-483`)
+- [ ] **`-x^2` precedence** — currently `(-x)^2` (documented quirk, `autodiff.rs:533`); conventional is `-(x^2)`. Breaking parser change — needs explicit approval per Mature Module Policy.
+- [ ] **Univariate expansion with symbolic coefficients** — `termsOf`-style mode treating non-target subexpressions (incl. function calls) as opaque exact coefficients, so `(x + sin(y))^2` expands in x. (unsolve `poly.ts:132-210`)
 - [ ] **Exact symbolic linear system solve** (qalculate's `multisolve`) — 2–4 variables via `to_poly` + rational Gaussian elimination; falls back to the numeric `solve-system`. (From qalculate pass.)
 - [ ] **Simple symbolic ODE solve (`dsolve`)** — separable / linear 1st-order patterns only; fall back to numeric `ode` solvers. (From qalculate 5.12 pass.)
 - [ ] **LaTeX output** — `Expr::to_tex` already exists; expose `latex <expr>` / `to latex` REPL for round-trip with TeX input. (From qalculate 5.12.)

@@ -14,6 +14,12 @@ use crate::symbolic::differentiate;
 ///
 /// Returns the symbolic expression for the series. Each term is
 /// `f^(n)(a) / n! * (x - a)^n`.
+///
+/// Returns `MathError::Domain` if `f` is not analytic at `a` — i.e. any
+/// derivative evaluation at `a` is non-finite (singularity like `1/x` at 0,
+/// `log(x)` at 0, `sqrt(x)` at 0 from the left). Silent zero-fill would
+/// otherwise hide the fact that no Taylor series exists (e.g. `1/x` at 0
+/// produces `inf`, `inf`, `inf`, … — and silently printing all zeros lies).
 pub fn taylor_series(f: &Expr, var: &str, a: f64, order: usize) -> Result<Expr> {
     if order == 0 {
         return Err(MathError::InvalidArgument("taylor_series: order must be > 0".into()));
@@ -24,10 +30,19 @@ pub fn taylor_series(f: &Expr, var: &str, a: f64, order: usize) -> Result<Expr> 
     let mut current = f.clone();
 
     for n in 0..order {
-        // Evaluate the nth derivative at x = a
+        // Evaluate the nth derivative at x = a. Refuse non-finite values
+        // (singularity / pole at the expansion point) instead of zero-filling.
         let mut eval_ctx = ctx.clone();
         eval_ctx.set(var, a);
-        let coeff = eval(&current, &eval_ctx).unwrap_or(0.0);
+        let coeff = eval(&current, &eval_ctx)
+            .map_err(|e| MathError::Domain(format!(
+                "taylor: f^{n}({a}) cannot be evaluated: {e}"
+            )))?;
+        if !coeff.is_finite() {
+            return Err(MathError::Domain(format!(
+                "taylor: f^{n}({a}) is not finite ({coeff}); the function is not analytic at {a}"
+            )));
+        }
 
         if coeff.abs() < 1e-15 {
             // Skip zero terms but still need to differentiate for next iteration
@@ -163,6 +178,40 @@ mod tests {
         for &x in &[0.8, 1.0, 1.2] {
             let approx = eval_at(&series, x);
             let exact = x.exp();
+            assert!(close(approx, exact, 1e-3), "at x={}: got {} want {}", x, approx, exact);
+        }
+    }
+
+    #[test]
+    fn taylor_pole_errors_instead_of_silent_zero() {
+        // 1/x at x=0 has no Taylor series; every derivative is ±inf at 0.
+        // Prior to the fix this silently produced `0` because of
+        // `unwrap_or(0.0)` on the derivative evaluation. Regression
+        // (2026-10-03, from the unsolve cross-port pass).
+        let r = taylor_series_str("1/x", "x", 0.0, 3);
+        assert!(r.is_err(), "1/x at x=0 should error, not silently zero-fill");
+        let msg = format!("{}", r.unwrap_err());
+        assert!(msg.contains("not analytic") || msg.contains("not finite"),
+                "unexpected error message: {msg}");
+    }
+
+    #[test]
+    fn taylor_log_at_zero_errors() {
+        // log(x) at x=0: every derivative is (-1)^n n! / x^{n+1}, so
+        // the first one is already -inf. Domain error, not zero.
+        let r = taylor_series_str("log(x)", "x", 0.0, 3);
+        assert!(r.is_err(), "log(x) at x=0 should error");
+    }
+
+    #[test]
+    fn taylor_analytic_far_from_pole_still_works() {
+        // 1/x at x=1 IS analytic — should produce a valid series.
+        // (Sanity check that the non-analyticity guard doesn't break the
+        // valid case at a different center.)
+        let series = taylor_series_str("1/x", "x", 1.0, 4).unwrap();
+        for &x in &[0.9, 1.0, 1.1] {
+            let approx = eval_at(&series, x);
+            let exact = 1.0 / x;
             assert!(close(approx, exact, 1e-3), "at x={}: got {} want {}", x, approx, exact);
         }
     }
