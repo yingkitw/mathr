@@ -184,6 +184,11 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         return crate::qsolve::qsolve_steps_str(rest.trim());
     }
 
+    // idiff: implicit differentiation steps (F_x, F_y, dy/dx)
+    if let Some(rest) = line.strip_prefix("idiff ") {
+        return crate::symbolic::idiff_steps_str(rest.trim());
+    }
+
     // For all other REPL commands (int, romberg, fft, plot, stats, etc.),
     // fall back to dispatch_inner and wrap the result as a single step.
     let cmd_keywords = [
@@ -211,6 +216,7 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "prod ",
         "spcg ",
         "spbicg ",
+        "idiff ",
     ];
     if cmd_keywords.iter().any(|kw| line.starts_with(kw)) || line == "vars" || line == "funcs" {
         let result = dispatch_inner(line, &mut ctx.clone())?;
@@ -494,6 +500,9 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("gradient ") {
         return do_gradient(rest.trim(), ctx);
+    }
+    if let Some(rest) = line.strip_prefix("idiff ") {
+        return do_idiff(rest.trim());
     }
     if let Some(rest) = line.strip_prefix("simplify ") {
         let e = Parser::parse(rest.trim())?;
@@ -867,6 +876,17 @@ fn do_gradient(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     let lines: Vec<String> = grad.iter().map(|(v, d)| format!("d/d{} = {}", v, simplify(d))).collect();
     Ok(Some(lines.join("\n")))
+}
+
+fn do_idiff(rest: &str) -> Result<Option<String>> {
+    let steps = crate::symbolic::idiff_steps_str(rest)?;
+    // Final step: `dy/dx = -(∂F/∂x)/(∂F/∂y) = <expr>` — return the result expr.
+    let last = steps.last().cloned().unwrap_or_default();
+    Ok(Some(
+        last.rsplit_once(" = ")
+            .map(|(_, r)| r.trim().to_string())
+            .unwrap_or(last),
+    ))
 }
 
 fn do_integrate(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
@@ -3253,6 +3273,8 @@ commands:
   diff <expr> [var]   symbolic derivative
   pdiff <expr> <var>  partial derivative
   gradient <expr>     gradient (all partials)
+  idiff <expr> [= rhs] [<indep> <dep>]
+                      implicit differentiation dy/dx = -F_x/F_y
   simplify <expr>     constant-fold & simplify
   int <expr> a b      numerical integral over [a, b]
   solve <expr> [var] [guess]

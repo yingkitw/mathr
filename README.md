@@ -22,7 +22,7 @@
 ## Features
 
 ### Symbolic Computation
-- **Symbolic differentiation** — product, quotient, chain rules; partial derivatives and gradients
+- **Symbolic differentiation** — product, quotient, chain rules; partial derivatives, gradients, and implicit differentiation (`idiff`, `dy/dx = −F_x/F_y`)
 - **Symbolic integration** — polynomial, exponential, trigonometric, and inverse-trigonometric primitives
 - **Algebraic simplification** — constant folding and algebraic identity simplification
 - **Taylor series** — symbolic expansion around any point
@@ -296,6 +296,7 @@ mathr notebook examples/notebooks/demo.mnb 8080 # custom port
 - **Execution status** — each cell shows running/done/error status with `In [n]:` execution counters
 - **Context panel** — collapsible panel showing all bound variables and user functions
 - **Reset & Run All** — resets the shared context and re-evaluates all cells in order
+- **Responsive layout** — mobile/tablet breakpoints wrap the toolbar and cell actions; touch-friendly controls and safe-area insets
 - **Markdown rendering** — text cells render Markdown (headings, lists, code, blockquotes) via marked.js
 - **KaTeX math rendering** — input expressions and output results rendered as math notation
 - **Step-by-step solving** — shows intermediate steps for `diff`, `solve`, `taylor`, `integrate`, `simplify`, `rat`, `laurent`
@@ -408,7 +409,7 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `parser` | Recursive-descent parser with LaTeX/TeX support |
 | `eval` | Tree-walking evaluator with `Context` (variables, functions) |
 | `simplify` | Constant folding and algebraic identity simplification |
-| `symbolic` | Symbolic differentiation and integration |
+| `symbolic` | Symbolic differentiation (including implicit `idiff`), integration |
 | `calculus` | Numerical derivatives, quadrature, gradients, Romberg, Monte Carlo, Fourier series |
 | `solver` | Bisection, Newton, secant, polynomial roots, **Newton for systems**, VAS root isolation |
 | `fft` | Cooley–Tukey FFT, convolution, cross-correlation, windows |

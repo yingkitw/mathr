@@ -22,29 +22,58 @@
   --border: #585b70;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
 }
 header {
   background: var(--surface);
   padding: 12px 24px;
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 10px 16px;
   border-bottom: 2px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 100;
 }
+header .brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
 header h1 {
   font-size: 1.3rem;
   color: var(--accent);
   font-weight: 600;
+  white-space: nowrap;
 }
-header .spacer { flex: 1; }
+header #filename {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 40vw;
+}
+header .toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
 button {
   background: var(--surface2);
   color: var(--text);
@@ -54,6 +83,8 @@ button {
   cursor: pointer;
   font-size: 0.85rem;
   transition: background 0.15s;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 button:hover { background: var(--accent); color: var(--bg); }
 button.danger:hover { background: var(--red); color: var(--bg); }
@@ -61,8 +92,9 @@ button.success { background: var(--green); color: var(--bg); }
 button.success:hover { opacity: 0.85; }
 #notebook {
   max-width: 900px;
+  width: 100%;
   margin: 24px auto;
-  padding: 0 16px;
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
 }
 .cell {
   background: var(--surface);
@@ -73,12 +105,20 @@ button.success:hover { opacity: 0.85; }
 }
 .cell-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   padding: 6px 12px;
   background: var(--surface2);
   font-size: 0.75rem;
   color: var(--text-dim);
+}
+.cell-header .cell-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
 }
 .cell-header .cell-id {
   font-weight: 600;
@@ -203,8 +243,9 @@ button.success:hover { opacity: 0.85; }
 }
 .context-panel {
   max-width: 900px;
+  width: 100%;
   margin: 0 auto 12px;
-  padding: 0 16px;
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
 }
 .context-panel summary {
   cursor: pointer;
@@ -292,8 +333,12 @@ button.success:hover { opacity: 0.85; }
   min-width: 50px;
 }
 .add-cell-bar {
-  text-align: center;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
   padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 .add-cell-bar button {
   background: var(--accent);
@@ -309,22 +354,131 @@ button.success:hover { opacity: 0.85; }
 .empty-state h2 { font-size: 1.1rem; margin-bottom: 8px; }
 .empty-state p { font-size: 0.85rem; }
 .katex { font-size: 1.05em; }
-.katex-display { margin: 0.5em 0; }
+.katex-display { margin: 0.5em 0; overflow-x: auto; overflow-y: hidden; }
+.status-toast {
+  position: fixed;
+  top: 60px;
+  right: 20px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  z-index: 200;
+  max-width: min(320px, calc(100vw - 32px));
+}
+
+/* Tablet */
+@media (max-width: 900px) {
+  header {
+    padding: 10px 16px;
+    gap: 8px 12px;
+  }
+  header h1 { font-size: 1.15rem; }
+  header .toolbar { margin-left: 0; width: 100%; }
+  header #filename { max-width: none; flex: 1; }
+  #notebook, .context-panel {
+    margin-top: 16px;
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .cell-input { padding: 10px 12px; }
+  .cell-output { padding: 8px 12px 12px; }
+  .katex { font-size: 1em; }
+}
+
+/* Phone */
+@media (max-width: 600px) {
+  header {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  header .brand { width: 100%; }
+  header h1 { font-size: 1.05rem; }
+  header .toolbar {
+    width: 100%;
+    gap: 6px;
+  }
+  header .toolbar button {
+    flex: 1 1 calc(50% - 6px);
+    min-height: 40px;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    text-align: center;
+  }
+  .cell-header {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .cell-header .spacer { display: none; }
+  .cell-header .cell-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  .cell-header button {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 0.75rem;
+  }
+  .cell-header .move-btns button {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 6px 8px;
+  }
+  .cell-input { padding: 8px 10px; }
+  .cell-input textarea {
+    font-size: 16px; /* avoid iOS zoom on focus */
+    padding: 10px;
+    min-height: 48px;
+  }
+  .cell.text-cell .cell-input textarea { font-size: 16px; }
+  .cell-output { padding: 8px 10px 10px; }
+  .cell-output .output-rendered { font-size: 0.95rem; }
+  .cell-output .output-raw { font-size: 0.75rem; }
+  .add-cell-bar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .add-cell-bar button {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+  .empty-state { padding: 40px 16px; }
+  .status-toast {
+    top: auto;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
+  .katex { font-size: 0.95em; }
+}
+
+/* Narrow phones */
+@media (max-width: 380px) {
+  header .toolbar button {
+    flex: 1 1 100%;
+  }
+}
 </style>
 </head>
 <body>
 <header>
-  <h1>mathr notebook</h1>
-  <span id="filename" style="color:var(--text-dim);font-size:0.8rem;"></span>
-  <span class="spacer"></span>
-  <button onclick="resetAndRunAll()" class="success">Reset &amp; Run All</button>
-  <button onclick="runAll()">Run All</button>
-  <button onclick="resetContext()">Reset Context</button>
-  <button onclick="saveNotebook()">Save</button>
-  <button onclick="addCell('math')">+ Math</button>
-  <button onclick="addCell('text')">+ Text</button>
-  <button onclick="addCell('mathml')">+ MathML</button>
-  <button onclick="toggleMathML()" id="mathml-toggle">Show MathML</button>
+  <div class="brand">
+    <h1>mathr notebook</h1>
+    <span id="filename"></span>
+  </div>
+  <nav class="toolbar" aria-label="Notebook actions">
+    <button onclick="resetAndRunAll()" class="success">Reset &amp; Run All</button>
+    <button onclick="runAll()">Run All</button>
+    <button onclick="resetContext()">Reset Context</button>
+    <button onclick="saveNotebook()">Save</button>
+    <button onclick="addCell('math')">+ Math</button>
+    <button onclick="addCell('text')">+ Text</button>
+    <button onclick="addCell('mathml')">+ MathML</button>
+    <button onclick="toggleMathML()" id="mathml-toggle">Show MathML</button>
+  </nav>
 </header>
 <div class="context-panel">
   <details>
@@ -408,7 +562,7 @@ function mathToLatex(expr) {
     'diff', 'int', 'integrate', 'solve', 'simplify', 'plot',
     'taylor', 'laurent', 'rat', 'fourier', 'mc', 'sample',
     'dist', 'fft', 'conv', 'stats', 'poly-roots', 'isolate-roots',
-    'pdiff', 'gradient', 'romberg', 'let', 'fn',
+    'pdiff', 'gradient', 'idiff', 'romberg', 'let', 'fn',
     'gcd', 'lcm', 'is-prime', 'factor', 'fib', 'binom', 'fact',
     'mr-prime', 'jacobi', 'cf', 'diophantine', 'dlog',
     'lu', 'cholesky', 'svd', 'eig', 'symlig', 'hessenberg',
@@ -545,13 +699,15 @@ function createCellElement(cell, index) {
     <span class="cell-type-badge ${typeClass}" onclick="toggleCellType(${index})" title="Click to toggle cell type">${typeLabel}</span>
     <span class="cell-status idle" id="status-${index}"></span>
     <span class="spacer"></span>
-    <span class="move-btns">
-      <button onclick="moveCellUp(${index})" title="Move up">↑</button>
-      <button onclick="moveCellDown(${index})" title="Move down">↓</button>
+    <span class="cell-actions">
+      <span class="move-btns">
+        <button onclick="moveCellUp(${index})" title="Move up">↑</button>
+        <button onclick="moveCellDown(${index})" title="Move down">↓</button>
+      </span>
+      <button onclick="duplicateCell(${index})" title="Duplicate">Dup</button>
+      ${isText ? '' : `<button onclick="runCell(${index})">Run</button>`}
+      <button onclick="deleteCell(${index})" class="danger">Del</button>
     </span>
-    <button onclick="duplicateCell(${index})" title="Duplicate">Dup</button>
-    ${isText ? '' : `<button onclick="runCell(${index})">Run</button>`}
-    <button onclick="deleteCell(${index})" class="danger">Del</button>
   `;
   div.appendChild(header);
 
@@ -990,7 +1146,10 @@ async function saveNotebook() {
 
 function showStatus(msg, isError) {
   const el = document.createElement('div');
-  el.style.cssText = `position:fixed;top:60px;right:20px;padding:8px 16px;border-radius:6px;z-index:200;${isError ? 'background:var(--red);color:var(--bg)' : 'background:var(--green);color:var(--bg)'}`;
+  el.className = 'status-toast';
+  el.style.cssText = isError
+    ? 'background:var(--red);color:var(--bg)'
+    : 'background:var(--green);color:var(--bg)';
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2000);

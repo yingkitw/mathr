@@ -554,6 +554,7 @@ p=0.001
 | `diff <expr> [var]` | Symbolic derivative |
 | `pdiff <expr> <var>` | Partial derivative |
 | `gradient <expr>` | Gradient (all partials) |
+| `idiff <expr> [= rhs] [<indep> <dep>]` | Implicit differentiation `d(dep)/d(indep) = −F_indep/F_dep` (defaults: two free vars, prefer `x` independent) |
 | `integrate <expr> [var]` | Symbolic integration |
 | `simplify <expr>` | Simplify |
 | `int <expr> a b` | Numerical integral |
@@ -639,9 +640,10 @@ Start the web UI with `mathr notebook [file.mnb] [port]` (default port 3000).
 - **Execution status** — each cell shows running/done/error status with `In [n]:` execution counters
 - **Context panel** — collapsible panel showing bound variables and user functions
 - **Reset & Run All** — resets the shared context and re-evaluates all cells in order
+- **Responsive layout** — adapts to tablet (≤900px) and phone (≤600px): wrapping toolbar, stacked cell actions, touch-sized controls, safe-area insets
 - **Markdown rendering** — text cells render Markdown (headings, lists, code, blockquotes) via marked.js
 - **KaTeX rendering** — input expressions and output results are rendered as math notation
-- **Step-by-step solving** — `POST /api/eval` returns a `steps` array with intermediate steps for `diff`, `solve`, `taylor`, `integrate`, `simplify`, `rat`, `laurent`
+- **Step-by-step solving** — `POST /api/eval` returns a `steps` array with intermediate steps for `diff`, `solve`, `taylor`, `integrate`, `simplify`, `rat`, `laurent`, `idiff`, `qsolve`, `limit`, `expand`, `apart`
 - **Exact fraction arithmetic** — expressions with integer fractions (e.g. `\frac{1}{2} + \frac{3}{4}`) are evaluated exactly as `Rational`, returning `5/4` instead of `1.25`
 - **Live input preview** — each cell shows a rendered math/Markdown preview as you type
 - **Keyboard shortcuts** — Shift/Cmd/Ctrl+Enter to run a cell, Alt+Enter to run and add a new cell

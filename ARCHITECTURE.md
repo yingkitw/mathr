@@ -106,6 +106,7 @@ error.rs ──used by──▶ all modules
 16. **Step-by-step solving**: `repl::dispatch_steps` — returns `Vec<String>` of intermediate steps for `diff`, `solve`, `taylor`, `integrate`, `simplify`, `rat`, `laurent`, and plain eval; tries `rational::eval_rational` first for exact fraction results; falls back to `simplify` when evaluation fails on unbound variables; delegates all other REPL commands (`int`, `romberg`, `fft`, `det`, etc.) to `dispatch_inner`
 17. **Symbolic integration**: `symbolic::integrate` — pattern-matches common elementary rules (polynomial, exp, ln, sin/cos/tan/sec, atan, asin)
 18. **Gradient**: `symbolic::gradient` — collects all free variables and computes partial derivatives for each
+18b. **Implicit differentiation**: `symbolic::implicit_diff` / `idiff_steps_str` — `d(dep)/d(indep) = −F_indep/F_dep` for `F=0`; REPL `idiff`
 19. **Interpolate**: `interpolate::lagrange_interp/newton_interp/CubicSpline/chebyshev_*/legendre_*/gauss_legendre` — point-wise polynomial, smooth C²-continuous cubic, Chebyshev series, Legendre polynomials, Gauss–Legendre quadrature
 20. **Special**: `special::gamma/erf/sinc/bessel_j0/j1/jn` — Lanczos, continued-fraction, Maclaurin-series, and asymptotic-form approximations
 21. **Plot**: `plot::plot_function/multi/scatter` — evaluates `Expr` over a range, renders PNG via `plotters`
@@ -141,4 +142,4 @@ error.rs ──used by──▶ all modules
 
 ## Deployment
 
-The crate produces both a library (`mathr`) and a binary (`mathr`). The binary is a thin CLI wrapper around library functions. The `notebook` subcommand starts a minimal HTTP server serving a Jupyter-like web UI with KaTeX math rendering, step-by-step solving, exact fraction arithmetic, shared context across cells (variables/functions persist), cell types (math/text with Markdown rendering), inline plots (base64 PNG), execution counters, and cell management (reorder, duplicate, toggle type).
+The crate produces both a library (`mathr`) and a binary (`mathr`). The binary is a thin CLI wrapper around library functions. The `notebook` subcommand starts a minimal HTTP server serving a Jupyter-like web UI with KaTeX math rendering, step-by-step solving, exact fraction arithmetic, shared context across cells (variables/functions persist), cell types (math/text with Markdown rendering), inline plots (base64 PNG), execution counters, cell management (reorder, duplicate, toggle type), and a CSS-responsive layout for tablet/phone viewports.

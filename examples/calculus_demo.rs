@@ -35,6 +35,15 @@ fn main() {
         println!("  d^{}(x^6)/dx^{} = {}", n, n, s);
     }
 
+    // --- Implicit differentiation ---
+    println!("\n--- Implicit differentiation ---");
+    let circle = Parser::parse("x^2 + y^2 - 1").unwrap();
+    let dydx = symbolic::implicit_diff(&circle, "x", "y").unwrap();
+    println!("  x^2 + y^2 = 1  →  dy/dx = {}", dydx);
+    for line in symbolic::idiff_steps_str("x^2 + y^2 = 1").unwrap() {
+        println!("    {}", line);
+    }
+
     // --- Numerical integration ---
     println!("\n--- Numerical integration ---");
     let integrals = [

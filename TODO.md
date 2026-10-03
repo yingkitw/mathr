@@ -9,6 +9,7 @@
 ### Symbolic algebra
 - [x] Symbolic differentiation (product, quotient, chain rules)
 - [x] **Multi-variable symbolic differentiation** (partial derivatives and gradients)
+- [x] **Implicit differentiation** (`idiff` / `implicit_diff`: `dy/dx = −F_x/F_y` for `F(x,y)=0`)
 - [x] Algebraic simplification (constant folding, identities)
 - [x] **Symbolic integration** for polynomial, exponential, trigonometric, and inverse-trigonometric primitives
 
@@ -105,6 +106,7 @@
 - [x] **Inline plots** (`plot` commands render PNG images directly in the notebook via base64, `plot_function_to_bytes`/`plot_multi_to_bytes`/`plot_scatter_to_bytes`)
 - [x] **Markdown text cells** (text cells render Markdown via marked.js — headings, lists, code, blockquotes)
 - [x] **Execution counters** (`In [n]:` indicators like Jupyter, Alt+Enter to run + add cell)
+- [x] **Mobile/tablet adaptive web UI** (CSS breakpoints at 900px/600px: wrapping toolbar, full-width cell actions, 16px inputs to avoid iOS zoom, safe-area insets)
 
 ### Other
 - [x] Complex number type with arithmetic, polar conversion, powers
@@ -112,7 +114,7 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **946 inline unit tests** + 256 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
+- [x] **953 inline unit tests** + 259 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
 
 ### Fast math
@@ -185,17 +187,37 @@ Next weakest: Docs alignment → now enforced: `tests/docs_sync.rs` (2026-09-15)
 
 **Total: 28/30** (baseline 19/30). Remaining 2 points: dependency footprint at its practical ceiling, clippy style debt frozen by policy. Next improvement lever: competitive intelligence to seed features users feel (the 3 speculative Low items stay parked).
 
+### Codebase Scorecard — third pass (2026-10-03, /30)
+| Dimension | Score | Evidence |
+|---|---|---|
+| Correctness & coverage | 5 | 953 unit + 259 integration + 13 doc-tests green; idiff + Div Display regression covered |
+| Numerical fidelity | 5 | Circle `dy/dx = −x/y` eval checks; coefficient cancel preserves value |
+| Maintainability | 4 | Clippy gate still exits 0; mature-module Display fix was one-line + regression test |
+| Docs alignment | 5 | docs_sync green; SPEC/README/ARCHITECTURE/TODO/MEMORY updated for `idiff` + responsive web UI |
+| Wiring & ergonomics | 5 | `idiff` in REPL, `dispatch_steps`, prelude, webui command list, calculus_demo |
+| Footprint | 4 | No new deps |
+
+**Total: 28/30**. Next lever: Medium backlog (dot/cross, number-base) — high user-feel, thin surface area.
+
 ### High Priority
-(none currently — Σ/∏ completed this cycle)
+(none currently — `idiff` completed this cycle)
 
 ### Medium Priority
-- [ ] **Implicit differentiation** — `dy/dx` for `F(x, y) = 0` as `-F_x/F_y` (thin over existing partials; classic Calc-1 topic, step-by-step in the notebook). (From qalculate pass.)
-- [ ] **Dot/cross product REPL commands** — thin over `Matrix` arithmetic. (From qalculate pass.)
+- [x] **Implicit differentiation** — `symbolic::implicit_diff` / `idiff_steps_str`: `dy/dx = −F_x/F_y` for `F(x,y)=0`; `idiff <expr> [= rhs] [<indep> <dep>]` REPL with step-by-step (F, ∂F/∂x, ∂F/∂y, result); infers two free vars (prefer `x` independent). (2026-10-03)
+- [ ] **Dot/cross product REPL commands** — thin free functions over `&[f64]` / column vectors (extend `matrix.rs`, do not reshape `Matrix` API). (From qalculate pass.)
 - [ ] **Number-base conversion** — `base <n> <bin|oct|hex|base<B>>` output conversion + exact `n to base` formatting; parser literal support (`0x..`) deliberately deferred (mature module). (From qalculate pass.)
+- [ ] **Higher-order `diff` order argument** — `diff <expr> [var] [n]` for n-th derivative (qalculate `diff(..., order)`; thin loop over existing `differentiate`).
 - [x] **Complex-number expression evaluation** — `ceval` module: `eval_complex`/`eval_complex_str` over the Expr AST (`Var("i")` = imaginary unit, no parser changes), principal-branch ln/sqrt/pow/exp/trig/inverse-trig/hyperbolic, exact integer powers, `cval <expr> [with <var>=<val>,...]` REPL command, pretty `format_complex` (snaps IEEE −0.0 and noise so `exp(i*pi)` renders `-1`). Validated by Euler identity, principal branches, identity cross-checks (`sin(2i) = i·sinh 2`), and `asin(2)` closed form. (2026-09-15)
+
+### Competitive intelligence notes (2026-10-03)
+- Source: Qalculate! / libqalculate v5.12 manual + release notes (web2md MCP unavailable — used WebSearch/fetch fallback).
+- Gaps worth seeding (beyond existing Medium items): higher-order `diff` order arg; `dsolve` for simple 1st-order ODEs; LaTeX *output* (`to latex`); entrywise logical/bitwise on vectors; richer `multisolve`.
+- Already covered or deferred: Σ/∏, interval arithmetic, number bases (Medium), units/currency (out of scope for pure math crate).
 
 ### Low Priority
 - [ ] **Exact symbolic linear system solve** (qalculate's `multisolve`) — 2–4 variables via `to_poly` + rational Gaussian elimination; falls back to the numeric `solve-system`. (From qalculate pass.)
+- [ ] **Simple symbolic ODE solve (`dsolve`)** — separable / linear 1st-order patterns only; fall back to numeric `ode` solvers. (From qalculate 5.12 pass.)
+- [ ] **LaTeX output** — `Expr::to_tex` already exists; expose `latex <expr>` / `to latex` REPL for round-trip with TeX input. (From qalculate 5.12.)
 - [x] **Symbolic quadratic solving** — `qsolve` module: `solve_symbolic(&Expr, var)` extracts coefficients via `to_poly` after simplification, classifies by discriminant (perfect-square → exact integer roots, zero → double root, negative → complex-conjugate roots as Exprs with the `i` literal, evaluable by `ceval`), 12-sig snapping otherwise. `qsolve <expr> [= rhs]` REPL command with step-by-step output (equation → coefficients → discriminant → roots); exactly one inferred variable (avoids the trailing-token ambiguity class). Cubic+ via radicals out of scope. (2026-09-15)
 - [x] **ILU(0)-preconditioned Krylov solvers** — `Ilu0::factorize` (zero-fill LU over A's sparsity pattern, row-wise IKJ) + triangular solves; `bicgstab_ilu` preconditioned BiCGStab via a generic preconditioner-closure core. Exact (1 iteration) on no-fill matrices like tridiagonals; `spbicg ilu` REPL flag.
 - [x] **Stiff ODE solvers (implicit BDF)** — `bdf2_system`/`bdf2_trajectory` in `stiff.rs`: fixed-step BDF2 (A-stable, 2nd order) with one trapezoidal startup step, reusing the shared Newton core; validated by order-2 convergence ratio, stiff-decay stability, and Robertson mass conservation

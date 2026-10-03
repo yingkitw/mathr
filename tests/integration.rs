@@ -691,6 +691,44 @@ fn pdiff_repl() {
 }
 
 #[test]
+fn idiff_repl_circle() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("idiff x^2 + y^2 - 1", ctx)
+        .unwrap()
+        .expect("idiff should return an expression");
+    let mut ctx2 = mathr::eval::Context::standard();
+    ctx2.set("x", 0.6);
+    ctx2.set("y", 0.8);
+    let e = mathr::parser::Parser::parse(&result).unwrap();
+    let val = mathr::eval::eval(&e, &ctx2).unwrap();
+    // dy/dx = -x/y = -0.75
+    assert!((val + 0.75).abs() < 1e-9, "idiff result evaluated to {} expected -0.75", val);
+}
+
+#[test]
+fn idiff_repl_equation_and_steps() {
+    let ctx = mathr::eval::Context::standard();
+    let steps = mathr::repl::dispatch_steps("idiff x^2 + y^2 = 1", ctx).unwrap();
+    assert!(steps.len() >= 4, "expected F, Fx, Fy, dy/dx steps: {:?}", steps);
+    assert!(steps[0].contains("F(x, y)"), "{:?}", steps[0]);
+    assert!(steps.last().unwrap().contains("dy/dx"), "{:?}", steps.last());
+}
+
+#[test]
+fn idiff_repl_explicit_vars() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("idiff s^2 - t t s", ctx)
+        .unwrap()
+        .expect("idiff should return an expression");
+    let mut ctx2 = mathr::eval::Context::standard();
+    ctx2.set("s", 2.0);
+    let e = mathr::parser::Parser::parse(&result).unwrap();
+    let val = mathr::eval::eval(&e, &ctx2).unwrap();
+    // ds/dt = 1/(2s) = 0.25
+    assert!((val - 0.25).abs() < 1e-9, "idiff result evaluated to {} expected 0.25", val);
+}
+
+#[test]
 fn fourier_repl() {
     let ctx = mathr::eval::Context::standard();
     // Fourier series of cos(x) on [-pi, pi] with 5 terms, eval at 0

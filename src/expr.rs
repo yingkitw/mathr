@@ -507,9 +507,11 @@ impl Expr {
                 b.write(f, my_prec, false)?;
             }
             Div(a, b) => {
+                // Right operand at higher prec so `a/(b*c)` doesn't print as
+                // `a/b*c` (left-associative re-parse would mean `(a/b)*c`).
                 a.write(f, my_prec, false)?;
                 f.write_str("/")?;
-                b.write(f, my_prec, false)?;
+                b.write(f, my_prec + 1, false)?;
             }
             Pow(a, b) => {
                 a.write(f, my_prec + 1, false)?;
@@ -558,6 +560,16 @@ mod tests {
             Expr::mul(Expr::num(2.0), Expr::var("x")),
         );
         assert_eq!(format!("{}", e), "1 + 2*x");
+    }
+
+    #[test]
+    fn display_div_parens_denominator_product() {
+        // Without parens, "2*x/2*y" re-parses as ((2*x)/2)*y.
+        let e = Expr::div(
+            Expr::mul(Expr::num(2.0), Expr::var("x")),
+            Expr::mul(Expr::num(2.0), Expr::var("y")),
+        );
+        assert_eq!(format!("{}", e), "2*x/(2*y)");
     }
 
     #[test]

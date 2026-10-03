@@ -168,6 +168,196 @@ pub fn gradient(expr: &Expr) -> Result<Vec<(String, Expr)>> {
     Ok(result)
 }
 
+/// Implicit differentiation for `F(indep, dep) = 0`.
+///
+/// Returns `d(dep)/d(indep) = −(∂F/∂indep) / (∂F/∂dep)`, simplified.
+/// Errors when the two variable names coincide or when `∂F/∂dep` is
+/// identically zero (vertical tangent / not a function of `indep`).
+pub fn implicit_diff(expr: &Expr, indep: &str, dep: &str) -> Result<Expr> {
+    if indep == dep {
+        return Err(MathError::InvalidArgument(
+            "implicit differentiation needs distinct independent and dependent variables".into(),
+        ));
+    }
+    let f_indep = differentiate(expr, indep)?;
+    let f_dep = differentiate(expr, dep)?;
+    if matches!(&f_dep, Expr::Num(n) if *n == 0.0) {
+        return Err(MathError::Eval(format!(
+            "∂F/∂{dep} is zero — cannot solve for d{dep}/d{indep}"
+        )));
+    }
+    // Cancel shared numeric coefficients so REPL output round-trips
+    // (e.g. −(2x)/(2y) → −x/y rather than ambiguous 2*x/2*y).
+    Ok(simplify(&cancel_numeric_ratio(Expr::neg(f_indep), f_dep)))
+}
+
+/// Build `num/den` after cancelling shared numeric coefficients peeled from
+/// multiply/negate chains (local to idiff — does not change `simplify`).
+fn cancel_numeric_ratio(num: Expr, den: Expr) -> Expr {
+    let (cn, rn) = peel_numeric_coeff(&num);
+    let (cd, rd) = peel_numeric_coeff(&den);
+    if !cn.is_finite() || !cd.is_finite() || cd == 0.0 {
+        return Expr::div(num, den);
+    }
+    let ratio = cn / cd;
+    // Denominator is 1 after peeling → scaled numerator only.
+    if matches!(&rd, Expr::Num(d) if (*d - 1.0).abs() < 1e-15) {
+        return scale_by(ratio, rn);
+    }
+    // Fold the coefficient into the numerator: (ratio·rn)/rd.
+    let numer = if matches!(&rn, Expr::Num(n) if (*n - 1.0).abs() < 1e-15) {
+        Expr::num(ratio)
+    } else {
+        scale_by(ratio, rn)
+    };
+    Expr::div(numer, rd)
+}
+
+fn scale_by(ratio: f64, e: Expr) -> Expr {
+    if (ratio - 1.0).abs() < 1e-12 {
+        e
+    } else if (ratio + 1.0).abs() < 1e-12 {
+        Expr::neg(e)
+    } else {
+        Expr::mul(Expr::num(ratio), e)
+    }
+}
+
+fn peel_numeric_coeff(e: &Expr) -> (f64, Expr) {
+    match e {
+        Expr::Num(n) => (*n, Expr::num(1.0)),
+        Expr::Neg(inner) => {
+            let (c, r) = peel_numeric_coeff(inner);
+            (-c, r)
+        }
+        Expr::Mul(a, b) => match (a.as_ref(), b.as_ref()) {
+            (Expr::Num(n), rest) => (*n, rest.clone()),
+            (rest, Expr::Num(n)) => (*n, rest.clone()),
+            _ => {
+                let (ca, ra) = peel_numeric_coeff(a);
+                let (cb, rb) = peel_numeric_coeff(b);
+                (ca * cb, simplify(&Expr::mul(ra, rb)))
+            }
+        },
+        other => (1.0, other.clone()),
+    }
+}
+
+fn is_bound_name(v: &str) -> bool {
+    matches!(v, "pi" | "e" | "tau" | "inf" | "i")
+}
+
+/// Free variables of `expr`, excluding built-in constants / the `i` literal.
+fn free_vars(expr: &Expr) -> Vec<String> {
+    expr.variables()
+        .into_iter()
+        .filter(|v| !is_bound_name(v))
+        .collect()
+}
+
+/// Infer `(indep, dep)` for implicit differentiation.
+///
+/// Prefer `(x, other)` when `x` is present among exactly two free variables;
+/// otherwise use alphabetical order. Callers with other conventions should
+/// pass the pair explicitly.
+pub fn infer_implicit_vars(expr: &Expr) -> Result<(String, String)> {
+    let mut vars = free_vars(expr);
+    vars.sort();
+    vars.dedup();
+    match vars.as_slice() {
+        [a, b] if a == "x" => Ok((a.clone(), b.clone())),
+        [a, b] if b == "x" => Ok((b.clone(), a.clone())),
+        [a, b] => Ok((a.clone(), b.clone())),
+        _ => Err(MathError::InvalidArgument(format!(
+            "implicit differentiation needs exactly two free variables (found {:?}); pass <indep> <dep>",
+            vars
+        ))),
+    }
+}
+
+/// REPL-facing steps for `idiff <expr> [= rhs] [<indep> <dep>]`.
+pub fn idiff_steps_str(input: &str) -> Result<Vec<String>> {
+    let (body, indep, dep) = parse_idiff_input(input)?;
+    let f_indep = differentiate(&body, &indep)?;
+    let f_dep = differentiate(&body, &dep)?;
+    let result = implicit_diff(&body, &indep, &dep)?;
+    Ok(vec![
+        format!("F({}, {}) = {}", indep, dep, body),
+        format!("∂F/∂{} = {}", indep, f_indep),
+        format!("∂F/∂{} = {}", dep, f_dep),
+        format!(
+            "d{}/d{} = -(∂F/∂{})/(∂F/∂{}) = {}",
+            dep, indep, indep, dep, result
+        ),
+    ])
+}
+
+/// Parse `idiff` input into `(F, indep, dep)`. Supports optional `= rhs`
+/// (moved to the left) and optional trailing `<indep> <dep>`.
+fn parse_idiff_input(input: &str) -> Result<(Expr, String, String)> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(MathError::Eval(
+            "`idiff` needs: <expr> [= rhs] [<indep> <dep>]".into(),
+        ));
+    }
+
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    // Try trailing `<indep> <dep>` when the head still forms a valid relation.
+    let (body, indep, dep) = if tokens.len() >= 3
+        && is_ident(tokens[tokens.len() - 2])
+        && is_ident(tokens[tokens.len() - 1])
+    {
+        let indep = tokens[tokens.len() - 2];
+        let dep = tokens[tokens.len() - 1];
+        let head = tokens[..tokens.len() - 2].join(" ");
+        match parse_relation(&head) {
+            Ok(body) => (body, indep.to_string(), dep.to_string()),
+            Err(_) => {
+                let body = parse_relation(input)?;
+                let (a, b) = infer_implicit_vars(&body)?;
+                (body, a, b)
+            }
+        }
+    } else {
+        let body = parse_relation(input)?;
+        let (a, b) = infer_implicit_vars(&body)?;
+        (body, a, b)
+    };
+
+    if indep == dep {
+        return Err(MathError::InvalidArgument(
+            "implicit differentiation needs distinct independent and dependent variables".into(),
+        ));
+    }
+    Ok((body, indep, dep))
+}
+
+fn is_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
+
+fn parse_relation(src: &str) -> Result<Expr> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Err(MathError::Eval("empty expression".into()));
+    }
+    match src.split_once('=') {
+        Some((lhs, rhs)) => {
+            let l = crate::parser::Parser::parse(lhs.trim())?;
+            let r = crate::parser::Parser::parse(rhs.trim())?;
+            Ok(simplify(&Expr::sub(l, r)))
+        }
+        None => crate::parser::Parser::parse(src),
+    }
+}
+
 /// Symbolic indefinite integration for the common elementary rules.
 ///
 /// Handles:
@@ -550,5 +740,68 @@ mod tests {
         let e = Parser::parse("42").unwrap();
         let grad = gradient(&e).unwrap();
         assert!(grad.is_empty());
+    }
+
+    #[test]
+    fn implicit_circle() {
+        // x² + y² − 1 = 0 → dy/dx = −x/y
+        let e = Parser::parse("x^2 + y^2 - 1").unwrap();
+        let got = implicit_diff(&e, "x", "y").unwrap();
+        let want = Parser::parse("-x/y").unwrap();
+        let mut ctx = Context::standard();
+        for &(x, y) in &[(0.6, 0.8), (-0.3, 0.5), (0.1, -0.9)] {
+            ctx.set("x", x);
+            ctx.set("y", y);
+            let g = eval(&got, &ctx).unwrap();
+            let w = eval(&want, &ctx).unwrap();
+            assert!((g - w).abs() < 1e-9, "at ({},{}): got {} want {}", x, y, g, w);
+        }
+    }
+
+    #[test]
+    fn implicit_infer_xy() {
+        let e = Parser::parse("x^2 + y^2 - 1").unwrap();
+        let (indep, dep) = infer_implicit_vars(&e).unwrap();
+        assert_eq!((indep.as_str(), dep.as_str()), ("x", "y"));
+    }
+
+    #[test]
+    fn implicit_vertical_rejected() {
+        // F = x − 1 → ∂F/∂y = 0
+        let e = Parser::parse("x - 1").unwrap();
+        assert!(implicit_diff(&e, "x", "y").is_err());
+    }
+
+    #[test]
+    fn implicit_same_var_rejected() {
+        let e = Parser::parse("x^2 + y").unwrap();
+        assert!(implicit_diff(&e, "x", "x").is_err());
+    }
+
+    #[test]
+    fn idiff_steps_equation_form() {
+        let steps = idiff_steps_str("x^2 + y^2 = 1").unwrap();
+        assert_eq!(steps.len(), 4);
+        assert!(steps[0].contains("F(x, y)"), "{:?}", steps[0]);
+        assert!(steps[3].starts_with("dy/dx ="), "last step: {}", steps[3]);
+        assert!(steps[3].contains("/"), "expected a quotient in {}", steps[3]);
+    }
+
+    #[test]
+    fn idiff_steps_explicit_vars() {
+        // Treat t as independent, s as dependent: s^2 − t = 0 → ds/dt = 1/(2s)
+        let steps = idiff_steps_str("s^2 - t t s").unwrap();
+        assert!(steps[0].contains("F(t, s)"), "{:?}", steps[0]);
+        assert!(steps[3].starts_with("ds/dt ="), "last step: {}", steps[3]);
+        let got = implicit_diff(&Parser::parse("s^2 - t").unwrap(), "t", "s").unwrap();
+        let want = Parser::parse("1/(2*s)").unwrap();
+        let mut ctx = Context::standard();
+        for &s in &[0.5, 1.0, 2.0] {
+            ctx.set("s", s);
+            ctx.set("t", s * s);
+            let g = eval(&got, &ctx).unwrap();
+            let w = eval(&want, &ctx).unwrap();
+            assert!((g - w).abs() < 1e-9, "at s={}: got {} want {}", s, g, w);
+        }
     }
 }
