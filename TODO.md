@@ -114,7 +114,7 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **968 inline unit tests** + 259 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
+- [x] **993 inline unit tests** + 259 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
 
 ### Fast math

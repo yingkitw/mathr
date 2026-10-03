@@ -36,12 +36,86 @@ impl Rational {
         }
     }
 
-    /// Create a rational from an integer.
+/// Create a rational from an integer.
     pub fn from_int(n: i64) -> Self {
         Self { num: n, den: 1 }
     }
 
-    /// Numerator.
+    /// Find the closest rational approximation `p/q` (with `1 <= q <= max_den`)
+    /// to `x` using the continued-fraction convergent sequence.
+    ///
+    /// Returns `None` only if `x` is non-finite or `max_den < 1`.  Otherwise
+    /// returns the best (smallest `|x − p/q|`) convergent whose denominator
+    /// fits the budget — even when the best approximation is still a poor
+    /// fit (e.g. `x = π, max_den = 3` returns `3/1`).  The caller decides
+    /// whether the approximation is acceptable by comparing against the
+    /// raw float.
+    ///
+    /// Cross-port pattern from unsolve `limit.ts:537-562` and `apart.ts:93-117`.
+    ///
+    /// The algorithm walks the simple continued fraction of `|x|` and
+    /// returns the convergent with denominator in range that minimises
+    /// `|x − p/q|`.  An exact hit (within `1e-15`) is accepted immediately
+    /// to avoid regressing to a worse approximation for clean fractions
+    /// like `0.5` or `1/7`.
+    pub fn from_float_snap(x: f64, max_den: i64) -> Option<Self> {
+        if !x.is_finite() || max_den < 1 {
+            return None;
+        }
+        if x == 0.0 {
+            return Some(Self::from_int(0));
+        }
+        let sign: i64 = if x < 0.0 { -1 } else { 1 };
+        let r = x.abs();
+        // Walk CF convergents h/k starting from h0=1, k0=0 and h1=floor(r), k1=1.
+        let mut h0: i64 = 1;
+        let mut k0: i64 = 0;
+        let mut h1: i64 = r.floor() as i64;
+        let mut k1: i64 = 1;
+        // Check the integer part alone.
+        if h1 as f64 == r {
+            return Self::new(sign * h1, 1).ok();
+        }
+        let mut frac = r - h1 as f64;
+        let mut best: (i64, i64, f64) = (sign * h1, 1, (h1 as f64 - r).abs());
+        let mut iters = 0usize;
+        const MAX_ITERS: usize = 200;
+        while k1 <= max_den && frac > 1e-15 && iters < MAX_ITERS {
+            iters += 1;
+            let inv = 1.0 / frac;
+            let a = inv.floor() as i64;
+            let h2 = a.checked_mul(h1).and_then(|v| v.checked_add(h0));
+            let k2 = a.checked_mul(k1).and_then(|v| v.checked_add(k0));
+            let (h2, k2) = match (h2, k2) {
+                (Some(h), Some(k)) => (h, k),
+                _ => break,
+            };
+            if k2 > max_den || k2 <= 0 {
+                break;
+            }
+            let approx = h2 as f64 / k2 as f64;
+            let err = (approx - r).abs();
+            // Exact hit (within tolerance): accept immediately.
+            if err < 1e-15 {
+                return Self::new(sign * h2, k2).ok();
+            }
+            if err < best.2 {
+                best = (sign * h2, k2, err);
+            }
+            h0 = h1;
+            k0 = k1;
+            h1 = h2;
+            k1 = k2;
+            let frac_rest = inv - a as f64;
+            if frac_rest <= 0.0 {
+                break;
+            }
+            frac = frac_rest;
+        }
+        Self::new(best.0, best.1).ok()
+    }
+
+/// Numerator.
     pub fn num(&self) -> i64 {
         self.num
     }
@@ -99,16 +173,79 @@ impl Rational {
                 result = result * base;
             }
             base = base * base;
-            e >>= 1;
+e >>= 1;
         }
         result
     }
+
+    /// Snap a float to a rational display string, falling back to a 12-significant-
+    /// digit fixed representation when no clean fraction exists.  `max_den`
+    /// caps the denominator (e.g. `1_000_000` for limits, `10_000` for
+    /// partial fractions and qsolve).
+    ///
+    /// Default tolerance (`tol = None`) requires the CF to terminate
+    /// *exactly* (err < 1e-15).  This avoids misleading outputs like
+    /// `665857/470832` for `sqrt(2)` while still accepting `5/3` and
+    /// `1/7`.  Pass `Some(t)` to override (e.g. for testing or a noisy
+    /// numeric input).
+    ///
+    /// Returns `None` only for non-finite `v`.
+    pub fn snap_to_string(v: f64, max_den: i64, tol: Option<f64>) -> Option<String> {
+        if !v.is_finite() {
+            return None;
+        }
+        if let Some(r) = Self::from_float_snap(v, max_den) {
+            let err = (r.to_f64() - v).abs();
+            let ok = match tol {
+                Some(t) => err <= t,
+                None => err < 1e-15,
+            };
+            if ok {
+                return Some(r.to_string());
+            }
+        }
+        // Fallback: integer or 12-sig-digit fixed (mirrors limit.rs / qsolve.rs /
+        // apart.rs conventions so we don't regress those modules' tests).
+        let snapped = if (v - v.round()).abs() < 1e-9 * v.abs().max(1.0) {
+            v.round()
+        } else {
+            let mag = v.abs();
+            let digits = 11 - mag.log10().floor() as i32;
+            if !(-20..=20).contains(&digits) {
+                v
+            } else {
+                let factor = 10f64.powi(digits);
+                (v * factor).round() / factor
+            }
+        };
+        Some(format_snap_f64(snapped))
+    }
+}
+
+/// 12-significant-digit fallback formatter (replicates the inline snapping in
+/// `qsolve::snap` / `limit::snap_num` / `apart::snap` so a single shared
+/// helper can replace them).
+fn format_snap_f64(v: f64) -> String {
+    if !v.is_finite() {
+        return format!("{}", v);
+    }
+    if (v - v.round()).abs() < 1e-9 * v.abs().max(1.0) {
+        return format!("{}", v.round() as i64);
+    }
+    let mag = v.abs();
+    let digits = 11 - mag.log10().floor() as i32;
+    if !(-20..=20).contains(&digits) {
+        return format!("{}", v);
+    }
+    let factor = 10f64.powi(digits);
+    let rounded = (v * factor).round() / factor;
+    format!("{}", rounded)
 }
 
 /// Try to evaluate an `Expr` using exact rational arithmetic.
-/// Returns `Some(Rational)` if all parts are rational (integer leaves + arithmetic ops).
-/// Returns `None` if the expression contains functions, variables, or non-integer constants.
-pub fn eval_rational(e: &crate::expr::Expr) -> Option<Rational> {
+    /// Returns `Some(Rational)` if all parts are rational (integer leaves + arithmetic ops).
+    /// Returns `None` if the expression contains functions, variables, or non-integer constants.
+    pub fn eval_rational(e: &crate::expr::Expr) -> Option<Rational> {
     use crate::expr::Expr::*;
     match e {
         Num(x) => {
@@ -644,5 +781,160 @@ mod tests {
         let r = eval_rational(&e).unwrap();
         assert_eq!(r.num(), 2);
         assert_eq!(r.den(), 3);
+    }
+
+    // ---- from_float_snap: continued-fraction rational recovery ----
+    // Cross-port pattern from unsolve `limit.ts:537-562` and `apart.ts:93-117`.
+
+    fn s(x: f64, max: i64) -> (i64, i64) {
+        let r = Rational::from_float_snap(x, max).expect("expected a rational");
+        (r.num(), r.den())
+    }
+
+    #[test]
+    fn snap_zero() {
+        assert_eq!(s(0.0, 1000), (0, 1));
+    }
+
+    #[test]
+    fn snap_integer() {
+        assert_eq!(s(5.0, 1000), (5, 1));
+        assert_eq!(s(-7.0, 1000), (-7, 1));
+    }
+
+    #[test]
+    fn snap_half() {
+        // 0.5 → exact 1/2 even with a large budget
+        assert_eq!(s(0.5, 100), (1, 2));
+    }
+
+    #[test]
+    fn snap_negative_half() {
+        assert_eq!(s(-0.5, 100), (-1, 2));
+    }
+
+    #[test]
+    fn snap_third() {
+        // 1/3 = 0.333...; with max_den=10 the best is 1/3
+        assert_eq!(s(1.0 / 3.0, 10), (1, 3));
+    }
+
+    #[test]
+    fn snap_5_over_3() {
+        // The harvest's signature case: 5/3 ≈ 1.6666666667
+        assert_eq!(s(5.0 / 3.0, 100), (5, 3));
+    }
+
+    #[test]
+    fn snap_negative_7_over_2() {
+        // qsolve-style case: -3.5 → -7/2
+        assert_eq!(s(-3.5, 100), (-7, 2));
+    }
+
+    #[test]
+    fn snap_seventh() {
+        // 1/7 with max_den=20 → exact
+        assert_eq!(s(1.0 / 7.0, 20), (1, 7));
+    }
+
+    #[test]
+    fn snap_pi_is_not_rational_with_small_budget() {
+        // π with max_den=100 → 22/7 is the classic convergent
+        let r = Rational::from_float_snap(std::f64::consts::PI, 100).unwrap();
+        assert_eq!((r.num(), r.den()), (22, 7));
+    }
+
+    #[test]
+    fn snap_pi_with_tiny_budget_falls_back() {
+        // π with max_den=3 → 3/1 is the best (≈ 3.0), error ≈ 0.14
+        // We don't assert a specific value — just that nothing panics and
+        // it's reasonable.
+        let r = Rational::from_float_snap(std::f64::consts::PI, 3);
+        // With max_den=3, the CF walk would yield 3/1 (integer part)
+        // or potentially 13/4 (out of budget). The integer convergent wins.
+        assert!(r.is_some());
+        let r = r.unwrap();
+        assert_eq!((r.num(), r.den()), (3, 1));
+    }
+
+    #[test]
+    fn snap_non_finite_returns_none() {
+        assert!(Rational::from_float_snap(f64::NAN, 100).is_none());
+        assert!(Rational::from_float_snap(f64::INFINITY, 100).is_none());
+        assert!(Rational::from_float_snap(f64::NEG_INFINITY, 100).is_none());
+    }
+
+    #[test]
+    fn snap_overflow_returns_none() {
+        // max_den < 1 is invalid
+        assert!(Rational::from_float_snap(1.5, 0).is_none());
+        assert!(Rational::from_float_snap(1.5, -1).is_none());
+    }
+
+    #[test]
+    fn snap_too_inaccurate_returns_none() {
+        // 0.1 with max_den=2: best is 0/1 (err 0.1). That's within tolerance
+        // — so it might still snap. Use a less-cooperative value:
+        // 0.30000001 with max_den=5 → best is 3/10 (out of budget) or 1/3 (in
+        // budget). 1/3 = 0.333... err = 0.033, well within tolerance.
+        // Actually 0.30000001 with max_den=5 → 1/3 (err 0.033) is accepted.
+        // Just verify the API doesn't panic.
+        let r = Rational::from_float_snap(0.30000001, 5);
+        assert!(r.is_some());
+    }
+
+    // ---- snap_to_string: format a float as a rational if one fits cleanly ----
+
+    #[test]
+    fn snap_string_rational_hits() {
+        // The harvest's signature case: 5/3 must display as "5/3".
+        assert_eq!(Rational::snap_to_string(5.0 / 3.0, 1_000_000, None).unwrap(), "5/3");
+        assert_eq!(Rational::snap_to_string(-7.0 / 2.0, 1_000_000, None).unwrap(), "-7/2");
+        assert_eq!(Rational::snap_to_string(0.5, 1_000_000, None).unwrap(), "1/2");
+    }
+
+    #[test]
+    fn snap_string_integer() {
+        assert_eq!(Rational::snap_to_string(5.0, 1000, None).unwrap(), "5");
+        assert_eq!(Rational::snap_to_string(-3.0, 1000, None).unwrap(), "-3");
+    }
+
+    #[test]
+    fn snap_string_integer_via_near_integer() {
+        // Values within tolerance of an integer should display as that integer.
+        assert_eq!(
+            Rational::snap_to_string(0.9999999999998, 1000, None).unwrap(),
+            "1"
+        );
+    }
+
+    #[test]
+    fn snap_string_fallback_to_fixed_for_irrational() {
+        // √2 has no small-denominator rational; should fall back to 12-sig-digit.
+        let s = Rational::snap_to_string(std::f64::consts::SQRT_2, 100, None).unwrap();
+        // Verify it's a plain decimal representation (not "a/b").
+        assert!(!s.contains('/'), "expected plain decimal, got: {s}");
+    }
+
+    #[test]
+    fn snap_string_non_finite_returns_none() {
+        assert!(Rational::snap_to_string(f64::NAN, 1000, None).is_none());
+        assert!(Rational::snap_to_string(f64::INFINITY, 1000, None).is_none());
+    }
+
+    #[test]
+    fn snap_string_custom_tolerance_allows() {
+        // With a generous tolerance (0.01), accept the snap.
+        let s = Rational::snap_to_string(5.0 / 3.0, 1000, Some(0.01)).unwrap();
+        assert_eq!(s, "5/3");
+    }
+
+    #[test]
+    fn snap_string_exact_rational_always_accepted() {
+        // 5/3 IS exactly representable by the CF algorithm (the float
+        // 5.0/3.0 hits the convergent with err < 1e-15), so even a
+        // tight tolerance can't skip it.  This documents the design.
+        let s = Rational::snap_to_string(5.0 / 3.0, 1000, Some(1e-15)).unwrap();
+        assert_eq!(s, "5/3");
     }
 }

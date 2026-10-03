@@ -63,14 +63,20 @@ impl std::fmt::Display for LimitValue {
 }
 
 fn fmt_value(v: f64) -> String {
-    if v == v.trunc() && v.abs() < 1e15 {
-        format!("{}", v as i64)
-    } else {
-        format!("{:.10}", v)
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string()
-    }
+    // Prefer rational display (CF snap with max_den = 10^6) so values like
+    // 5/3 print as "5/3" rather than "1.6666666667".  Falls back to the
+    // 12-sig-digit fixed-point formatter for irrationals.
+    crate::rational::Rational::snap_to_string(v, 1_000_000, None)
+        .unwrap_or_else(|| {
+            if v == v.trunc() && v.abs() < 1e15 {
+                format!("{}", v as i64)
+            } else {
+                format!("{:.10}", v)
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+            }
+        })
 }
 
 /// Compute `lim var→point expr`.
@@ -422,6 +428,20 @@ mod tests {
         assert_eq!(snap_num(0.9999999999999983), 1.0);
         assert_eq!(snap_num(2.0000000000000004), 2.0);
         assert_eq!(snap_num(0.49999999999999994), 0.5);
+    }
+
+    #[test]
+    fn fmt_value_uses_rational_snap() {
+        // The harvest's signature case: 5/3 must print as "5/3", not
+        // "1.6666666667".  Cross-port from unsolve `limit.ts:537-562`.
+        assert_eq!(fmt_value(5.0 / 3.0), "5/3");
+        assert_eq!(fmt_value(-7.0 / 2.0), "-7/2");
+        assert_eq!(fmt_value(0.5), "1/2");
+        // Integer-clean values stay integers.
+        assert_eq!(fmt_value(2.0), "2");
+        // Irrationals fall back to fixed-point display.
+        let s = fmt_value(std::f64::consts::SQRT_2);
+        assert!(!s.contains('/'), "irrational should not contain '/': {s}");
     }
 
     #[test]

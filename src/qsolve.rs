@@ -11,14 +11,22 @@ use crate::error::{MathError, Result};
 use crate::expr::Expr;
 use crate::poly::{to_poly, Poly, Term};
 
-/// Snap values indistinguishable from integers, then round to 12 significant
-/// digits (same convention as `limit.rs::snap_num`).
+/// Snap values indistinguishable from integers, then preserve any clean
+/// rational (err < 1e-15 with denominator ≤ 10_000 — so `6x²-5x-1` keeps
+/// `-1/6` instead of degrading to `-0.166666666667` in the AST and losing
+/// it downstream), then round to 12 significant digits (same fallback as
+/// `limit.rs::snap_num`).
 fn snap(v: f64) -> f64 {
     if !v.is_finite() {
         return v;
     }
     if (v - v.round()).abs() < 1e-9 * v.abs().max(1.0) {
         return v.round();
+    }
+    if let Some(r) = crate::rational::Rational::from_float_snap(v, 10_000) {
+        if (r.to_f64() - v).abs() < 1e-15 {
+            return r.to_f64();
+        }
     }
     let mag = v.abs();
     let digits = 11 - mag.log10().floor() as i32;
@@ -173,7 +181,7 @@ pub fn qsolve_steps_str(input: &str) -> Result<Vec<String>> {
             fmt_coeff(c)
         ));
         let roots = solve_symbolic(&e, &var)?;
-        steps.push(format!("{var} = {}", roots[0]));
+        steps.push(format!("{var} = {}", fmt_root(&roots[0])));
         return Ok(steps);
     }
     let d = b * b - 4.0 * a * c;
@@ -196,9 +204,69 @@ pub fn qsolve_steps_str(input: &str) -> Result<Vec<String>> {
         }
     ));
     let roots = solve_symbolic(&e, &var)?;
-    let joined: Vec<String> = roots.iter().map(|r| format!("{var} = {r}")).collect();
+    let joined: Vec<String> = roots.iter().map(|r| format!("{var} = {}", fmt_root(r))).collect();
     steps.push(joined.join(", "));
     Ok(steps)
+}
+
+/// Render a root expression with rational display where possible.
+/// `Expr::Num(v)` becomes `"5/3"` instead of `"1.6666666667"` when a
+/// clean fraction fits within `max_den = 10_000`.  Complex roots built
+/// by `complex_root_expr` get their real part and imaginary coefficient
+/// rationalized too (so `x² + x + 1` prints `-1/2 ± 0.866…i`).  Falls
+/// back to the default `Expr` Display for anything else.
+///
+/// Cross-port pattern from unsolve `solver.ts:399-406` (exact complex
+/// real parts) and `limit.ts:537-562` (rational pole display).
+fn fmt_root(e: &Expr) -> String {
+    use Expr::*;
+    match e {
+        Num(v) => crate::rational::Rational::snap_to_string(*v, 10_000, None)
+            .unwrap_or_else(|| format!("{}", v)),
+        // ±im*i or ±re ± im*i built by complex_root_expr
+        Add(re_box, im_box) | Sub(re_box, im_box) => {
+            if let (Num(re), Mul(im_lhs, im_rhs)) = (re_box.as_ref(), im_box.as_ref()) {
+                if let (Num(im), Var(v)) = (im_lhs.as_ref(), im_rhs.as_ref()) {
+                    if v == "i" {
+                        let re_s = crate::rational::Rational::snap_to_string(*re, 10_000, None)
+                            .unwrap_or_else(|| format!("{}", re));
+                        let im_s = crate::rational::Rational::snap_to_string(*im, 10_000, None)
+                            .unwrap_or_else(|| format!("{}", im));
+                        let sign = if matches!(e, Sub(..)) { " - " } else { " + " };
+                        let im_part = if im_s == "1" { "i".to_string() } else { format!("{im_s}*i") };
+                        return format!("{re_s}{sign}{im_part}");
+                    }
+                }
+            }
+            format!("{e}")
+        }
+        // ±im*i with no real part (Neg(Mul(Num(im), Var(i))))
+        Neg(inner_box) => {
+            if let Mul(im_lhs, im_rhs) = inner_box.as_ref() {
+                if let (Num(im), Var(v)) = (im_lhs.as_ref(), im_rhs.as_ref()) {
+                    if v == "i" {
+                        let im_s = crate::rational::Rational::snap_to_string(-*im, 10_000, None)
+                            .unwrap_or_else(|| format!("{}", -im));
+                        let im_part = if im_s == "1" { "i".to_string() } else { format!("{im_s}*i") };
+                        return format!("-{im_part}");
+                    }
+                }
+            }
+            format!("{e}")
+        }
+        // bare im*i
+        Mul(im_lhs, im_rhs) => {
+            if let (Num(im), Var(v)) = (im_lhs.as_ref(), im_rhs.as_ref()) {
+                if v == "i" {
+                    let im_s = crate::rational::Rational::snap_to_string(*im, 10_000, None)
+                        .unwrap_or_else(|| format!("{}", im));
+                    return if im_s == "1" { "i".to_string() } else { format!("{im_s}*i") };
+                }
+            }
+            format!("{e}")
+        }
+        _ => format!("{e}"),
+    }
 }
 
 #[cfg(test)]
@@ -270,5 +338,36 @@ mod tests {
         let rs = solve_symbolic(&e, "x").unwrap();
         assert_eq!(rs.len(), 2);
         assert_eq!(rs[0].to_string(), "1 + 2*i");
+    }
+
+    // ---- Cross-port rational display (unsolve `solver.ts:380-451`) ----
+
+    #[test]
+    fn rational_display_linear_root() {
+        // 2x + 7 = 0 → x = -7/2 (not -3.5)
+        assert_eq!(roots("2*x + 7"), vec!["x = -7/2"]);
+    }
+
+    #[test]
+    fn rational_display_quadratic_with_rational_roots() {
+        // 6x² - 5x - 1 = 0 → roots are exactly 1 and -1/6.
+        let r = roots("6*x^2 - 5*x - 1");
+        assert!(r.contains(&"x = 1".to_string()), "got {r:?}");
+        assert!(r.contains(&"x = -1/6".to_string()), "got {r:?}");
+    }
+
+    #[test]
+    fn rational_display_complex_real_part() {
+        // x² + x + 1 = 0 → re = -1/2, not -0.5
+        let r = roots("x^2 + x + 1");
+        for s in &r {
+            assert!(s.contains("-1/2"), "expected exact -1/2 in: {s}");
+            assert!(!s.contains("-0.5"), "expected no decimal -0.5 in: {s}");
+        }
+    }
+
+    #[test]
+    fn rational_display_simple_integer_roots() {
+        assert_eq!(roots("x^2 - 5x + 6"), vec!["x = 3", "x = 2"]);
     }
 }
