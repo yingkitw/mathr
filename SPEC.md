@@ -165,6 +165,20 @@ mathr> serialize rpn import 2 x * 1 +
 ```
 Operators: `+ - * / ^` (binary), `neg` (unary). Functions use a `<name>:<arity>` call token, e.g. `x sin:1` for `sin(x)`, `x 2 pow:2` for `pow(x, 2)`.
 
+### Lean 4 Export
+
+Expressions can be exported to **Lean 4** terms over `ℝ` (requires [Mathlib](https://github.com/leanprover-community/mathlib4) to compile). Numeric literals are exported exactly as ascribed reals (`(2 : ℝ)`, `(0.5 : ℝ)`); integral powers use monoid `^` with a `ℕ` exponent (correct for negative bases), other powers use rpow. Elementary functions map to Mathlib names (`sin` → `Real.sin`, `ln` → `Real.log`, `log(x, b)` → `Real.logb b x` — note the argument swap); functions without a Mathlib counterpart (`gamma`, `erf`, …) are emitted as plain applications to define in Lean.
+
+**REPL** (`lean <expr>` — prints a self-contained file):
+```
+mathr> lean x^2 + sin(y)
+import Mathlib
+
+/-- Exported from mathr. -/
+noncomputable def mathr_export (x y : ℝ) : ℝ :=
+  ((x ^ (2 : ℕ)) + (Real.sin y))
+```
+
 ### Interval Arithmetic
 
 Interval arithmetic computes guaranteed bounds on a function's output over a range of inputs. Instead of a single value, each variable is assigned an interval `[lo, hi]`, and operations propagate worst-case bounds through the expression.
@@ -597,6 +611,11 @@ p=0.001
 | `cond <rows...>` | 2-norm condition number σ_max/σ_min (SVD); `inf` for singular |
 | `null <rows...>` | Orthonormal nullspace basis of `{x : A·x = 0}` |
 | `det <rows...>` | Matrix determinant |
+| `inv <rows...>` | Matrix inverse (errors when singular) |
+| `transpose <rows...>` | Matrix transpose |
+| `trace <rows...>` | Sum of diagonal entries |
+| `eigen <rows...>` | Symmetric eigendecomposition (λ ascending, eigenvectors as columns; symmetry checked) |
+| `linsolve [A|b]` | Solve A·x = b from the augmented matrix (last column = b) |
 | `spline x1 y1 x2 y2 ... x_at` | Cubic spline at `x_at` |
 | `chebyshev n [x]` | Chebyshev `T_n(x)` (or `n` nodes) |
 | `legendre n [x]` | Legendre `P_n(x)` (or `n`-point Gauss–Legendre) |
@@ -607,6 +626,7 @@ p=0.001
 | `dlog <g> <h> <p>` | Discrete logarithm |
 | `mathml <expr>` / `mathml import <ml>` | Presentation MathML export/import |
 | `serialize <fmt> <expr>` / `serialize <fmt> import <t>` | Expression serialization (`fmt`: `sexpr`/`json`/`rpn`) |
+| `lean <expr>` | Lean 4 export (self-contained file, needs Mathlib) |
 | `interval <expr> with <var>=[lo,hi],...` | Rigorous bounds via interval arithmetic |
 | `vars` / `funcs` | Show bindings |
 | `clear` | Reset context |

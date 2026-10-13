@@ -108,6 +108,7 @@ pub mod serialize;
 pub mod interval;
 pub mod bigdec;
 pub mod limit;
+pub mod lean;
 pub mod poly;
 pub mod apart;
 pub mod qsolve;
@@ -147,6 +148,7 @@ pub mod prelude {
     pub use crate::interval::{Interval, eval_interval};
     pub use crate::bigdec::{eval_decimal, BigDecimal};
     pub use crate::limit::{limit, LimitValue};
+    pub use crate::lean::{to_lean, to_lean_doc};
     pub use crate::poly::expand;
     pub use crate::apart::apart;
     pub use crate::curvefit::{curve_fit, LmFit, LmOptions};

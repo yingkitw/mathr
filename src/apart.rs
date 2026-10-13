@@ -25,9 +25,14 @@
 //!
 //! let e = Parser::parse("1/(x*(x+1))").unwrap();
 //! let out = apart(&e, "x").unwrap().to_string();
-//! // 1/(x(x+1)) = 1/x − 1/(x+1)
+//! // 1/(x(x+1)) = 1/x − 1/(x+1). The simplified output canonicalises the
+//! // additive ordering, so the linear term may also print as `1/(1 + x)`.
 //! assert!(out.contains("1/x"), "got: {}", out);
-//! assert!(out.contains("1/(x + 1)"), "got: {}", out);
+//! assert!(
+//!     out.contains("1/(x + 1)") || out.contains("1/(1 + x)"),
+//!     "got: {}",
+//!     out
+//! );
 //! ```
 
 use crate::error::{MathError, Result};

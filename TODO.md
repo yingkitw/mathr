@@ -114,7 +114,7 @@
 - [x] LaTeX / TeX input (`\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, …; `$...$`, `$$...$$`, `\[...\]`, `\(...\)`)
 - [x] Interactive REPL (rustyline-powered with history)
 - [x] CLI subcommands and REPL dispatch for all features
-- [x] **993 inline unit tests** + 259 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
+- [x] **1042 inline unit tests** + 268 integration tests — all passing; `cargo clippy --all-targets` exits 0; doc-sync enforced by `tests/docs_sync.rs` (AGENTS.md tree, ARCHITECTURE.md mentions, TODO.md counts)
 - [x] AGENTS.md, README.md, ARCHITECTURE.md, SPEC.md
 
 ### Fast math
@@ -197,6 +197,30 @@ Next weakest: Docs alignment → now enforced: `tests/docs_sync.rs` (2026-09-15)
 | Wiring & ergonomics | 5 | `idiff` in REPL, `dispatch_steps`, prelude, webui command list, calculus_demo |
 | Footprint | 4 | No new deps |
 
+### Codebase Scorecard — fourth pass (2026-10-13, /30)
+| Dimension | Score | Evidence |
+|---|---|---|
+| Correctness & coverage | 5 | 1014 unit (+61) + 259 integration + 13 doc-tests + 4 docs_sync green; +21 new like-term/coefficient tests; 1 apart test relaxed for canonicalize display flip (output unchanged mathematically) |
+| Numerical fidelity | 5 | Like-term collection is purely structural; no numeric drift |
+| Maintainability | 4 | simplify.rs: doc-comment drift fixed; new helper `split_coefficient`/`rebuild_term` keep `collect` short |
+| Docs alignment | 5 | MEMORY.md + AGENTS.md unchanged in scope; TODO + count updated; docs_sync all green |
+| Wiring & ergonomics | 5 | No new REPL command (pure library improvement to `simplify()`) |
+| Footprint | 4 | No new deps |
+
+**Total: 28/30**. Remaining 2 points: clippy style debt in mature modules frozen by policy. Next lever: High-priority continued-fraction rational snapping (single shared `snap_rational` for qsolve/limit/apart) or Medium-priority sign-scan all-roots numeric solve (both thin extensions).
+
+### Codebase Scorecard — fifth pass (2026-10-13, /30)
+| Dimension | Score | Evidence |
+|---|---|---|
+| Correctness & coverage | 5 | 1042 unit (+22 lean tests) + 268 tests/ (+4 pipeline REPL tests for lean, +4 matrix REPL tests) — all green; 14 doc-tests; no regressions |
+| Numerical fidelity | 5 | Lean exporter f64 → ℝ is exact-rational (sound); matrix REPL commands sit over existing `Matrix` public API (no new numerics) |
+| Maintainability | 4 | Matrix REPL parity landed in `repl.rs` without touching mature `matrix.rs` (symmetry check in REPL layer per Mature Module Policy); `repl.rs` gained a symmetry-tolerance convention |
+| Docs alignment | 5 | MEMORY.md "Lean 4 Export Patterns" + new "pass #2" cross-port entry; SPEC.md command table +5; README updated; TODO.md done entries + counts; AGENTS.md tree (lean.rs); ARCHITECTURE.md (lean, MCP server gap noted) |
+| Wiring & ergonomics | 5 | 5 new matrix REPL commands (`inv`/`transpose`/`trace`/`eigen`/`linsolve`); `lean <expr>` REPL command (28 unit + 5 integration tests); `examples/lean_demo.rs` |
+| Footprint | 4 | No new deps; the Lean exporter is pure string formatting |
+
+**Total: 28/30**. Remaining 2 points: clippy style debt in mature modules frozen by policy. Next lever: the **MCP server** gap (surfaced in pass #2; highest-impact remaining external-surface work — mathr's `dispatch_str` is the near-natural back-end for ≈14 tools).
+
 **Total: 28/30**. Next lever: Medium backlog (dot/cross, number-base) — high user-feel, thin surface area.
 
 ### High Priority
@@ -205,14 +229,17 @@ Next weakest: Docs alignment → now enforced: `tests/docs_sync.rs` (2026-09-15)
 - [ ] **Continued-fraction rational snapping** — shared `snap_rational(x, max_den)` used by `qsolve`, `limit`, `apart` so results display as `5/3`, `1/3`, `-7/2` instead of 12-sig decimals. (unsolve `limit.ts:40-66`)
 - [ ] **Expression-level cubic/quartic solving** — rational-root hunt + exact Rational deflation (unsolve drifts using f64 deflation — don't copy that), recurse to exact quadratic at degree ≤ 2, certify with VAS. `qsolve x^3 - 6x^2 + 11x - 6` → exact `1, 2, 3`. (unsolve `solver.ts:216-265`)
 - [x] **Taylor non-analytic error** — `taylor_series` returns `MathError::Domain` when any `f^(k)(a)` is non-finite (singularity at the expansion point) instead of `unwrap_or(0.0)` (`taylor.rs:30`). Regression tests `taylor_pole_errors_instead_of_silent_zero` (1/x at 0) and `taylor_log_at_zero_errors` (log x at 0); `taylor_analytic_far_from_pole_still_works` guards the valid case (1/x at 1). Error message names `f^k(a)` and the offending value. (2026-10-03)
-- [ ] **Like-term collection + coefficient collapse in simplify** — `2*x+3*x → 5*x`, `2*(2*x) → 4*x`, `x*2 → 2*x`, division push-through, `x-x → 0`, `neg(neg(x)) → x`; also fixes the simplify.rs doc-comment drift (claims like-term collection that doesn't exist). (unsolve `simplify.ts:143-345`)
+- [x] **Lean 4 export** — `lean` module: `to_lean`/`to_lean_doc` render `Expr` as Lean 4 terms over `ℝ` (requires Mathlib). Exact ascribed literals (`(2 : ℝ)`), integral exponents via monoid `^ (ℕ)` (correct for negative bases — rpow has junk there), `Real.*` function mapping with `log(x,b)` → `Real.logb b x` arg swap, `floor`/`ceil` coerced `↑⌊·⌋`/`↑⌈·⌉`, unmapped functions (`gamma`, `erf`, …) as plain applications, NaN/±inf rejected as `Domain`. Parser-folded `pi`/`e` exported as exact decimal literals (silently upgrading to `Real.pi` would be unsound). `lean <expr>` REPL command prints a self-contained file (`import Mathlib` + `noncomputable def` with var binders). No import direction (parsing Lean syntax is out of scope). Validation: 28 unit tests (21-case golden corpus, wellformedness validator as compile-proxy — balanced parens/no NaN/inf/every numeral ascribed, π/e/τ exact-decimal soundness goldens, numeric edge cases, full mapped-function sweep) + 5 integration tests incl. real-pipeline exports (differentiate/apart/taylor/qsolve → Lean). `examples/lean_demo.rs` worked-example walkthrough. (2026-10-13)
+- [x] **Like-term collection + coefficient collapse in simplify** — `2*x+3*x → 5*x`, `2*(2*x) → 4*x`, `x*2 → 2*x`, `x - x → 0`, `--x → x`; also fixes the simplify.rs doc-comment drift (claims like-term collection that didn't exist). New `preflatten` + `collect` pipeline; `split_coefficient(c, rest)` + `rebuild_term` helpers; tests for Monomial/multi-var/neg/distributing edge cases. Side-effect: canonicalize sort puts numeric lex-first so `1/(x+1)` now displays as `1/(1 + x)` — downstream tests in `tests/integration.rs::apart_repl_dispatch` and `src/apart.rs` doctest updated to accept both orderings. (2026-10-13)
 
 ### Medium Priority
+- [ ] **MCP (Model Context Protocol) server** — expose mathr's engine as MCP tools so AI agents can drive it through the standard interop layer. Unsolve already does this with 14 tools (`evaluate`, `differentiate`, `integrate`, `solve`, `simplify`, `taylor`, `limit`, `poly-roots`, `number-theory`, `stats`, `matrix`, `minimize`, `apart`). mathr's `repl::dispatch_str` is the natural back-end for almost every tool; the work is the JSON-RPC 2.0 transport over stdio (and/or Streamable HTTP) plus tool schema definitions. (unsolve `api/mcp.ts`, 2026-10-13)
+- [ ] **`d/dx <expr>` alias for `diff`** — trivial single-line REPL strip_prefix. (unsolve parity #2, 2026-10-13)
 - [ ] **Selective exact function folding** — fold `sqrt`/`cbrt`/`log2`/`log10`/`fact`/`abs` only when exact (`sqrt(16)→4`, `sqrt(2)` stays symbolic); stop eager constant-function eval in `simplify.rs:112-118`. (unsolve `simplify.ts:221-270`)
 - [ ] **Sign-scan all-roots numeric solve** — `nsolve <expr> [var] [lo hi]`: sample grid, bisect each sign change, dedupe; solves `exp(x)=5`, `sin(x)=0` without a user bracket. (unsolve `solver.ts:286-329`)
 - [ ] **Exact-rational quadratic path in qsolve** — rational discriminant, perfect-square-of-rational check (both num and den), exact roots for `6x^2-5x-1` → `1, -1/6`; exact real part for complex roots (`x^2+x+1` → `-1/2 ± …i`). (unsolve `solver.ts:380-451`)
 - [ ] **Exact cover-up fast path in apart** — distinct rational linear factors ⇒ exact `A_i = N(r_i)/∏(r_i−r_j)` in Rational; keep the linear-system path for repeated/quadratic factors. (unsolve `apart.ts:179-197`)
-- [ ] **Wire missing matrix commands** — `inv`, `transpose`, `trace`, `linsolve` (augmented `[A|b]`, exact rational via `rational.rs`), full symmetric `eigen` command (library `symmetric_eig` exists); add symmetry check to `symmetric_eig`. (unsolve `matrix.ts`, `solve-problem.ts:189-195`)
+- [x] **Wire missing matrix commands** — `inv`, `transpose`, `trace`, `linsolve` (augmented `[A|b]`), full symmetric `eigen` command over the existing `symmetric_eig`. Symmetry check lives in the REPL layer (Mature Module Policy: `symmetric_eig` documents itself as unchecked, and changing it would alter library behavior beyond this scope). Numeric f64 (rational exact path deferred — `rational.rs` has no linear solve yet). Confirmed by the unsolve parity pass 2026-10-13. (unsolve `matrix.ts`, `solve-problem.ts:189-195`)
 - [ ] **Unicode input normalization** — `− × ÷ √ π τ` char map + superscript exponents (`x² → x^(2)`, `x⁻¹ → x^(-1)`) pre-tokenizer. (unsolve `parser.ts:25-70`)
 - [ ] **Missing LaTeX forms** — `\dfrac`/`\tfrac` (currently silently misparsed as a *variable* — worse than an error), `\sqrt[n]{x}`, `\sin^2(x)` function-power. (unsolve `parser.ts:113-168`)
 - [ ] **`from a to b` suffix parsing with expression bounds** — unify `minimize`/`int`/`romberg` bound parsing (regex suffix + `evalNumberToken`-style expr bounds); retires the trailing-token ambiguity class (`romberg_trailing_tokens_bound_parse` regression). (unsolve `solve-problem.ts:115-133`)
@@ -230,6 +257,7 @@ Next weakest: Docs alignment → now enforced: `tests/docs_sync.rs` (2026-09-15)
 - Already covered or deferred: Σ/∏, interval arithmetic, number bases (Medium), units/currency (out of scope for pure math crate).
 - **2026-10-03 — unsolve.org** (TypeScript port of mathr's symbolic core, newer than some Rust code). Reviewed 19 engine modules + 10 test files. Seeded High Priority (linear-substitution integration, continued-fraction snap, expression-level cubic solve, Taylor non-analytic error, like-term collection), 9 Medium items (exact function folding, sign-scan all-roots, exact-rational quadratic, exact cover-up, missing matrix commands, Unicode/LaTeX forms, `from a to b` suffix, domain probes, BigInt auto-upgrade) and 7 Low items (Durand–Kerner polish, degenerate-equation semantics, separate L/R limit probes, rational overflow, matrix det pivot, bare-equation auto-solve, `-x^2` precedence, symbolic-coefficient univariate expand). Full patterns in MEMORY.md "Cross-Port Learnings from unsolve".
 - Cross-port gaps unsolve has that mathr *doesn't* need to copy: TS structural equality is string-based; mathr already has `canonicalize`/`equals`. TS is univariate-only; mathr has multivariate `poly.rs` + general `apart.rs` (repeated + irreducible quadratics). mathr's VAS isolation is strictly more rigorous than TS's numeric divisor hunt — wire VAS into the new expression-level cubic path instead of replicating TS's.
+- **2026-10-13 — unsolve parity pass #2** (reviewing `api/mcp.ts` MCP surface + `api/lib/engine/solve-problem.ts` dispatch). **Confirmed + shipped this pass**: matrix commands (`inv`/`transpose`/`trace`/`linsolve`/`eigen`) — the highest-value unsolve gap; `repl.rs` now mirrors unsolve's `matrix` tool. **New gap surfaced**: **MCP server**. unsolve exposes 14 MCP tools over its engine (`evaluate`, `differentiate`, `integrate`, `solve`, `simplify`, `taylor`, `limit`, `poly-roots`, `number-theory`, `stats`, `matrix`, `minimize`, `apart`) — mathr has the HTTP notebook server but no MCP endpoint. MCP is the standard interop layer for AI agents and is the highest-impact remaining "external surface" gap. mathr's `repl::dispatch_str(&str, &Context) -> Result<String>` is a natural one-call mapping for almost every tool. Trivial secondary gap: `d/dx <expr>` alias for `diff` (unsolve has it; mathr's `diff` already exists). See MEMORY.md "Cross-Port Learnings from unsolve (2026-10-13)".
 
 ### Low Priority
 - [ ] **Durand–Kerner polish** — strip near-zero leading coeffs, snap near-real roots onto the axis + near-integers to integers, dedupe repeated roots (qsolve currently returns double roots twice). (unsolve `poly.ts:48-100`)

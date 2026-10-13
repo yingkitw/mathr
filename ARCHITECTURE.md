@@ -54,6 +54,13 @@ mathml.rs        (standalone, W3C Presentation MathML export/import:
 serialize.rs     (standalone, Expr serialization in three interchangeable
                  formats: S-expressions, JSON, RPN. All round-trip via
                  Expr::equals. Hand-rolled JSON parser — no serde dep)
+lean.rs          (standalone, Lean 4 export over ℝ — requires Mathlib:
+                 literals as exact-ascribed ℝ, integral powers via monoid
+                 ^ (ℕ), rpow otherwise, elementary fns mapped to Real.*,
+                 log(x,b) → Real.logb b x (arg swap), floor/ceil coerced
+                 ↑⌊·⌋/↑⌈·⌉, unmapped fns emitted as plain applications.
+                 to_lean (bare term) + to_lean_doc (runnable file with
+                 import Mathlib + noncomputable def with var binders))
 interval.rs      (standalone, interval arithmetic for rigorous bounds:
                  Interval type with arithmetic, sqr/powi with zero-crossing
                  awareness, elementary functions with monotonicity/extrema

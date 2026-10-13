@@ -202,6 +202,11 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "gcd ", "lcm ", "is-prime ", "factor ", "fib ", "binom ",
         "fact ", "mr-prime ", "jacobi ", "cf ", "diophantine ", "dlog ",
         "det ",
+        "inv ",
+        "transpose ",
+        "trace ",
+        "eigen ",
+        "linsolve ",
         "fast ",
         "cond ",
         "null ",
@@ -212,6 +217,7 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "interval ",
         "cval ",
         "qsolve ",
+        "lean ",
         "sum ",
         "prod ",
         "spcg ",
@@ -692,6 +698,21 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("det ") {
         return do_det(rest.trim());
     }
+    if let Some(rest) = line.strip_prefix("inv ") {
+        return do_inv(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("transpose ") {
+        return do_transpose_cmd(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("trace ") {
+        return do_trace(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("eigen ") {
+        return do_eigen(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("linsolve ") {
+        return do_linsolve(rest.trim());
+    }
     if let Some(rest) = line.strip_prefix("fast ") {
         return do_fast(rest.trim());
     }
@@ -721,6 +742,9 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("mathml ") {
         return do_mathml(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("lean ") {
+        return do_lean(rest.trim());
     }
     if let Some(rest) = line.strip_prefix("serialize ") {
         return do_serialize(rest.trim());
@@ -2318,6 +2342,12 @@ fn do_mathml(rest: &str) -> Result<Option<String>> {
     Ok(Some(crate::mathml::to_mathml_doc(&e)))
 }
 
+/// `lean <expr>` → export to a self-contained Lean 4 file (needs Mathlib)
+fn do_lean(rest: &str) -> Result<Option<String>> {
+    let e = Parser::parse(rest)?;
+    Ok(Some(crate::lean::to_lean_doc(&e)?))
+}
+
 /// `serialize <fmt> <expr>` → export expression to `<fmt>` (sexpr | json | rpn)
 /// `serialize <fmt> import <text>` → import from `<fmt>` and show the expression
 fn do_serialize(rest: &str) -> Result<Option<String>> {
@@ -3076,6 +3106,82 @@ fn do_det(rest: &str) -> Result<Option<String>> {
     Ok(Some(format!("det = {}", format_value(d))))
 }
 
+/// `inv <rows>` — matrix inverse (singular matrices error).
+fn do_inv(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    let inv = m.inverse()?;
+    Ok(Some(format!("A⁻¹ =\n{inv}")))
+}
+
+/// `transpose <rows>` — matrix transpose.
+fn do_transpose_cmd(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    Ok(Some(format!("Aᵀ =\n{}", m.transpose())))
+}
+
+/// `trace <rows>` — sum of diagonal entries.
+fn do_trace(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    Ok(Some(format!("tr = {}", format_value(m.trace()?))))
+}
+
+/// `eigen <rows>` — symmetric eigenvalue decomposition (ascending λ,
+/// eigenvectors as columns). Symmetry is checked here (the library
+/// `symmetric_eig` documents its input as unchecked).
+fn do_eigen(rest: &str) -> Result<Option<String>> {
+    let m = parse_matrix(rest)?;
+    if !m.is_square() {
+        return Err(crate::error::MathError::Eval(
+            "eigen needs a square matrix".into(),
+        ));
+    }
+    for i in 0..m.rows {
+        for j in (i + 1)..m.cols {
+            if (m[(i, j)] - m[(j, i)]).abs() > 1e-12 {
+                return Err(crate::error::MathError::Eval(format!(
+                    "eigen needs a symmetric matrix (a[{i}][{j}] = {} ≠ a[{j}][{i}] = {})",
+                    m[(i, j)],
+                    m[(j, i)]
+                )));
+            }
+        }
+    }
+    let (values, vectors) = m.symmetric_eig()?;
+    let vals: Vec<String> = values.iter().map(|v| format_value(*v)).collect();
+    Ok(Some(format!(
+        "eigenvalues (ascending) = [{}]\neigenvectors (columns) =\n{}",
+        vals.join(", "),
+        vectors
+    )))
+}
+
+/// `linsolve <rows of [A|b]>` — solve A·x = b from the augmented matrix
+/// (last column is b). Convention shared with the sparse `spcg` solver.
+fn do_linsolve(rest: &str) -> Result<Option<String>> {
+    let aug = parse_matrix(rest)?;
+    if aug.cols < 2 || aug.rows != aug.cols - 1 {
+        return Err(crate::error::MathError::Eval(
+            "linsolve needs the augmented matrix [A | b]: rows × (columns − 1) = A must be square"
+                .into(),
+        ));
+    }
+    let n = aug.rows;
+    let mut a_rows: Vec<Vec<f64>> = Vec::with_capacity(n);
+    let mut b: Vec<f64> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut row = Vec::with_capacity(n);
+        for j in 0..n {
+            row.push(aug[(i, j)]);
+        }
+        b.push(aug[(i, n)]);
+        a_rows.push(row);
+    }
+    let a = crate::matrix::Matrix::from_rows(&a_rows)?;
+    let x = a.solve(&b)?;
+    let strs: Vec<String> = x.iter().map(|v| format_value(*v)).collect();
+    Ok(Some(format!("x = [{}]", strs.join(", "))))
+}
+
 fn do_spline(rest: &str) -> Result<Option<String>> {
     // Format: "x1 y1 x2 y2 ...  [eval x_value]"
     let tokens: Vec<&str> = rest.split_whitespace().collect();
@@ -3339,6 +3445,11 @@ commands:
   cond <rows>         condition number (2-norm, from SVD)
   null <rows>         nullspace basis of a homogeneous system A·x = 0
   det <rows>          matrix determinant
+  inv <rows>          matrix inverse
+  transpose <rows>    matrix transpose
+  trace <rows>        sum of diagonal entries
+  eigen <rows>        symmetric eigendecomposition (λ ascending, vectors as columns)
+  linsolve [A|b]      solve A·x = b from the augmented matrix (last column = b)
    spline x1 y1 x2 y2 ... x_at
                        natural cubic spline interpolant at x_at
    pchip x1 y1 x2 y2 ... x_at
@@ -3369,6 +3480,7 @@ commands:
   mathml import <ml> import Presentation MathML to expression
   serialize <fmt> <expr>      export expression (fmt: sexpr | json | rpn)
   serialize <fmt> import <t>  import from format and show the expression
+  lean <expr>        export expression to a Lean 4 file (needs Mathlib)
    interval <expr> with <var>=[lo,hi],...  rigorous bounds via interval arithmetic
    cval <expr> [with <var>=<val>,...]
                           complex evaluation (i = imaginary unit)

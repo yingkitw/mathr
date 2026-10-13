@@ -2161,6 +2161,80 @@ fn mathml_export_repl() {
 }
 
 #[test]
+fn lean_export_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("lean x^2 + sin(y)", ctx).unwrap().unwrap();
+    assert!(result.contains("import Mathlib"), "result: {}", result);
+    assert!(result.contains("noncomputable def mathr_export (x y : ℝ) : ℝ :="), "result: {}", result);
+    assert!(result.contains("(x ^ (2 : ℕ))"), "result: {}", result);
+    assert!(result.contains("(Real.sin y)"), "result: {}", result);
+}
+
+// Exporting real CAS pipeline output validates the exporter on the actual
+// Expr shapes symbolic.rs/apart.rs/taylor.rs produce (not just hand-written
+// inputs). Lean is not installed in CI, so checks are structural.
+#[test]
+fn lean_export_differentiate_pipeline() {
+    use mathr::lean::to_lean_doc;
+    use mathr::parser::Parser;
+    // d/dx (x^3 + sin(x)) = 3*x^2 + cos(x)
+    let e = Parser::parse("x^3 + sin(x)").unwrap();
+    let d = mathr::symbolic::differentiate(&e, "x").unwrap();
+    let doc = to_lean_doc(&d).unwrap();
+    assert!(doc.contains("noncomputable def mathr_export (x : ℝ)"), "got: {doc}");
+    assert!(doc.contains("Real.cos"), "got: {doc}");
+    assert!(doc.contains("(x ^ (2 : ℕ))"), "got: {doc}");
+}
+
+#[test]
+fn lean_export_apart_pipeline() {
+    use mathr::lean::to_lean;
+    use mathr::parser::Parser;
+    // 1/(x(x+1)) = 1/x − 1/(x+1) — a quotient shape the exporter must keep
+    // parenthesised so the Lean term means the same thing
+    let e = Parser::parse("1/(x*(x + 1))").unwrap();
+    let a = mathr::apart::apart(&e, "x").unwrap();
+    let term = to_lean(&a).unwrap();
+    assert!(term.contains("/ x"), "got: {term}");
+    // denominators must stay grouped: `… / (… + …)`, never `(… / …) + …`
+    assert!(term.contains("((1 : ℝ) + x))"), "got: {term}");
+    // full ascription everywhere (compile-proxy: no bare numerals; the
+    // decomposition has exactly three numerals: two 1s and the implied one)
+    assert_eq!(term.matches(" : ℝ)").count(), 3, "got: {term}");
+}
+
+#[test]
+fn lean_export_taylor_pipeline() {
+    use mathr::lean::to_lean;
+    use mathr::parser::Parser;
+    // Taylor polynomial of exp at 0: coefficients are exact rationals in
+    // f64 (1, 1, 1/2, 1/6) — they export as exact decimal literals
+    let e = Parser::parse("exp(x)").unwrap();
+    let t = mathr::taylor::taylor_series(&e, "x", 0.0, 3).unwrap();
+    let term = to_lean(&t).unwrap();
+    assert!(term.contains("Real.exp") || term.contains("x"), "got: {term}");
+    // 1/2 must appear as its exact decimal, not a bare `1/2`-of-naturals
+    assert!(term.contains("0.5"), "got: {term}");
+}
+
+#[test]
+fn lean_export_qsolve_pipeline() {
+    use mathr::lean::to_lean;
+    use mathr::parser::Parser;
+    // quadratic roots are plain floats — exporter must not choke on the
+    // qsolve output shape (add of divs of numerals)
+    let e = Parser::parse("x^2 - 2").unwrap();
+    let r = mathr::qsolve::solve_symbolic(&e, "x").unwrap();
+    assert_eq!(r.len(), 2);
+    // roots are snapped f64 decimals (√2 ≈ 1.41421356237) — each must
+    // export as an exact ascribed literal
+    for root in &r {
+        let term = to_lean(root).unwrap();
+        assert!(term.starts_with('(') && term.ends_with(" : ℝ)"), "got: {term}");
+    }
+}
+
+#[test]
 fn mathml_export_frac() {
     let ctx = mathr::eval::Context::standard();
     let result = mathr::repl::dispatch_str("mathml 1/2", ctx).unwrap().unwrap();
@@ -2758,11 +2832,22 @@ fn apart_repl_dispatch() {
     let ctx = mathr::eval::Context::standard();
     let r = mathr::repl::dispatch_str("apart 1/(x*(x+1))", ctx).unwrap().unwrap();
     assert!(r.contains("1/x"), "got: {}", r);
-    assert!(r.contains("1/(x + 1)"), "got: {}", r);
+    // The additive linear factor may print as either "1/(x + 1)" or
+    // "1/(1 + x)" depending on canonical-form sorting — accept either.
+    assert!(
+        r.contains("1/(x + 1)") || r.contains("1/(1 + x)"),
+        "got: {}",
+        r
+    );
 
     let ctx = mathr::eval::Context::standard();
     let r = mathr::repl::dispatch_str("apart (x^2+1)/(x-1) x", ctx).unwrap().unwrap();
-    assert!(r.contains("x + 1"), "got: {}", r);
+    // Canonical-form sort may surface the linear quotient as either
+    // "2/(x - 1)" / "2/(-1 + x)" and the polynomial part as either
+    // "x + 1" / "1 + x" — accept any of these pairs.
+    let has_lin = r.contains("2/(x - 1)") || r.contains("2/(-1 + x)");
+    let has_poly = r.contains("x + 1") || r.contains("1 + x");
+    assert!(has_lin && has_poly, "got: {}", r);
 }
 
 #[test]
@@ -2779,6 +2864,60 @@ fn apart_steps_via_dispatch() {
 // =========================================================================
 // Condition number & nullspace (matrix)
 // =========================================================================
+
+// =========================================================================
+// Matrix REPL commands: inv / transpose / trace / eigen / linsolve
+// (wired over the existing Matrix public API; unsolve parity pass 2026-10-13)
+// =========================================================================
+
+#[test]
+fn matrix_inv_transpose_trace_repl() {
+    let ctx = mathr::eval::Context::standard();
+    // inverse of [[4, 7], [2, 6]] = [[0.6, -0.7], [-0.2, 0.4]]
+    let r = mathr::repl::dispatch_str("inv 4 7 | 2 6", ctx).unwrap().unwrap();
+    assert!(r.contains("A⁻¹"), "got: {}", r);
+    assert!(r.contains("0.6"), "got: {}", r);
+
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("transpose 1 2 3 | 4 5 6", ctx).unwrap().unwrap();
+    assert!(r.contains("Aᵀ"), "got: {}", r);
+
+    let ctx = mathr::eval::Context::standard();
+    let r = mathr::repl::dispatch_str("trace 1 2 | 3 4", ctx).unwrap().unwrap();
+    assert!(r.contains("tr = 5"), "got: {}", r);
+}
+
+#[test]
+fn matrix_inv_singular_errors() {
+    let ctx = mathr::eval::Context::standard();
+    assert!(mathr::repl::dispatch_str("inv 1 1 | 1 1", ctx).is_err());
+}
+
+#[test]
+fn matrix_eigen_repl() {
+    let ctx = mathr::eval::Context::standard();
+    // symmetric [[2, 1], [1, 2]]: λ = 1, 3 ascending
+    let r = mathr::repl::dispatch_str("eigen 2 1 | 1 2", ctx).unwrap().unwrap();
+    assert!(r.contains("eigenvalues"), "got: {}", r);
+    assert!(r.contains("1"), "got: {}", r);
+    assert!(r.contains("3"), "got: {}", r);
+    // non-symmetric → REPL-layer symmetry check error
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("eigen 1 2 | 3 4", ctx);
+    assert!(err.is_err(), "expected symmetry error, got: {:?}", err);
+}
+
+#[test]
+fn matrix_linsolve_repl() {
+    let ctx = mathr::eval::Context::standard();
+    // [2 1 | 5; 1 3 | 10] → x = [1, 3]
+    let r = mathr::repl::dispatch_str("linsolve 2 1 5 | 1 3 10", ctx).unwrap().unwrap();
+    assert!(r.contains("x = [1, 3]"), "got: {}", r);
+
+    // malformed: 2 rows × 4 cols → A would be 2×3 (not square)
+    let ctx = mathr::eval::Context::standard();
+    assert!(mathr::repl::dispatch_str("linsolve 1 2 3 4 | 5 6 7 8", ctx).is_err());
+}
 
 #[test]
 fn matrix_condition_number_pipeline() {
