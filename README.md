@@ -22,7 +22,8 @@
 ## Features
 
 ### Symbolic Computation
-- **Symbolic differentiation** — product, quotient, chain rules; partial derivatives, gradients, and implicit differentiation (`idiff`, `dy/dx = −F_x/F_y`)
+- **Symbolic differentiation** — product, quotient, chain rules; partial derivatives, gradients, implicit differentiation (`idiff`), and higher-order `diff … [order]` / `d/dx`
+- **Vector products** — numeric `dot` and `cross` on comma-separated component lists (2-D or 3-D)
 - **Symbolic integration** — polynomial, exponential, trigonometric, and inverse-trigonometric primitives
 - **Algebraic simplification** — constant folding and algebraic identity simplification
 - **Taylor series** — symbolic expansion around any point
@@ -61,7 +62,7 @@
 - **Symbolic limits** — `lim x→a f(x)` for finite points and ±∞ via direct substitution, L'Hôpital's rule (recursive, for 0/0 and ∞/∞), and numeric probing with pole/divergence detection. `limit <expr> [<var>] <point>` REPL command with step-by-step output in the notebook.
 - **Complex-number evaluation** — evaluate any expression over `ℂ`: `i` as a literal (`1 + 2i`), principal-branch `ln`/`sqrt`/powers/trig, exact integer powers, `exp(i*pi) = -1`. `cval <expr> [with <var>=<val>,...]` REPL command; `ceval` module (`eval_complex`) for library use.
 - **Summation & product (Σ/∏)** — evaluate `sum <expr> [<var>] <a> <b>` / `prod <expr> [<var>] <a> <b>` over integer bounds with O(1) closed forms (arithmetic series, Faulhaber `k²`/`k³`, geometric), exact rational accumulation (`Σ 1/k = 7381/2520`), and f64 fallback; empty ranges give 0 / 1.
-- **Symbolic quadratic solving** — exact roots of linear/quadratic equations via `to_poly` + the quadratic formula: integer roots when the discriminant is a perfect square, complex-conjugate roots as `i`-literal expressions otherwise. `qsolve <expr> [= rhs]` REPL command with step-by-step output; `qsolve` module (`solve_symbolic`) for library use.
+- **Symbolic polynomial solving (deg ≤ 4)** — `qsolve` via `to_poly`: quadratics use the discriminant (exact rationals, complex `i`-literal roots, or numeric snap); cubics/quartics with integer coefficients use rational-root deflation in exact arithmetic, then numeric roots when needed. `qsolve <expr> [= rhs]` REPL command with step-by-step output.
 - **Polynomial expansion** — `expand (x+1)^3 → x^3 + 3*x^2 + 3*x + 1`: distributes products and integer powers into collected multivariate polynomials; non-polynomial factors stay intact. `expand` REPL command; `poly::to_poly`/`poly_to_expr` for library use.
 - **Partial fractions** — SymPy-style `apart`: decomposes rational functions into a quotient plus fractions over linear and irreducible quadratic denominators (numeric factorization + linear solve). `apart <expr> [<var>]` REPL command with step-by-step output in the notebook.
 - **Condition number & nullspace** — `cond <rows>` gives the 2-norm condition number from the SVD (singular matrices report `inf`); `null <rows>` returns an orthonormal basis of `{x : A·x = 0}` via the eigendecomposition of `AᵀA` (works for wide matrices). `Matrix::condition_number`/`Matrix::nullspace` for library use.
@@ -434,7 +435,7 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `interval` | Interval arithmetic for rigorous bounds: `Interval` type with arithmetic, elementary functions, `eval_interval` over `Expr` AST |
 | `ceval` | Complex evaluation of `Expr` ASTs: `eval_complex` (principal branch, `i` literal), `eval_complex_str`, `format_complex`, `cval` REPL command |
 | `sumprod` | Σ/∏ over integer bounds: closed forms (arithmetic/Faulhaber/geometric), exact rational loop, `sum`/`prod` REPL commands |
-| `qsolve` | Symbolic linear/quadratic solve: `solve_symbolic` (coefficient extraction via `to_poly`, discriminant classification, complex roots), `qsolve` REPL command |
+| `qsolve` | Symbolic solve deg ≤ 4: `solve_symbolic` (`to_poly`, rational-root deflation, quadratic/numeric finish), `qsolve` REPL command |
 | `bigdec` | Arbitrary-precision decimal arithmetic: `pi`/`e`/`sqrt`/`exp`/`ln`/trig to N significant digits, `eval_decimal` over `Expr` AST, `dec` REPL command |
 | `limit` | Symbolic limits: direct substitution, recursive L'Hôpital's rule, numeric probing fallback, limits at ±∞, pole/DNE detection |
 | `poly` | Polynomial expansion/collection over `Expr`: multivariate `expand`, `to_poly`/`poly_to_expr` conversions |

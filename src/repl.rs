@@ -119,9 +119,14 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         return Ok(vec![]);
     }
 
+    // d/dx: unsolve-style alias (fixed variable x)
+    if let Some(rest) = line.strip_prefix("d/dx ") {
+        return diff_steps(rest.trim(), ctx, Some("x"));
+    }
+
     // diff: show original, derivative (unsimplified), simplified
     if let Some(rest) = line.strip_prefix("diff ") {
-        return diff_steps(rest.trim(), ctx);
+        return diff_steps(rest.trim(), ctx, None);
     }
 
     // simplify: show original and result
@@ -223,6 +228,9 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         "spcg ",
         "spbicg ",
         "idiff ",
+        "dot ",
+        "cross ",
+        "d/dx ",
     ];
     if cmd_keywords.iter().any(|kw| line.starts_with(kw)) || line == "vars" || line == "funcs" {
         let result = dispatch_inner(line, &mut ctx.clone())?;
@@ -247,40 +255,94 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
     }
 }
 
-fn diff_steps(rest: &str, ctx: Context) -> Result<Vec<String>> {
+struct DiffParse {
+    expr_src: String,
+    wrt: String,
+    order: u32,
+}
+
+/// Parse `diff <expr> [var] [order]` or `d/dx <expr> [order]` when `force_wrt` is set.
+fn parse_diff_tail(rest: &str, force_wrt: Option<&str>) -> Result<DiffParse> {
     let tokens: Vec<&str> = rest.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval("`diff` needs an expression".into()));
     }
-    let mut wrt = "x".to_string();
+    let mut order = 1u32;
     let mut expr_end = tokens.len();
     if expr_end > 1 {
+        if let Ok(n) = tokens[expr_end - 1].parse::<u32>() {
+            if n == 0 {
+                return Err(crate::error::MathError::Eval(
+                    "derivative order must be at least 1".into(),
+                ));
+            }
+            if n > 64 {
+                return Err(crate::error::MathError::Eval(
+                    "derivative order capped at 64".into(),
+                ));
+            }
+            order = n;
+            expr_end -= 1;
+        }
+    }
+    let mut wrt = force_wrt.map(String::from).unwrap_or_else(|| "x".to_string());
+    if force_wrt.is_none() && expr_end > 1 {
         let candidate = tokens[expr_end - 1];
         if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
             wrt = candidate.to_string();
             expr_end -= 1;
         }
     }
-    let expr_src = tokens[..expr_end].join(" ");
-    let e = Parser::parse(&expr_src)?;
+    if expr_end == 0 {
+        return Err(crate::error::MathError::Eval(
+            "`diff` needs an expression".into(),
+        ));
+    }
+    Ok(DiffParse {
+        expr_src: tokens[..expr_end].join(" "),
+        wrt,
+        order,
+    })
+}
+
+fn diff_expr_prepared(parse: &DiffParse, ctx: &Context) -> Result<Expr> {
+    let e = Parser::parse(&parse.expr_src)?;
     let bound: Vec<(String, Expr)> = ctx
         .vars
         .iter()
-        .filter(|(k, _)| **k != wrt && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+        .filter(|(k, _)| **k != parse.wrt && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), Expr::num(*v)))
         .collect();
     let mut e = e;
     for (k, v) in &bound {
         e = e.substitute(k, v);
     }
-    let d = differentiate(&e, &wrt)?;
+    Ok(e)
+}
+
+fn diff_steps(rest: &str, ctx: Context, force_wrt: Option<&str>) -> Result<Vec<String>> {
+    let parse = parse_diff_tail(rest, force_wrt)?;
+    let e = diff_expr_prepared(&parse, &ctx)?;
+    let d = if parse.order == 1 {
+        differentiate(&e, &parse.wrt)?
+    } else {
+        crate::symbolic::differentiate_n(&e, &parse.wrt, parse.order)?
+    };
     let s = simplify(&d);
-    Ok(vec![
-        format!("f({}) = {}", wrt, e),
-        format!("d/d{} f({})", wrt, wrt),
+    let mut steps = vec![
+        format!("f({}) = {}", parse.wrt, e),
+        if parse.order == 1 {
+            format!("d/d{} f({})", parse.wrt, parse.wrt)
+        } else {
+            format!(
+                "d^{}/d{}^{} f({})",
+                parse.order, parse.wrt, parse.order, parse.wrt
+            )
+        },
         format!("= {}", d),
         format!("simplified = {}", s),
-    ])
+    ];
+    Ok(steps)
 }
 
 fn solve_steps(rest: &str, ctx: Context) -> Result<Vec<String>> {
@@ -498,8 +560,17 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("fn ") {
         return define_fn(rest.trim(), ctx);
     }
+    if let Some(rest) = line.strip_prefix("d/dx ") {
+        return do_diff(rest.trim(), Some("x"), ctx);
+    }
     if let Some(rest) = line.strip_prefix("diff ") {
-        return do_diff(rest.trim(), ctx);
+        return do_diff(rest.trim(), None, ctx);
+    }
+    if let Some(rest) = line.strip_prefix("dot ") {
+        return do_dot(rest.trim());
+    }
+    if let Some(rest) = line.strip_prefix("cross ") {
+        return do_cross(rest.trim());
     }
     if let Some(rest) = line.strip_prefix("pdiff ") {
         return do_pdiff(rest.trim(), ctx);
@@ -822,38 +893,46 @@ fn define_fn(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
     Ok(Some(format!("defined {}({})", name, params.join(", "))))
 }
 
-fn do_diff(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.is_empty() {
-        return Err(crate::error::MathError::Eval("`diff` needs an expression".into()));
-    }
-    // Parse from the right: optional var (single alpha), rest is expr
-    let mut wrt = "x".to_string();
-    let mut expr_end = tokens.len();
-    if expr_end > 1 {
-        let candidate = tokens[expr_end - 1];
-        if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
-            wrt = candidate.to_string();
-            expr_end -= 1;
-        }
-    }
-    let expr_src = tokens[..expr_end].join(" ");
-    let e = Parser::parse(&expr_src)?;
-    // Substitute any user-bound variables so we don't print unwieldy
-    // intermediate forms. Variables still appear if no binding exists.
-    let bound: Vec<(String, Expr)> = ctx
-        .vars
-        .iter()
-        .filter(|(k, _)| **k != wrt && !["pi", "e", "tau", "inf"].contains(&k.as_str()))
-        .map(|(k, v)| (k.clone(), Expr::num(*v)))
-        .collect();
-    let mut e = e;
-    for (k, v) in &bound {
-        e = e.substitute(k, v);
-    }
-    let d = differentiate(&e, &wrt)?;
-    let s = simplify(&d);
+fn do_diff(rest: &str, force_wrt: Option<&str>, ctx: &mut Context) -> Result<Option<String>> {
+    let parse = parse_diff_tail(rest, force_wrt)?;
+    let e = diff_expr_prepared(&parse, ctx)?;
+    let s = if parse.order == 1 {
+        differentiate(&e, &parse.wrt)?
+    } else {
+        crate::symbolic::differentiate_n(&e, &parse.wrt, parse.order)?
+    };
     Ok(Some(s.to_string()))
+}
+
+fn do_dot(rest: &str) -> Result<Option<String>> {
+    let groups = split_groups(rest)?;
+    if groups.len() != 2 {
+        return Err(crate::error::MathError::Eval(
+            "`dot` needs two vectors: `dot a1 a2 ... | b1 b2 ...`".into(),
+        ));
+    }
+    let a = parse_group(groups[0])?;
+    let b = parse_group(groups[1])?;
+    let v = crate::vector::dot(&a, &b)?;
+    Ok(Some(format_value(v)))
+}
+
+fn do_cross(rest: &str) -> Result<Option<String>> {
+    let groups = split_groups(rest)?;
+    if groups.len() != 2 {
+        return Err(crate::error::MathError::Eval(
+            "`cross` needs two 3-vectors: `cross a1 a2 a3 | b1 b2 b3`".into(),
+        ));
+    }
+    let a = parse_group(groups[0])?;
+    let b = parse_group(groups[1])?;
+    let c = crate::vector::cross(&a, &b)?;
+    Ok(Some(format!(
+        "[{}, {}, {}]",
+        format_value(c[0]),
+        format_value(c[1]),
+        format_value(c[2])
+    )))
 }
 
 fn do_pdiff(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
@@ -3376,7 +3455,10 @@ commands:
   <expr>              evaluate (e.g. sin(pi/4), 5!, gamma(0.5), bessel_j0(5))
   let x = <expr>      bind a variable
   fn f(x) = <expr>    define a function
-  diff <expr> [var]   symbolic derivative
+  diff <expr> [var] [order]  symbolic derivative (order ≤ 64)
+  d/dx <expr> [order]        derivative with respect to x (unsolve alias)
+  dot a1 a2 ... | b1 b2 ...  dot product
+  cross a1 a2 a3 | b1 b2 b3  3-D cross product
   pdiff <expr> <var>  partial derivative
   gradient <expr>     gradient (all partials)
   idiff <expr> [= rhs] [<indep> <dep>]

@@ -250,15 +250,18 @@ fn apart_inner(expr: &Expr, var: &str, steps: &mut Vec<String>) -> Result<Expr> 
         let den_e = factor_expr(f, *k, var);
         let (num_mag, neg) = match f {
             Factor::Linear { .. } => {
-                let c = snap(coeffs[ids[0]]);
+                let c = coeffs[ids[0]];
                 if c == 0.0 {
                     continue;
                 }
-                (Num(c.abs()), c < 0.0)
+                (
+                    crate::rational::Rational::snap_coeff_expr(c.abs(), crate::rational::SNAP_MAX_DEN),
+                    c < 0.0,
+                )
             }
             Factor::Quadratic { .. } => {
-                let b = snap(coeffs[ids[0]]);
-                let c = snap(coeffs[ids[1]]);
+                let b = coeffs[ids[0]];
+                let c = coeffs[ids[1]];
                 if b == 0.0 && c == 0.0 {
                     continue;
                 }
@@ -290,18 +293,20 @@ fn apart_inner(expr: &Expr, var: &str, steps: &mut Vec<String>) -> Result<Expr> 
 /// Magnitude form of a quadratic numerator `B·x + C` (leading coefficient
 /// positive). Returns the caller the sign separately.
 fn quad_num_mag(b: f64, c: f64, var: &str) -> Expr {
-    let bx = |mag: f64| Mul(Box::new(Num(mag)), Box::new(Var(var.to_string())));
+    use crate::rational::{Rational, SNAP_MAX_DEN};
+    let coeff = |v: f64| Rational::snap_coeff_expr(v.abs(), SNAP_MAX_DEN);
+    let bx = |mag: f64| Mul(Box::new(coeff(mag)), Box::new(Var(var.to_string())));
     if b.abs() < 1e-12 {
-        return Num(c.abs());
+        return coeff(c);
     }
     let lhs = bx(b.abs());
     if c.abs() < 1e-12 {
         return lhs;
     }
     if (b < 0.0) == (c < 0.0) {
-        Add(Box::new(lhs), Box::new(Num(c.abs())))
+        Add(Box::new(lhs), Box::new(coeff(c)))
     } else {
-        Sub(Box::new(lhs), Box::new(Num(c.abs())))
+        Sub(Box::new(lhs), Box::new(coeff(c)))
     }
 }
 
@@ -407,7 +412,7 @@ fn factor_denominator(d: &[f64]) -> Result<Vec<Factor>> {
         }
         let avg = reals[i..=j].iter().sum::<f64>() / (j - i + 1) as f64;
         factors.push(Factor::Linear {
-            root: snap(avg),
+            root: crate::rational::Rational::snap_rational(avg, crate::rational::SNAP_MAX_DEN),
             mult: (j - i + 1) as u32,
         });
         i = j + 1;
@@ -428,8 +433,8 @@ fn factor_denominator(d: &[f64]) -> Result<Vec<Factor>> {
         }
         let count = j - i + 1;
         // Each occurrence in the list represents a conjugate pair.
-        let p = -2.0 * snap(re);
-        let q = snap(re * re + im * im);
+        let p = -2.0 * crate::rational::Rational::snap_rational(re, crate::rational::SNAP_MAX_DEN);
+        let q = crate::rational::Rational::snap_rational(re * re + im * im, crate::rational::SNAP_MAX_DEN);
         factors.push(Factor::Quadratic { p, q, mult: count as u32 });
         i = j + 1;
     }
@@ -546,23 +551,6 @@ fn factor_expr(f: &Factor, k: u32, var: &str) -> Expr {
     }
 }
 
-/// Snap to integers within 1e-9 relative, else round to 12 significant
-/// digits (mirrors limit.rs snapping).
-fn snap(v: f64) -> f64 {
-    if !v.is_finite() {
-        return v;
-    }
-    if (v - v.round()).abs() < 1e-9 * v.abs().max(1.0) {
-        return v.round();
-    }
-    let digits = 11 - v.abs().log10().floor() as i32;
-    if !(-20..=20).contains(&digits) {
-        return v;
-    }
-    let factor = 10f64.powi(digits);
-    (v * factor).round() / factor
-}
-
 /// Human-readable dense polynomial (descending powers).
 fn poly_str(d: &[f64], var: &str) -> String {
     let p = sparse(d, var);
@@ -660,9 +648,10 @@ mod tests {
 
     #[test]
     fn snap_matches_limit_convention() {
-        assert_eq!(snap(0.9999999999999983), 1.0);
-        assert_eq!(snap(2.0000000000000004), 2.0);
-        assert_eq!(snap(0.5), 0.5);
+        use crate::rational::Rational;
+        assert_eq!(Rational::snap_rational(0.9999999999999983, 1_000_000), 1.0);
+        assert_eq!(Rational::snap_rational(2.0000000000000004, 1_000_000), 2.0);
+        assert_eq!(Rational::snap_rational(0.5, 1_000_000), 0.5);
     }
 
     // ===== Additional coverage =====

@@ -691,6 +691,36 @@ fn pdiff_repl() {
 }
 
 #[test]
+fn diff_repl_second_order() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("diff x^4 x 2", ctx).unwrap().unwrap();
+    let e = mathr::parser::Parser::parse(&result).unwrap();
+    let mut ctx2 = mathr::eval::Context::standard();
+    ctx2.set("x", 2.0);
+    let v = mathr::eval::eval(&e, &ctx2).unwrap();
+    assert!((v - 48.0).abs() < 1e-9, "d²/dx² x^4 at 2 = 48, got {v}");
+}
+
+#[test]
+fn ddx_repl_alias() {
+    let ctx = mathr::eval::Context::standard();
+    let a = mathr::repl::dispatch_str("diff x^3", ctx.clone()).unwrap().unwrap();
+    let b = mathr::repl::dispatch_str("d/dx x^3", ctx).unwrap().unwrap();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn dot_cross_repl() {
+    let ctx = mathr::eval::Context::standard();
+    let dot = mathr::repl::dispatch_str("dot 1 2 3 | 4 5 6", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(dot, "32");
+    let cross = mathr::repl::dispatch_str("cross 1 0 0 | 0 1 0", ctx).unwrap().unwrap();
+    assert_eq!(cross, "[0, 0, 1]");
+}
+
+#[test]
 fn idiff_repl_circle() {
     let ctx = mathr::eval::Context::standard();
     let result = mathr::repl::dispatch_str("idiff x^2 + y^2 - 1", ctx)
@@ -2455,6 +2485,17 @@ fn qsolve_repl_steps_have_discriminant() {
 fn qsolve_repl_rejects_non_polynomial() {
     let ctx = mathr::eval::Context::standard();
     assert!(mathr::repl::dispatch_str("qsolve sin(x) = 0", ctx).is_err());
+}
+
+#[test]
+fn qsolve_repl_cubic_factor() {
+    let ctx = mathr::eval::Context::standard();
+    let result = mathr::repl::dispatch_str("qsolve x^3 - 6*x^2 + 11*x - 6", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(result.contains("x = 1"), "{result}");
+    assert!(result.contains("x = 2"), "{result}");
+    assert!(result.contains("x = 3"), "{result}");
 }
 
 // Summation / product

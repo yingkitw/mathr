@@ -66,7 +66,7 @@ fn fmt_value(v: f64) -> String {
     // Prefer rational display (CF snap with max_den = 10^6) so values like
     // 5/3 print as "5/3" rather than "1.6666666667".  Falls back to the
     // 12-sig-digit fixed-point formatter for irrationals.
-    crate::rational::Rational::snap_to_string(v, 1_000_000, None)
+    crate::rational::Rational::snap_to_string(v, crate::rational::SNAP_MAX_DEN, None)
         .unwrap_or_else(|| {
             if v == v.trunc() && v.abs() < 1e15 {
                 format!("{}", v as i64)

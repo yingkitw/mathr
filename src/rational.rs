@@ -4,9 +4,15 @@
 //! kept in reduced form (GCD = 1) with a positive denominator.
 
 use crate::error::{MathError, Result};
+use crate::expr::Expr;
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::{Add, Div, Mul, Neg, Sub};
+
+/// Default denominator budget for continued-fraction snapping (`limit`, `apart`).
+pub const SNAP_MAX_DEN: i64 = 1_000_000;
+/// Tighter budget for polynomial-root / qsolve display (matches legacy `10_000`).
+pub const SNAP_MAX_DEN_COMPACT: i64 = 10_000;
 
 /// An exact rational number `num / den`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -115,6 +121,42 @@ impl Rational {
         Self::new(best.0, best.1).ok()
     }
 
+    /// Continued-fraction snap to the nearest exact rational within `max_den`, else
+    /// the shared 12-significant-digit float snap (unsolve `limit.ts:40-66`).
+    pub fn snap_rational(v: f64, max_den: i64) -> f64 {
+        if !v.is_finite() {
+            return v;
+        }
+        if let Some(r) = Self::from_float_snap(v, max_den) {
+            if (r.to_f64() - v).abs() < 1e-15 {
+                return r.to_f64();
+            }
+        }
+        snap_f64_fallback(v)
+    }
+
+    /// Build an `Expr` leaf from a float, preferring exact `p/q` when the CF snap hits.
+    pub fn snap_coeff_expr(v: f64, max_den: i64) -> Expr {
+        if !v.is_finite() {
+            return Expr::Num(v);
+        }
+        if let Some(r) = Self::from_float_snap(v, max_den) {
+            if (r.to_f64() - v).abs() < 1e-15 {
+                return r.to_expr();
+            }
+        }
+        Expr::Num(snap_f64_fallback(v))
+    }
+
+    /// Render as an `Expr` (`5`, `-7/2`, …).
+    pub fn to_expr(self) -> Expr {
+        if self.den == 1 {
+            Expr::num(self.num as f64)
+        } else {
+            Expr::div(Expr::num(self.num as f64), Expr::num(self.den as f64))
+        }
+    }
+
 /// Numerator.
     pub fn num(&self) -> i64 {
         self.num
@@ -204,22 +246,25 @@ e >>= 1;
                 return Some(r.to_string());
             }
         }
-        // Fallback: integer or 12-sig-digit fixed (mirrors limit.rs / qsolve.rs /
-        // apart.rs conventions so we don't regress those modules' tests).
-        let snapped = if (v - v.round()).abs() < 1e-9 * v.abs().max(1.0) {
-            v.round()
-        } else {
-            let mag = v.abs();
-            let digits = 11 - mag.log10().floor() as i32;
-            if !(-20..=20).contains(&digits) {
-                v
-            } else {
-                let factor = 10f64.powi(digits);
-                (v * factor).round() / factor
-            }
-        };
-        Some(format_snap_f64(snapped))
+        Some(format_snap_f64(snap_f64_fallback(v)))
     }
+}
+
+/// Integer-near or 12-significant-digit float snap (shared by `snap_rational` / display).
+fn snap_f64_fallback(v: f64) -> f64 {
+    if !v.is_finite() {
+        return v;
+    }
+    if (v - v.round()).abs() < 1e-9 * v.abs().max(1.0) {
+        return v.round();
+    }
+    let mag = v.abs();
+    let digits = 11 - mag.log10().floor() as i32;
+    if !(-20..=20).contains(&digits) {
+        return v;
+    }
+    let factor = 10f64.powi(digits);
+    (v * factor).round() / factor
 }
 
 /// 12-significant-digit fallback formatter (replicates the inline snapping in
@@ -891,6 +936,20 @@ mod tests {
         assert_eq!(Rational::snap_to_string(5.0 / 3.0, 1_000_000, None).unwrap(), "5/3");
         assert_eq!(Rational::snap_to_string(-7.0 / 2.0, 1_000_000, None).unwrap(), "-7/2");
         assert_eq!(Rational::snap_to_string(0.5, 1_000_000, None).unwrap(), "1/2");
+    }
+
+    #[test]
+    fn snap_rational_shared_helper() {
+        assert!((Rational::snap_rational(5.0 / 3.0, SNAP_MAX_DEN) - 5.0 / 3.0).abs() < 1e-15);
+        assert!((Rational::snap_rational(-1.0 / 6.0, SNAP_MAX_DEN_COMPACT) + 1.0 / 6.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn snap_coeff_expr_builds_div() {
+        use crate::expr::Expr;
+        let e = Rational::snap_coeff_expr(1.0 / 2.0, SNAP_MAX_DEN);
+        assert!(matches!(e, Expr::Div(_, _)));
+        assert_eq!(e.to_string(), "1/2");
     }
 
     #[test]

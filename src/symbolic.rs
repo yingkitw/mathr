@@ -15,6 +15,21 @@ pub fn differentiate(expr: &Expr, var: &str) -> Result<Expr> {
     Ok(simplify(&diff(expr, var)?))
 }
 
+/// Apply `differentiate` `order` times (`order` ≥ 1).
+pub fn differentiate_n(expr: &Expr, var: &str, order: u32) -> Result<Expr> {
+    if order == 0 {
+        return Err(MathError::Eval("derivative order must be at least 1".into()));
+    }
+    if order > 64 {
+        return Err(MathError::Eval("derivative order capped at 64".into()));
+    }
+    let mut e = expr.clone();
+    for _ in 0..order {
+        e = differentiate(&e, var)?;
+    }
+    Ok(e)
+}
+
 fn diff(expr: &Expr, var: &str) -> Result<Expr> {
     match expr {
         Expr::Num(_) => Ok(Expr::num(0.0)),
@@ -711,6 +726,14 @@ mod tests {
     fn d(s: &str) -> Expr {
         let e = Parser::parse(s).unwrap();
         differentiate(&e, "x").unwrap()
+    }
+
+    #[test]
+    fn differentiate_n_quadratic() {
+        let e = Parser::parse("x^4").unwrap();
+        let d2 = differentiate_n(&e, "x", 2).unwrap();
+        let want = Parser::parse("12*x^2").unwrap();
+        agrees(&d2, &want, &[0.5, 1.0, 2.0]);
     }
 
     #[test]

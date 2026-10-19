@@ -113,6 +113,7 @@ pub mod poly;
 pub mod apart;
 pub mod qsolve;
 pub mod sumprod;
+pub mod vector;
 
 pub use error::{MathError, Result};
 
@@ -179,7 +180,8 @@ pub mod prelude {
         student_t_pdf, student_t_ppf, t_test_one, t_test_paired, t_test_two, uniform_cdf,
         uniform_pdf, uniform_ppf, wilcoxon_signed_rank, TestResult,
     };
-    pub use crate::symbolic::{differentiate, gradient, idiff_steps_str, implicit_diff, integrate};
+    pub use crate::symbolic::{differentiate, differentiate_n, gradient, idiff_steps_str, implicit_diff, integrate};
+    pub use crate::vector::{cross, cross3, dot};
     pub use crate::taylor::taylor_series;
     pub use crate::laurent::{laurent_series, laurent_series_str, LaurentSeries};
     pub use crate::rational::{parse_rational, Rational};

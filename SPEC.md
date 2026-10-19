@@ -245,7 +245,7 @@ Supported functions: `sqrt`, `exp`, `ln`, `log`, `log10`, `log2`, `sin`, `cos`, 
 
 ### Symbolic Quadratic Solve
 
-`qsolve` solves `expr = 0` (or `lhs = rhs`) symbolically for a single inferred variable when the equation is linear or quadratic after expansion. Discriminant classification: perfect-square discriminant → exact integer roots; zero → double root; negative → complex-conjugate roots written with the `i` literal (evaluate them with `cval`); otherwise roots are snapped to 12 significant digits.
+`qsolve` solves `expr = 0` (or `lhs = rhs`) symbolically for a single inferred variable when the equation is a polynomial of degree ≤ 4 after expansion. Linear/quadratic: discriminant classification (perfect-square → exact rationals; zero → double root; negative → complex-conjugate roots with the `i` literal, evaluable via `cval`; else 12-sig snap). Cubic/quartic with integer coefficients: rational-root test and exact deflation, then the same quadratic finish; remaining cases use numeric roots (Durand–Kerner).
 
 ```
 mathr> qsolve x^2 - 4
@@ -565,7 +565,10 @@ p=0.001
 | `<expr>` | Evaluate |
 | `let x = <expr>` | Bind variable |
 | `fn f(x) = <expr>` | Define function |
-| `diff <expr> [var]` | Symbolic derivative |
+| `diff <expr> [var] [order]` | Symbolic derivative (order ≤ 64; default var `x`, order 1) |
+| `d/dx <expr> [order]` | Derivative with respect to `x` (unsolve alias) |
+| `dot <components...> \| <components...>` | Dot product of two equal-length vectors |
+| `cross <a1 a2 a3> \| <b1 b2 b3>` | 3-D cross product |
 | `pdiff <expr> <var>` | Partial derivative |
 | `gradient <expr>` | Gradient (all partials) |
 | `idiff <expr> [= rhs] [<indep> <dep>]` | Implicit differentiation `d(dep)/d(indep) = −F_indep/F_dep` (defaults: two free vars, prefer `x` independent) |
@@ -579,7 +582,7 @@ p=0.001
 | `laurent <expr> [a] [k] [N]` | Laurent series around a pole |
 | `rat <a> <op> <b>` | Exact rational arithmetic |
 | `cval <expr> [with <var>=<val>,...]` | Complex evaluation (`i` = imaginary unit, principal branch) |
-| `qsolve <expr> [= rhs]` | Symbolic linear/quadratic solve (one variable, roots exact when the discriminant is a perfect square) |
+| `qsolve <expr> [= rhs]` | Symbolic polynomial solve deg ≤ 4 (one variable; integer cubics/quartics use rational roots + deflation) |
 | `sum <expr> [<var>] <a> <b>` | Σ over inclusive integer bounds (exact rational results when possible; closed forms for arithmetic/geometric/Faulhaber patterns) |
 | `prod <expr> [<var>] <a> <b>` | ∏ over inclusive integer bounds |
 | `fourier <expr> L N [x]` | Fourier series on [-L, L] |
