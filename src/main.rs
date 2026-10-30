@@ -8,6 +8,7 @@
 //!   mathr "gcd 48 36"             number theory
 //!   mathr "is-prime 97"           primality test
 //!   mathr "gamma(0.5)"            special functions (as expressions)
+//!   mathr mcp                     MCP server over stdio (JSON-RPC 2.0)
 //!   mathr notebook [file.mnb]     web notebook UI
 //!   echo "sin(pi/4)" | mathr      read from stdin
 //!   mathr                         interactive REPL
@@ -56,6 +57,11 @@ fn main() -> Result<()> {
         let file = args.get(1).map(std::path::PathBuf::from);
         let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(3000);
         return run_notebook(file, port).map_err(Into::into);
+    }
+
+    // Check for "mcp" subcommand — an MCP server over stdio.
+    if input == "mcp" {
+        return mathr::mcp::serve_stdio().map_err(Into::into);
     }
 
     let ctx = Context::standard();

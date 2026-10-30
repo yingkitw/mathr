@@ -159,6 +159,11 @@ pub fn dispatch_steps(line: &str, ctx: Context) -> Result<Vec<String>> {
         return solve_steps(rest.trim(), ctx);
     }
 
+    // nsolve: find all real roots by scanning for sign changes
+    if let Some(rest) = line.strip_prefix("nsolve ") {
+        return nsolve_steps(rest.trim(), ctx);
+    }
+
     // taylor: show expression, expansion point, order, series
     if let Some(rest) = line.strip_prefix("taylor ") {
         return taylor_steps(rest.trim());
@@ -261,9 +266,163 @@ struct DiffParse {
     order: u32,
 }
 
+/// A command body split into its expression part and an optional
+/// `for <var>` suffix.
+struct ForVar {
+    /// The body with the `for <var>` suffix removed.
+    body: String,
+    /// The variable named by the suffix, if present.
+    variable: Option<String>,
+}
+
+/// Strip a trailing `for <name>` suffix from a command body.
+///
+/// The suffix names the free variable of the operation: the differentiation
+/// variable for `diff`, the integration variable for `integrate`, the
+/// expansion variable for `taylor`, the limit variable for `limit`, and the
+/// unknown to isolate for `solve`.
+///
+/// Without this, `for` and the name are parsed as ordinary identifiers and
+/// silently multiply into the expression (`diff y*x^2 for y` became
+/// `x^2*for`). Cross-port pattern from unsolve `solve-problem.ts:119-124`.
+///
+/// The keyword is matched case-insensitively but the name keeps its case.
+/// The suffix must be the final token group; `for` preceded by whitespace is
+/// required so identifiers like `xfor` are untouched.
+fn strip_for_var(body: &str) -> ForVar {
+    let trimmed = body.trim();
+    // Split off the trailing name.
+    let mut tokens = trimmed.rsplitn(2, char::is_whitespace);
+    let Some(last) = tokens.next() else {
+        return ForVar {
+            body: trimmed.to_string(),
+            variable: None,
+        };
+    };
+    let Some(head) = tokens.next() else {
+        return ForVar {
+            body: trimmed.to_string(),
+            variable: None,
+        };
+    };
+    if last.is_empty() || !last.chars().all(|c| c.is_ascii_alphabetic()) {
+        return ForVar {
+            body: trimmed.to_string(),
+            variable: None,
+        };
+    }
+    // The word before the name must be the keyword `for`.
+    let head_trimmed = head.trim_end();
+    let Some(keyword_end) = head_trimmed.rfind(char::is_whitespace) else {
+        return ForVar {
+            body: trimmed.to_string(),
+            variable: None,
+        };
+    };
+    let keyword = &head_trimmed[keyword_end + 1..];
+    if !keyword.eq_ignore_ascii_case("for") {
+        return ForVar {
+            body: trimmed.to_string(),
+            variable: None,
+        };
+    }
+    let expr_src = head_trimmed[..keyword_end].trim();
+    if expr_src.is_empty() {
+        return ForVar {
+            body: trimmed.to_string(),
+            variable: None,
+        };
+    }
+    ForVar {
+        body: expr_src.to_string(),
+        variable: Some(last.to_string()),
+    }
+}
+
+/// A pair of integration/minimization bounds.
+struct Bounds {
+    /// The expression to operate on.
+    expr_src: String,
+    /// The lower bound, as source text (an expression, e.g. `pi/2`).
+    a_src: String,
+    /// The upper bound, as source text.
+    b_src: String,
+}
+
+/// Split a command body into an expression and a pair of bounds.
+///
+/// Two forms are accepted:
+///
+/// 1. **Positional** — `<expr> <a> <b>`, the historical form. The bounds
+///    are the last two tokens.
+/// 2. **Suffix** — `<expr> from <a> to <b>`, where `<a>` and `<b>` are
+///    full *expressions* and may contain spaces (`from pi/2 to pi`).
+///
+/// The suffix form is unambiguous, so it is preferred when present; it also
+/// retires the trailing-token ambiguity class, where a stray extra token
+/// silently changed which numbers were read as the bounds.
+///
+/// When no explicit `from … to …` is given, the positional form is used and
+/// the *last two tokens* are the bounds — matching the long-standing
+/// behaviour that `romberg x^2 0 1 12` integrates `x^2*0` over `[1, 12]`.
+///
+/// Cross-port pattern from unsolve `solve-problem.ts:115-133`.
+fn split_bounds(body: &str) -> Result<Bounds> {
+    // The `from … to …` suffix: find the *last* `from` that is followed by a
+    // `to`, so an expression containing the word "from" does not confuse it.
+    let lower = body.to_ascii_lowercase();
+    if let Some(from_pos) = lower.rfind(" from ") {
+        let after_from = &body[from_pos + " from ".len()..];
+        let after_lower = &lower[from_pos + " from ".len()..];
+        if let Some(to_pos) = after_lower.rfind(" to ") {
+            let a_src = after_from[..to_pos].trim().to_string();
+            let b_src = after_from[to_pos + " to ".len()..].trim().to_string();
+            let expr_src = body[..from_pos].trim().to_string();
+            if !a_src.is_empty() && !b_src.is_empty() && !expr_src.is_empty() {
+                return Ok(Bounds {
+                    expr_src,
+                    a_src,
+                    b_src,
+                });
+            }
+        }
+        // A `from` was present but the suffix is malformed — say so rather
+        // than silently treating "from" as part of the expression.
+        return Err(crate::error::MathError::Eval(
+            "bounds must be given as `from <a> to <b>`".into(),
+        ));
+    }
+    // Positional: the last two tokens are the bounds.
+    let tokens: Vec<&str> = body.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return Err(crate::error::MathError::Eval(
+            "needs: <expr> <a> <b>  or  <expr> from <a> to <b>".into(),
+        ));
+    }
+    Ok(Bounds {
+        expr_src: tokens[..tokens.len() - 2].join(" "),
+        a_src: tokens[tokens.len() - 2].to_string(),
+        b_src: tokens[tokens.len() - 1].to_string(),
+    })
+}
+
+/// Evaluate a bound given as source text.
+///
+/// The text is parsed as an expression, so `pi`, `pi/2`, `1+1` and `2*pi`
+/// all work. Constant names (`pi`, `e`, `tau`) resolve from the standard
+/// context; other free variables resolve from `ctx`.
+fn eval_bound(src: &str, ctx: &Context) -> Result<f64> {
+    let e = Parser::parse(src)?;
+    crate::eval::eval(&e, ctx)
+}
+
 /// Parse `diff <expr> [var] [order]` or `d/dx <expr> [order]` when `force_wrt` is set.
+///
+/// A trailing `for <var>` suffix names the differentiation variable and wins
+/// over the trailing single-letter heuristic.
 fn parse_diff_tail(rest: &str, force_wrt: Option<&str>) -> Result<DiffParse> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let ForVar { body, variable } = strip_for_var(rest);
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval("`diff` needs an expression".into()));
     }
@@ -286,11 +445,16 @@ fn parse_diff_tail(rest: &str, force_wrt: Option<&str>) -> Result<DiffParse> {
         }
     }
     let mut wrt = force_wrt.map(String::from).unwrap_or_else(|| "x".to_string());
-    if force_wrt.is_none() && expr_end > 1 {
-        let candidate = tokens[expr_end - 1];
-        if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
-            wrt = candidate.to_string();
-            expr_end -= 1;
+    if force_wrt.is_none() {
+        if let Some(v) = variable {
+            // An explicit `for <var>` names the differentiation variable.
+            wrt = v;
+        } else if expr_end > 1 {
+            let candidate = tokens[expr_end - 1];
+            if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+                wrt = candidate.to_string();
+                expr_end -= 1;
+            }
         }
     }
     if expr_end == 0 {
@@ -346,16 +510,19 @@ fn diff_steps(rest: &str, ctx: Context, force_wrt: Option<&str>) -> Result<Vec<S
 }
 
 fn solve_steps(rest: &str, ctx: Context) -> Result<Vec<String>> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let ForVar { body, variable } = strip_for_var(rest);
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval("`solve` needs an expression".into()));
     }
+    // An explicit `for <var>` names the unknown to isolate.
+    let explicit_var = variable.is_some();
     for consume in [2usize, 1, 0] {
         if tokens.len() <= consume {
             continue;
         }
         let mut guess = 1.0;
-        let mut wrt = "x".to_string();
+        let mut wrt = variable.clone().unwrap_or_else(|| "x".to_string());
         let mut expr_end = tokens.len();
         if consume >= 1 {
             if let Ok(g) = tokens[expr_end - 1].parse::<f64>() {
@@ -366,12 +533,24 @@ fn solve_steps(rest: &str, ctx: Context) -> Result<Vec<String>> {
             }
         }
         if consume >= 2 {
-            let candidate = tokens[expr_end - 1];
-            if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
-                wrt = candidate.to_string();
-                expr_end -= 1;
+            if explicit_var {
+                // The variable is already fixed by `for <var>`; the trailing
+                // token slot is consumed by it, so a single-letter candidate
+                // here would be ambiguous — skip that slot.
+                if expr_end > 0
+                    && tokens[expr_end - 1].len() == 1
+                    && tokens[expr_end - 1].chars().all(|c| c.is_ascii_alphabetic())
+                {
+                    expr_end -= 1;
+                }
             } else {
-                continue;
+                let candidate = tokens[expr_end - 1];
+                if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+                    wrt = candidate.to_string();
+                    expr_end -= 1;
+                } else {
+                    continue;
+                }
             }
         }
         let expr_src = tokens[..expr_end].join(" ");
@@ -397,8 +576,26 @@ fn solve_steps(rest: &str, ctx: Context) -> Result<Vec<String>> {
     Err(crate::error::MathError::Eval(format!("could not parse: {}", rest)))
 }
 
+/// `nsolve <expr> [var] [lo hi]` — step-by-step output for the sign-scan
+/// root finder.
+fn nsolve_steps(rest: &str, ctx: Context) -> Result<Vec<String>> {
+    let mut ctx = ctx;
+    let out = do_nsolve(rest, &mut ctx)?
+        .ok_or_else(|| crate::error::MathError::Eval("`nsolve` produced no output".into()))?;
+    let mut steps = vec![format!("nsolve: {}", out)];
+    if !out.starts_with("no real roots") {
+        // Show each root on its own line for a readable step board.
+        let list = out.strip_prefix("roots: ").unwrap_or(&out);
+        for r in list.split(", ") {
+            steps.push(format!("root ≈ {}", r.trim()));
+        }
+    }
+    Ok(steps)
+}
+
 fn taylor_steps(rest: &str) -> Result<Vec<String>> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let ForVar { body, variable } = strip_for_var(rest);
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval("`taylor` needs an expression".into()));
     }
@@ -418,29 +615,41 @@ fn taylor_steps(rest: &str) -> Result<Vec<String>> {
         }
     }
     let expr_src = tokens[..expr_end].join(" ");
-    let series = crate::taylor::taylor_series_str(&expr_src, "x", around, order)?;
+    // An explicit `for <var>` names the expansion variable.
+    let wrt = variable.unwrap_or_else(|| "x".to_string());
+    let series = crate::taylor::taylor_series_str(&expr_src, &wrt, around, order)?;
     Ok(vec![
-        format!("f(x) = {}", expr_src),
+        format!("f({}) = {}", wrt, expr_src),
         format!("Taylor expansion around a = {}", format_value(around)),
         format!("order = {}", order),
-        format!("f(x) ≈ {}", series),
+        format!("f({}) ≈ {}", wrt, series),
     ])
 }
 
 fn integrate_sym_steps(rest: &str) -> Result<Vec<String>> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let ForVar { body, variable } = strip_for_var(rest);
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval("integrate needs: <expr> [var]".into()));
     }
-    let var = if tokens.len() >= 2
-        && tokens[tokens.len() - 1].len() == 1
-        && tokens[tokens.len() - 1].chars().all(|c| c.is_ascii_alphabetic())
-    {
-        tokens[tokens.len() - 1].to_string()
-    } else {
-        "x".to_string()
+    // An explicit `for <var>` names the integration variable and wins over
+    // the trailing single-letter heuristic.
+    let explicit_var = variable.is_some();
+    let var = match &variable {
+        Some(v) => v.clone(),
+        None => {
+            if tokens.len() >= 2
+                && tokens[tokens.len() - 1].len() == 1
+                && tokens[tokens.len() - 1].chars().all(|c| c.is_ascii_alphabetic())
+            {
+                tokens[tokens.len() - 1].to_string()
+            } else {
+                "x".to_string()
+            }
+        }
     };
-    let expr_end = if tokens.len() >= 2
+    let expr_end = if !explicit_var
+        && tokens.len() >= 2
         && tokens[tokens.len() - 1].len() == 1
         && tokens[tokens.len() - 1].chars().all(|c| c.is_ascii_alphabetic())
     {
@@ -590,6 +799,9 @@ fn dispatch_inner(line: &str, ctx: &mut Context) -> Result<Option<String>> {
     }
     if let Some(rest) = line.strip_prefix("solve ") {
         return do_solve(rest.trim(), ctx);
+    }
+    if let Some(rest) = line.strip_prefix("nsolve ") {
+        return do_nsolve(rest.trim(), ctx);
     }
     if let Some(rest) = line.strip_prefix("plot ") {
         return do_plot(rest.trim(), ctx);
@@ -993,63 +1205,41 @@ fn do_idiff(rest: &str) -> Result<Option<String>> {
 }
 
 fn do_integrate(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.len() < 3 {
-        return Err(crate::error::MathError::Eval("`int` needs: <expr> <a> <b>".into()));
-    }
-    // The last two tokens are bounds a, b (can be expressions like "pi").
-    // The rest is the expression to integrate.
-    // Try different split points in case the expression has trailing numbers.
-    for split in [2usize, 3, 4] {
-        if tokens.len() <= split {
-            continue;
-        }
-        let b_src = tokens[tokens.len() - 1];
-        let a_src = tokens[tokens.len() - 2];
-        let expr_src = tokens[..tokens.len() - split].join(" ");
-        let e = match Parser::parse(&expr_src) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        // Evaluate bounds (support constants like pi, e)
-        let a_e = match Parser::parse(a_src) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let b_e = match Parser::parse(b_src) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let a = crate::eval::eval(&a_e, ctx)?;
-        let b = crate::eval::eval(&b_e, ctx)?;
+    // Format: "<expr> <a> <b>" or "<expr> from <a> to <b>". The bounds may be
+    // expressions ("pi", "pi/2").
+    let bounds = split_bounds(rest)?;
+    let a = eval_bound(&bounds.a_src, ctx)?;
+    let b = eval_bound(&bounds.b_src, ctx)?;
+    let e = Parser::parse(&bounds.expr_src)?;
 
-        let bound: Vec<(String, Expr)> = ctx
-            .vars
-            .iter()
-            .filter(|(k, _)| !["pi", "e", "tau", "inf"].contains(&k.as_str()))
-            .map(|(k, v)| (k.clone(), Expr::num(*v)))
-            .collect();
-        let mut e = e;
-        for (k, v) in &bound {
-            e = e.substitute(k, v);
-        }
-        let ctx2 = ctx.clone();
-        let f = move |x: f64| {
-            let mut cx = ctx2.clone();
-            cx.set("x", x);
-            crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
-        };
-        let v = crate::calculus::integrate_adaptive(f, a, b, 1e-9, 30)?;
-        return Ok(Some(format!("∫ = {}", format_value(v))));
+    let bound: Vec<(String, Expr)> = ctx
+        .vars
+        .iter()
+        .filter(|(k, _)| !["pi", "e", "tau", "inf"].contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), Expr::num(*v)))
+        .collect();
+    let mut e = e;
+    for (k, v) in &bound {
+        e = e.substitute(k, v);
     }
-    Err(crate::error::MathError::Eval(format!("could not parse: {}", rest)))
+    let ctx2 = ctx.clone();
+    let f = move |x: f64| {
+        let mut cx = ctx2.clone();
+        cx.set("x", x);
+        crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
+    };
+    let v = crate::calculus::integrate_adaptive(f, a, b, 1e-9, 30)?;
+    Ok(Some(format!("∫ = {}", format_value(v))))
 }
 
 fn do_solve(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let ForVar { body, variable } = strip_for_var(rest);
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval("`solve` needs an expression".into()));
     }
+    // An explicit `for <var>` names the unknown to isolate.
+    let explicit_var = variable.is_some();
     // Try parsing from the right: optional guess (number), optional var (single alpha).
     // If the expression fails to parse with trailing tokens consumed, retry with fewer consumed.
     for consume in [2usize, 1, 0] {
@@ -1057,7 +1247,7 @@ fn do_solve(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
             continue;
         }
         let mut guess = 1.0;
-        let mut wrt = "x".to_string();
+        let mut wrt = variable.clone().unwrap_or_else(|| "x".to_string());
         let mut expr_end = tokens.len();
 
         if consume >= 1 {
@@ -1069,12 +1259,23 @@ fn do_solve(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
             }
         }
         if consume >= 2 {
-            let candidate = tokens[expr_end - 1];
-            if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
-                wrt = candidate.to_string();
-                expr_end -= 1;
+            if explicit_var {
+                // The unknown is already fixed by `for <var>`; the single-letter
+                // slot would be redundant, so consume it only if present.
+                if expr_end > 0
+                    && tokens[expr_end - 1].len() == 1
+                    && tokens[expr_end - 1].chars().all(|c| c.is_ascii_alphabetic())
+                {
+                    expr_end -= 1;
+                }
             } else {
-                continue;
+                let candidate = tokens[expr_end - 1];
+                if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+                    wrt = candidate.to_string();
+                    expr_end -= 1;
+                } else {
+                    continue;
+                }
             }
         }
         let expr_src = tokens[..expr_end].join(" ");
@@ -1092,6 +1293,114 @@ fn do_solve(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
         return Ok(Some(format!("root ≈ {} (f = {})", format_value(root), format_value(fval))));
     }
     Err(crate::error::MathError::Eval(format!("could not parse: {}", rest)))
+}
+
+/// `nsolve <expr> [var] [lo hi]` — find **all** real roots by scanning for
+/// sign changes.
+///
+/// Unlike `solve`, which runs one Newton–Raphson iteration from a guess and
+/// therefore returns a single root, `nsolve` samples an interval, bisects
+/// every sign change, and returns them all. `nsolve sin(x)` finds
+/// `0, ±π, ±2π, …`.
+///
+/// The optional `lo hi` bounds the scan (default `-30 30`).
+fn do_nsolve(rest: &str, ctx: &mut Context) -> Result<Option<String>> {
+    // Parse the bounds *first*: they come last in the command, and
+    // stripping them first leaves the `for <var>` suffix at the end,
+    // where `strip_for_var` can see it.
+    let mut tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "`nsolve` needs: <expr> [var] [lo hi]".into(),
+        ));
+    }
+    let mut lo: Option<f64> = None;
+    let mut hi: Option<f64> = None;
+    if tokens.len() >= 2 {
+        if let (Ok(a), Ok(b)) = (
+            tokens[tokens.len() - 2].parse::<f64>(),
+            tokens[tokens.len() - 1].parse::<f64>(),
+        ) {
+            lo = Some(a);
+            hi = Some(b);
+            tokens.truncate(tokens.len() - 2);
+        }
+    }
+    // Now the `for <var>` suffix (if any) is the final token group.
+    let ForVar { body, variable } = strip_for_var(&tokens.join(" "));
+    tokens = body.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "`nsolve` needs: <expr> [var] [lo hi]".into(),
+        ));
+    }
+    // A trailing single letter is the variable (unless `for <var>` named it).
+    let mut wrt = variable.clone();
+    let mut expr_end = tokens.len();
+    if wrt.is_none() && expr_end >= 2 {
+        let candidate = tokens[expr_end - 1];
+        if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
+            wrt = Some(candidate.to_string());
+            expr_end -= 1;
+        }
+    }
+    let expr_src = tokens[..expr_end].join(" ");
+    if expr_src.is_empty() {
+        return Err(crate::error::MathError::Eval(
+            "`nsolve` needs: <expr> [var] [lo hi]".into(),
+        ));
+    }
+    let e = Parser::parse(&expr_src)?;
+
+    // Infer the variable when it was not named: the expression must have
+    // exactly one free variable.
+    let wrt = match wrt {
+        Some(v) => v,
+        None => {
+            let vars = e.variables();
+            let mut vars = vars;
+            vars.sort();
+            vars.dedup();
+            if vars.len() != 1 {
+                return Err(crate::error::MathError::Eval(
+                    "`nsolve` needs a variable: the expression has multiple or no free variables"
+                        .into(),
+                ));
+            }
+            vars.remove(0)
+        }
+    };
+
+    let mut opts = crate::solver::ScanOptions::default();
+    if let Some(l) = lo {
+        opts.lo = l;
+    }
+    if let Some(h) = hi {
+        opts.hi = h;
+    }
+    if opts.lo >= opts.hi {
+        return Err(crate::error::MathError::Eval(
+            "`nsolve`: lo must be less than hi".into(),
+        ));
+    }
+
+    let ctx2 = ctx.clone();
+    let wrt_clone = wrt.clone();
+    let f = move |x: f64| {
+        let mut cx = ctx2.clone();
+        cx.set(&wrt_clone, x);
+        crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
+    };
+    let roots = crate::solver::find_all_roots(f, &opts);
+    if roots.is_empty() {
+        return Ok(Some(format!(
+            "no real roots in [{}, {}]",
+            format_value(opts.lo),
+            format_value(opts.hi)
+        )));
+    }
+    let list: Vec<String> = roots.iter().map(|r| format_value(*r)).collect();
+    Ok(Some(format!("roots: {}", list.join(", "))))
 }
 
 fn do_plot(rest: &str, _ctx: &mut Context) -> Result<Option<String>> {
@@ -1143,7 +1452,8 @@ fn do_fft(rest: &str) -> Result<Option<String>> {
 }
 
 fn do_taylor(rest: &str) -> Result<Option<String>> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let ForVar { body, variable } = strip_for_var(rest);
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval("`taylor` needs an expression".into()));
     }
@@ -1164,7 +1474,9 @@ fn do_taylor(rest: &str) -> Result<Option<String>> {
         }
     }
     let expr_src = tokens[..expr_end].join(" ");
-    let series = crate::taylor::taylor_series_str(&expr_src, "x", around, order)?;
+    // An explicit `for <var>` names the expansion variable.
+    let wrt = variable.unwrap_or_else(|| "x".to_string());
+    let series = crate::taylor::taylor_series_str(&expr_src, &wrt, around, order)?;
     Ok(Some(series.to_string()))
 }
 
@@ -2317,7 +2629,8 @@ fn do_dec(rest: &str) -> Result<Option<String>> {
 /// limit as the variable approaches the point (finite, `inf`, or `-inf`).
 /// The variable may be omitted when the expression has exactly one.
 fn parse_limit_target(rest: &str) -> Result<(crate::expr::Expr, String, f64)> {
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let ForVar { body, variable } = strip_for_var(rest);
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval(
             "limit needs: <expr> [<var>] <point>".into(),
@@ -2334,21 +2647,32 @@ fn parse_limit_target(rest: &str) -> Result<(crate::expr::Expr, String, f64)> {
     };
     if tokens.len() >= 3 {
         let point = parse_point(tokens[tokens.len() - 1])?;
-        let var = tokens[tokens.len() - 2].to_string();
+        // An explicit `for <var>` names the limit variable and wins over the
+        // positional `<var>` slot.
+        let var = match &variable {
+            Some(v) => v.clone(),
+            None => tokens[tokens.len() - 2].to_string(),
+        };
         let expr_src = tokens[..tokens.len() - 2].join(" ");
         let e = Parser::parse(&expr_src)?;
         Ok((e, var, point))
     } else if tokens.len() == 2 {
         let point = parse_point(tokens[1])?;
         let e = Parser::parse(tokens[0])?;
-        let mut vars = e.variables();
-        if vars.len() != 1 {
-            return Err(crate::error::MathError::Eval(
-                "limit needs: <expr> <var> <point> (expression has multiple or no variables)"
-                    .into(),
-            ));
-        }
-        Ok((e, vars.remove(0), point))
+        let var = match variable {
+            Some(v) => v,
+            None => {
+                let mut vars = e.variables();
+                if vars.len() != 1 {
+                    return Err(crate::error::MathError::Eval(
+                        "limit needs: <expr> <var> <point> (expression has multiple or no variables)"
+                            .into(),
+                    ));
+                }
+                vars.remove(0)
+            }
+        };
+        Ok((e, var, point))
     } else {
         Err(crate::error::MathError::Eval(
             "limit needs: <expr> [<var>] <point>  e.g. `limit sin(x)/x x 0` or `limit 1/x inf`"
@@ -2708,18 +3032,14 @@ fn do_ad(rest: &str, ctx: &Context) -> Result<Option<String>> {
 }
 
 fn do_romberg(rest: &str) -> Result<Option<String>> {
-    // Format: "<expr> a b" (expr may contain spaces; fixed 8 Romberg levels)
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.len() < 3 {
-        return Err(crate::error::MathError::Eval("romberg needs: <expr> a b".into()));
-    }
-    let b: f64 = tokens[tokens.len() - 1].parse()
-        .map_err(|_| crate::error::MathError::Eval("bad b".into()))?;
-    let a: f64 = tokens[tokens.len() - 2].parse()
-        .map_err(|_| crate::error::MathError::Eval("bad a".into()))?;
+    // Format: "<expr> a b" or "<expr> from a to b" (fixed 8 Romberg levels).
+    // The bounds may be expressions ("pi", "pi/2").
+    let bounds = split_bounds(rest)?;
+    let ctx = Context::standard();
+    let a = eval_bound(&bounds.a_src, &ctx)?;
+    let b = eval_bound(&bounds.b_src, &ctx)?;
     let levels: usize = 8;
-    let expr_src = tokens[..tokens.len() - 2].join(" ");
-    let e = Parser::parse(&expr_src)?;
+    let e = Parser::parse(&bounds.expr_src)?;
     let ctx2 = Context::standard();
     let f = move |x: f64| {
         let mut cx = ctx2.clone();
@@ -2727,7 +3047,13 @@ fn do_romberg(rest: &str) -> Result<Option<String>> {
         crate::eval::eval(&e, &cx).unwrap_or(f64::NAN)
     };
     let v = crate::calculus::integrate_romberg(f, a, b, levels)?;
-    Ok(Some(format!("∫ ({}, {}; levels = {}) = {}", format_value(a), format_value(b), levels, format_value(v))))
+    Ok(Some(format!(
+        "∫ ({}, {}; levels = {}) = {}",
+        format_value(a),
+        format_value(b),
+        levels,
+        format_value(v)
+    )))
 }
 
 fn do_svd(rest: &str) -> Result<Option<String>> {
@@ -2766,16 +3092,29 @@ fn do_legendre(rest: &str) -> Result<Option<String>> {
 
 fn do_integrate_sym(rest: &str, _ctx: &mut Context) -> Result<Option<String>> {
     // Format: "<expr> [var]" — symbolic integration.
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let ForVar { body, variable } = strip_for_var(rest);
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(crate::error::MathError::Eval("integrate needs: <expr> [var]".into()));
     }
-    let var = if tokens.len() >= 2 {
-        tokens[tokens.len() - 1].to_string()
-    } else {
-        "x".to_string()
+    // An explicit `for <var>` names the integration variable and wins over
+    // the trailing single-letter heuristic.
+    let explicit_var = variable.is_some();
+    let var = match &variable {
+        Some(v) => v.clone(),
+        None => {
+            if tokens.len() >= 2
+                && tokens[tokens.len() - 1].len() == 1
+                && tokens[tokens.len() - 1].chars().all(|c| c.is_ascii_alphabetic())
+            {
+                tokens[tokens.len() - 1].to_string()
+            } else {
+                "x".to_string()
+            }
+        }
     };
-    let expr_end = if tokens.len() >= 2
+    let expr_end = if !explicit_var
+        && tokens.len() >= 2
         && tokens[tokens.len() - 1].len() == 1
         && tokens[tokens.len() - 1].chars().all(|c| c.is_ascii_alphabetic())
     {
@@ -3322,21 +3661,14 @@ fn do_pchip(rest: &str) -> Result<Option<String>> {
 }
 
 fn do_minimize(rest: &str, ctx: &Context) -> Result<Option<String>> {
-    // Format: "minimize <expr> [var] a b" — golden-section search on [a, b]
-    let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.len() < 3 {
-        return Err(crate::error::MathError::Eval(
-            "`minimize` needs: minimize <expr> [var] a b".into(),
-        ));
-    }
-    let b: f64 = tokens[tokens.len() - 1]
-        .parse()
-        .map_err(|_| crate::error::MathError::Eval("b must be a number".into()))?;
-    let a: f64 = tokens[tokens.len() - 2]
-        .parse()
-        .map_err(|_| crate::error::MathError::Eval("a must be a number".into()))?;
+    // Format: "minimize <expr> [var] a b" or "minimize <expr> from a to b".
+    // The bounds may be expressions ("pi", "pi/2").
+    let bounds = split_bounds(rest)?;
+    let a = eval_bound(&bounds.a_src, ctx)?;
+    let b = eval_bound(&bounds.b_src, ctx)?;
     let mut var = "x".to_string();
-    let mut expr_end = tokens.len() - 2;
+    let mut tokens: Vec<&str> = bounds.expr_src.split_whitespace().collect();
+    let mut expr_end = tokens.len();
     if expr_end > 1 {
         let candidate = tokens[expr_end - 1];
         if candidate.len() == 1 && candidate.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -3344,7 +3676,8 @@ fn do_minimize(rest: &str, ctx: &Context) -> Result<Option<String>> {
             expr_end -= 1;
         }
     }
-    let expr_src = tokens[..expr_end].join(" ");
+    tokens.truncate(expr_end);
+    let expr_src = tokens.join(" ");
     let e = Parser::parse(&expr_src)?;
     // bind all other free variables from the REPL context
     let mctx = ctx.clone();
@@ -3435,13 +3768,24 @@ fn list_funcs(ctx: &Context) -> String {
     out
 }
 
-fn format_value(v: f64) -> String {
+/// Format a floating-point value for display.
+///
+/// Integral values print without a fractional part; others use 10
+/// significant decimals with trailing zeros trimmed. `NaN` and the
+/// infinities get their conventional spellings.
+///
+/// Public so external surfaces (e.g. the MCP server) format numbers the
+/// same way the REPL does.
+pub fn format_value(v: f64) -> String {
     if v.is_nan() {
         "NaN".into()
     } else if v.is_infinite() {
         if v > 0.0 { "inf".into() } else { "-inf".into() }
     } else if v == v.trunc() && v.abs() < 1e15 {
-        format!("{}", v as i64)
+        // `-0.0` would otherwise print as "-0" — a signed zero carries no
+        // meaning in a result, so normalise it.
+        let i = v as i64;
+        if i == 0 { "0".into() } else { format!("{}", i) }
     } else {
         format!("{:.10}", v)
             .trim_end_matches('0')
@@ -3672,6 +4016,106 @@ mod tests {
         assert!(out.contains("= 0"), "got: {out}");
     }
 
+    // ---- `from a to b` bounds with expression values ----------------------
+
+    #[test]
+    fn split_bounds_positional_form() {
+        let b = split_bounds("sin(x) 0 pi").unwrap();
+        assert_eq!(b.expr_src, "sin(x)");
+        assert_eq!(b.a_src, "0");
+        assert_eq!(b.b_src, "pi");
+    }
+
+    #[test]
+    fn split_bounds_suffix_form() {
+        let b = split_bounds("sin(x) from 0 to pi").unwrap();
+        assert_eq!(b.expr_src, "sin(x)");
+        assert_eq!(b.a_src, "0");
+        assert_eq!(b.b_src, "pi");
+    }
+
+    #[test]
+    fn split_bounds_suffix_allows_spaces_in_bounds() {
+        // The bounds are full expressions, so they may contain spaces.
+        let b = split_bounds("sin(x) from pi / 2 to 2 * pi").unwrap();
+        assert_eq!(b.expr_src, "sin(x)");
+        assert_eq!(b.a_src, "pi / 2");
+        assert_eq!(b.b_src, "2 * pi");
+    }
+
+    #[test]
+    fn split_bounds_suffix_needs_both_endpoints() {
+        // A malformed suffix is an error, not a silent fall-through.
+        assert!(split_bounds("sin(x) from 0").is_err());
+        assert!(split_bounds("sin(x) from to pi").is_err());
+    }
+
+    #[test]
+    fn bounds_accept_expression_values() {
+        let ctx = Context::standard();
+        assert_eq!(eval_bound("pi", &ctx).unwrap(), std::f64::consts::PI);
+        assert_eq!(eval_bound("pi/2", &ctx).unwrap(), std::f64::consts::PI / 2.0);
+        assert_eq!(eval_bound("2*pi", &ctx).unwrap(), 2.0 * std::f64::consts::PI);
+        assert_eq!(eval_bound("1+1", &ctx).unwrap(), 2.0);
+    }
+
+    #[test]
+    fn int_accepts_expression_bounds() {
+        // `int sin(x) 0 pi/2` = 1
+        let out = dispatch_str("int sin(x) 0 pi/2", Context::standard()).unwrap().unwrap();
+        assert!(out.contains("= 1"), "got: {out}");
+    }
+
+    #[test]
+    fn romberg_accepts_expression_bounds() {
+        // romberg used to reject `pi` outright ("bad b").
+        let out = dispatch_str("romberg sin(x) 0 pi", Context::standard()).unwrap().unwrap();
+        assert!(out.contains("= 2"), "got: {out}");
+    }
+
+    #[test]
+    fn from_to_suffix_works_for_all_three() {
+        let ctx = Context::standard();
+        let out = dispatch_str("int sin(x) from 0 to pi", ctx.clone()).unwrap().unwrap();
+        assert!(out.contains("= 2"), "got: {out}");
+        let out = dispatch_str("romberg sin(x) from 0 to pi", ctx.clone()).unwrap().unwrap();
+        assert!(out.contains("= 2"), "got: {out}");
+        let out = dispatch_str("minimize (x-3)^2 from 0 to 10", ctx).unwrap().unwrap();
+        assert!(out.contains("x* = 3"), "got: {out}");
+    }
+
+    #[test]
+    fn from_to_suffix_is_equivalent_to_positional() {
+        let ctx = Context::standard();
+        let a = dispatch_str("int x^2 from 0 to 3", ctx.clone()).unwrap().unwrap();
+        let b = dispatch_str("int x^2 0 3", ctx).unwrap().unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn from_to_suffix_handles_fraction_bounds() {
+        let out = dispatch_str("int sin(x) from 0 to pi/2", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert!(out.contains("= 1"), "got: {out}");
+    }
+
+    #[test]
+    fn positional_bounds_still_take_the_last_two_tokens() {
+        // The historical behaviour is unchanged: the last two tokens are the
+        // bounds, and extra tokens fold into the expression.
+        let out = dispatch_str("romberg x^2 0 1 12", Context::standard()).unwrap().unwrap();
+        assert!(out.contains("(1, 12;"), "got: {out}");
+    }
+
+    #[test]
+    fn bounds_error_message_lists_both_forms() {
+        let err = dispatch_str("int sin(x)", Context::standard()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("from"), "got: {msg}");
+        assert!(msg.contains("<a> <b>"), "got: {msg}");
+    }
+
     #[test]
     fn dispatch_steps_laurent() {
         let steps = dispatch_steps("laurent 1/x 0 1 3", Context::standard()).unwrap();
@@ -3801,5 +4245,151 @@ mod tests {
     fn dispatch_steps_error() {
         // Parse error should propagate
         assert!(dispatch_steps("diff @@@@", Context::standard()).is_err());
+    }
+
+    // ---- `for <var>` suffix ------------------------------------------------
+
+    #[test]
+    fn strip_for_var_extracts_name() {
+        let fv = strip_for_var("y*x^2 for y");
+        assert_eq!(fv.body, "y*x^2");
+        assert_eq!(fv.variable.as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn strip_for_var_ignores_non_suffix() {
+        // `for` must be the final token group.
+        let fv = strip_for_var("x^2 for x extra");
+        assert_eq!(fv.body, "x^2 for x extra");
+        assert!(fv.variable.is_none());
+    }
+
+    #[test]
+    fn strip_for_var_ignores_bare_for() {
+        // `for` with no name is not a suffix.
+        let fv = strip_for_var("x^2 for");
+        assert_eq!(fv.body, "x^2 for");
+        assert!(fv.variable.is_none());
+    }
+
+    #[test]
+    fn strip_for_var_ignores_non_identifier_name() {
+        // The name must be letters only.
+        let fv = strip_for_var("x^2 for 3");
+        assert_eq!(fv.body, "x^2 for 3");
+        assert!(fv.variable.is_none());
+    }
+
+    #[test]
+    fn strip_for_var_is_case_insensitive_keyword() {
+        let fv = strip_for_var("y^2 FOR y");
+        assert_eq!(fv.body, "y^2");
+        assert_eq!(fv.variable.as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn strip_for_var_leaves_expressions_alone() {
+        // A variable that merely contains "for" is not a suffix.
+        let fv = strip_for_var("xfor*y");
+        assert_eq!(fv.body, "xfor*y");
+        assert!(fv.variable.is_none());
+    }
+
+    #[test]
+    fn for_var_diff_names_variable() {
+        // `for` must not be parsed as letters multiplying into the expression.
+        let out = dispatch_str("diff y*x^2 for y", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, "x^2");
+    }
+
+    #[test]
+    fn for_var_diff_does_not_leak_for_as_variable() {
+        // Regression: `diff y*x^2 for y` used to yield "x^2*for".
+        let out = dispatch_str("diff y*x^2 for y", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert!(!out.contains("for"), "got {}", out);
+    }
+
+    #[test]
+    fn for_var_integrate_names_variable() {
+        let out = dispatch_str("integrate y^2 for y", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert!(out.contains("dy"), "got {}", out);
+        assert!(out.contains("y^3"), "got {}", out);
+    }
+
+    #[test]
+    fn for_var_taylor_names_variable() {
+        let out = dispatch_str("taylor exp(y) for y", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert!(out.contains('y'), "got {}", out);
+        assert!(!out.contains("unknown variable"), "got {}", out);
+    }
+
+    #[test]
+    fn for_var_limit_names_variable() {
+        let out = dispatch_str("limit sin(y)/y at 0 for y", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert!(out.contains("→ 0"), "got {}", out);
+        assert!(out.ends_with("= 1"), "got {}", out);
+    }
+
+    #[test]
+    fn for_var_solve_names_unknown() {
+        // `for y` must target `y`, so the numeric solver differentiates
+        // with respect to `y` (not `x`): y^2 - 4 = 0 has roots ±2.
+        let out = dispatch_str("solve y^2 - 4 for y", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert!(out.contains("root ≈ 2"), "got {}", out);
+        // The same equation solved for `x` would not converge (x is unbound).
+        let steps = dispatch_steps("solve y^2 - 4 for y", Context::standard()).unwrap();
+        assert!(steps[0].contains("y"), "got {:?}", steps);
+    }
+
+    #[test]
+    fn for_var_diff_steps() {
+        let steps = dispatch_steps("diff y*x^2 for y", Context::standard()).unwrap();
+        assert!(steps[0].contains("y*x^2"), "got {:?}", steps);
+        assert!(steps.join(" ").contains("x^2"), "got {:?}", steps);
+        assert!(!steps.join(" ").contains("*for"), "got {:?}", steps);
+    }
+
+    #[test]
+    fn for_var_integrate_steps() {
+        let steps = dispatch_steps("integrate y^2 for y", Context::standard()).unwrap();
+        assert!(steps[0].contains("y^2"), "got {:?}", steps);
+        assert!(steps[1].contains("dy"), "got {:?}", steps);
+    }
+
+    #[test]
+    fn for_var_absent_keeps_existing_behaviour() {
+        // No `for` suffix — the trailing single-letter heuristic still applies.
+        let out = dispatch_str("diff x^2", Context::standard()).unwrap().unwrap();
+        assert_eq!(out, "2*x");
+        let out = dispatch_str("integrate x^2", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert!(out.contains("dx"), "got {}", out);
+    }
+
+    #[test]
+    fn for_var_diff_order_still_works() {
+        // `for` and the order argument compose: d²/dy² (y*x²) = 0.
+        let out = dispatch_str("diff y*x^2 for y 2", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, "0");
+        // The first derivative is still x².
+        let out = dispatch_str("diff y*x^2 for y", Context::standard())
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, "x^2");
     }
 }

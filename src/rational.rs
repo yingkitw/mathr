@@ -177,6 +177,113 @@ impl Rational {
         self.den == 1
     }
 
+    /// Exact square root, if this rational has one.
+    ///
+    /// Returns `Some(r)` when `r² == self` for a rational `r` — i.e. the
+    /// numerator and denominator are both perfect squares. `sqrt(16)` → 4,
+    /// `sqrt(1/4)` → 1/2, `sqrt(2)` → `None`.
+    ///
+    /// Used by the simplifier to fold `sqrt` only when the result is *exact*,
+    /// never to a float approximation.
+    ///
+    /// Cross-port pattern from unsolve `rational.ts:156-162` (`rSqrtExact`).
+    pub fn exact_sqrt(self) -> Option<Self> {
+        if self.num < 0 {
+            return None;
+        }
+        let n = integer_sqrt(self.num.unsigned_abs())?;
+        let d = integer_sqrt(self.den.unsigned_abs())?;
+        if d == 0 {
+            return None;
+        }
+        // Verify exactly — the integer sqrt can be off by one near a square.
+        // (n/d)² == num/den  ⟺  n²·den == d²·num
+        let cand = Rational { num: n as i64, den: d as i64 };
+        let lhs = (cand.num.unsigned_abs() as u128) * (cand.num.unsigned_abs() as u128)
+            * (self.den.unsigned_abs() as u128);
+        let rhs = (cand.den.unsigned_abs() as u128) * (cand.den.unsigned_abs() as u128)
+            * (self.num.unsigned_abs() as u128);
+        if lhs == rhs {
+            Some(cand)
+        } else {
+            None
+        }
+    }
+
+    /// Exact cube root, if this rational has one.
+    ///
+    /// `cbrt(8)` → 2, `cbrt(2)` → `None`. The numerator must be a perfect
+    /// cube and the denominator must be 1 (a cube root of a non-cube
+    /// denominator is irrational).
+    pub fn exact_cbrt(self) -> Option<Self> {
+        if self.den != 1 {
+            return None;
+        }
+        let n = integer_cbrt(self.num.unsigned_abs())?;
+        let signed = if self.num < 0 { -(n as i64) } else { n as i64 };
+        let cube = signed.checked_mul(signed)?.checked_mul(signed)?;
+        if cube == self.num {
+            Some(Rational::from_int(signed))
+        } else {
+            None
+        }
+    }
+
+    /// Exact `log2`, if this rational is a power of two.
+    ///
+    /// `log2(8)` → 3, `log2(3)` → `None`.
+    pub fn exact_log2(self) -> Option<Self> {
+        if self.num <= 0 || self.den != 1 {
+            return None;
+        }
+        let mut v = self.num;
+        let mut exp = 0i64;
+        while v % 2 == 0 && v > 0 {
+            v /= 2;
+            exp += 1;
+        }
+        if v == 1 {
+            Some(Rational::from_int(exp))
+        } else {
+            None
+        }
+    }
+
+    /// Exact `log10`, if this rational is a power of ten.
+    ///
+    /// `log10(100)` → 2, `log10(3)` → `None`.
+    pub fn exact_log10(self) -> Option<Self> {
+        if self.num <= 0 || self.den != 1 {
+            return None;
+        }
+        let mut v = self.num;
+        let mut exp = 0i64;
+        while v % 10 == 0 && v > 0 {
+            v /= 10;
+            exp += 1;
+        }
+        if v == 1 {
+            Some(Rational::from_int(exp))
+        } else {
+            None
+        }
+    }
+
+    /// Exact factorial, if this rational is a non-negative integer that
+    /// fits comfortably in `i64`.
+    ///
+    /// `fact(5)` → 120, `fact(-1)` → `None`, `fact(200)` → `None` (overflow).
+    pub fn exact_factorial(self) -> Option<Self> {
+        if self.den != 1 || self.num < 0 || self.num > 20 {
+            return None;
+        }
+        let mut acc: i64 = 1;
+        for i in 2..=self.num {
+            acc = acc.checked_mul(i)?;
+        }
+        Some(Rational::from_int(acc))
+    }
+
     /// Absolute value.
     pub fn abs(self) -> Self {
         Self {
@@ -436,6 +543,57 @@ fn gcd(a: u64, b: u64) -> u64 {
     }
 }
 
+/// Integer square root: the largest `r` with `r² <= n`.
+///
+/// Returns `None` only when `r²` would overflow `u64`.
+fn integer_sqrt(n: u64) -> Option<u64> {
+    if n == 0 {
+        return Some(0);
+    }
+    // Newton's method on integers — converges quadratically.
+    let mut x = n as f64;
+    let mut y = (x + 1.0) / 2.0;
+    while y < x {
+        x = y;
+        y = (x + n as f64 / x) / 2.0;
+    }
+    let r = x as u64;
+    // Guard against floating-point error: step down while the square is too big.
+    let mut r = r;
+    while r > 0 && r.checked_mul(r).map(|s| s > n).unwrap_or(true) {
+        r -= 1;
+    }
+    // Step up if we undershot.
+    while r.checked_add(1).and_then(|k| k.checked_mul(k)).map(|s| s <= n).unwrap_or(false) {
+        r += 1;
+    }
+    Some(r)
+}
+
+/// Integer cube root: the largest `r` with `r³ <= n`.
+fn integer_cbrt(n: u64) -> Option<u64> {
+    if n == 0 {
+        return Some(0);
+    }
+    let mut r = (n as f64).cbrt() as u64;
+    // Guard against floating-point error around exact cubes.
+    while r > 0 && cube_overflows(r, n) {
+        r -= 1;
+    }
+    while r < n && !cube_overflows(r + 1, n) {
+        r += 1;
+    }
+    Some(r)
+}
+
+/// Does `r³` exceed `n` (or overflow)?
+fn cube_overflows(r: u64, n: u64) -> bool {
+    match r.checked_mul(r).and_then(|s| s.checked_mul(r)) {
+        Some(c) => c > n,
+        None => true,
+    }
+}
+
 /// Reduce a fraction with i128 numerator/denominator to a Rational (i64).
 /// Panics if the reduced values don't fit in i64.
 fn reduce_i128(num: i128, den: i128) -> Rational {
@@ -521,6 +679,81 @@ pub fn parse_rational(s: &str) -> Result<Rational> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- exact roots (used by selective function folding) -----------------
+
+    #[test]
+    fn exact_sqrt_of_perfect_square() {
+        assert_eq!(Rational::from_int(16).exact_sqrt().unwrap().to_string(), "4");
+        assert_eq!(Rational::from_int(81).exact_sqrt().unwrap().to_string(), "9");
+        assert_eq!(Rational::from_int(0).exact_sqrt().unwrap().to_string(), "0");
+        assert_eq!(Rational::from_int(1).exact_sqrt().unwrap().to_string(), "1");
+    }
+
+    #[test]
+    fn exact_sqrt_of_fraction() {
+        // sqrt(1/4) = 1/2, sqrt(4/9) = 2/3
+        let r = Rational::new(1, 4).unwrap();
+        assert_eq!(r.exact_sqrt().unwrap().to_string(), "1/2");
+        let r = Rational::new(4, 9).unwrap();
+        assert_eq!(r.exact_sqrt().unwrap().to_string(), "2/3");
+    }
+
+    #[test]
+    fn exact_sqrt_rejects_non_squares() {
+        assert!(Rational::from_int(2).exact_sqrt().is_none());
+        assert!(Rational::from_int(3).exact_sqrt().is_none());
+        assert!(Rational::from_int(-4).exact_sqrt().is_none());
+        assert!(Rational::new(2, 3).unwrap().exact_sqrt().is_none());
+    }
+
+    #[test]
+    fn exact_sqrt_result_squares_back() {
+        // The verification must be exact: r² == original.
+        for n in [0i64, 1, 2, 3, 4, 9, 16, 25, 100, 144, 10000] {
+            let r = Rational::from_int(n);
+            if let Some(root) = r.exact_sqrt() {
+                let sq = root * root;
+                assert_eq!(sq.to_string(), r.to_string(), "n = {}", n);
+            }
+        }
+    }
+
+    #[test]
+    fn exact_cbrt() {
+        assert_eq!(Rational::from_int(8).exact_cbrt().unwrap().to_string(), "2");
+        assert_eq!(Rational::from_int(27).exact_cbrt().unwrap().to_string(), "3");
+        assert_eq!(Rational::from_int(-8).exact_cbrt().unwrap().to_string(), "-2");
+        assert_eq!(Rational::from_int(0).exact_cbrt().unwrap().to_string(), "0");
+        assert!(Rational::from_int(2).exact_cbrt().is_none());
+    }
+
+    #[test]
+    fn exact_log2() {
+        assert_eq!(Rational::from_int(8).exact_log2().unwrap().to_string(), "3");
+        assert_eq!(Rational::from_int(1024).exact_log2().unwrap().to_string(), "10");
+        assert_eq!(Rational::from_int(1).exact_log2().unwrap().to_string(), "0");
+        assert!(Rational::from_int(3).exact_log2().is_none());
+        assert!(Rational::from_int(0).exact_log2().is_none());
+        assert!(Rational::from_int(-4).exact_log2().is_none());
+    }
+
+    #[test]
+    fn exact_log10() {
+        assert_eq!(Rational::from_int(100).exact_log10().unwrap().to_string(), "2");
+        assert_eq!(Rational::from_int(1000).exact_log10().unwrap().to_string(), "3");
+        assert!(Rational::from_int(3).exact_log10().is_none());
+        assert!(Rational::from_int(0).exact_log10().is_none());
+    }
+
+    #[test]
+    fn exact_factorial() {
+        assert_eq!(Rational::from_int(0).exact_factorial().unwrap().to_string(), "1");
+        assert_eq!(Rational::from_int(5).exact_factorial().unwrap().to_string(), "120");
+        assert!(Rational::from_int(-1).exact_factorial().is_none());
+        // 21! overflows i64.
+        assert!(Rational::from_int(21).exact_factorial().is_none());
+    }
 
     #[test]
     fn rational_new_reduces() {

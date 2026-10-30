@@ -145,6 +145,136 @@ pub fn secant<F: Fn(f64) -> f64>(
     )))
 }
 
+/// Configuration for the sign-scan root finder.
+#[derive(Debug, Clone)]
+pub struct ScanOptions {
+    /// Left end of the scan interval.
+    pub lo: f64,
+    /// Right end of the scan interval.
+    pub hi: f64,
+    /// Number of sample points across the interval.
+    pub samples: usize,
+    /// Tolerance for accepting a root.
+    pub tol: f64,
+    /// Minimum separation between two distinct roots.
+    pub dedup: f64,
+}
+
+impl Default for ScanOptions {
+    fn default() -> Self {
+        Self {
+            lo: -30.0,
+            hi: 30.0,
+            samples: 2400,
+            tol: 1e-9,
+            dedup: 1e-7,
+        }
+    }
+}
+
+/// Find **all** real roots of `f` on an interval by scanning for sign changes.
+///
+/// A single Newton–Raphson run finds one root near the initial guess. This
+/// samples the interval, bisects every sign change, and collects the
+/// results — so `sin(x) = 0` yields `0, ±π, ±2π, …` rather than just the
+/// root nearest the guess.
+///
+/// **Pole rejection**: a sign flip across a *pole* looks exactly like a sign
+/// flip across a root, so a bisected bracket is only accepted when the
+/// function actually lands near zero there. Without this, `1/(x−1) = 0`
+/// would "solve" at the pole `x = 1`.
+///
+/// Points where the function is undefined (NaN) break the scan rather than
+/// producing a spurious bracket.
+///
+/// Cross-port pattern from unsolve `solver.ts:286-329` (`numericSolve`).
+pub fn find_all_roots<F: Fn(f64) -> f64>(f: F, opts: &ScanOptions) -> Vec<f64> {
+    let n = opts.samples.max(2);
+    let lo = opts.lo;
+    let hi = opts.hi;
+    let step = (hi - lo) / (n as f64 - 1.0);
+
+    let mut roots: Vec<f64> = Vec::new();
+    let mut prev_x = lo;
+    let mut prev_y = f(lo);
+
+    for i in 1..=n {
+        let x = lo + i as f64 * step;
+        let y = f(x);
+        if prev_y.is_finite() && y.is_finite() {
+            if prev_y == 0.0 {
+                // An exact zero at a sample point is a root.
+                roots.push(prev_x);
+            } else if prev_y * y < 0.0 {
+                // A sign change — bisect, but only accept a real root.
+                if let Some(root) = bisect_bracket(&f, prev_x, x, prev_y, opts.tol) {
+                    roots.push(root);
+                }
+            }
+        }
+        prev_x = x;
+        prev_y = y;
+    }
+
+    dedupe_roots(roots, opts.dedup)
+}
+
+/// Bisect a sign-change bracket, rejecting poles.
+///
+/// A pole flips the sign just like a root does, so the result is only
+/// accepted when `f` actually lands near zero at the bisection point —
+/// otherwise `1/(x−p) = 0` would "solve" at the pole.
+fn bisect_bracket<F: Fn(f64) -> f64>(
+    f: &F,
+    mut lo: f64,
+    mut hi: f64,
+    mut flo: f64,
+    tol: f64,
+) -> Option<f64> {
+    // The scale of the endpoint values bounds how small |f| must be.
+    let scale = flo.abs().min(f(hi).abs());
+    for _ in 0..80 {
+        if hi - lo <= 1e-14 {
+            break;
+        }
+        let mid = 0.5 * (lo + hi);
+        let fm = f(mid);
+        if !fm.is_finite() {
+            // Undefined inside the bracket — a pole, not a root.
+            return None;
+        }
+        if flo * fm <= 0.0 {
+            hi = mid;
+        } else {
+            lo = mid;
+            flo = fm;
+        }
+    }
+    let x = 0.5 * (lo + hi);
+    let fx = f(x);
+    if fx.is_finite() && fx.abs() <= tol.max(scale) {
+        Some(x)
+    } else {
+        None
+    }
+}
+
+/// Remove near-duplicate roots, keeping the first of each cluster.
+fn dedupe_roots(roots: Vec<f64>, dedup: f64) -> Vec<f64> {
+    let mut sorted = roots;
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out: Vec<f64> = Vec::new();
+    for r in sorted {
+        if let Some(&last) = out.last() {
+            if (r - last).abs() <= dedup {
+                continue;
+            }
+        }
+        out.push(r);
+    }
+    out
+}
+
 /// Find all (real) roots of a polynomial with real coefficients given by
 /// `coeffs` in descending order: `coeffs[0]*x^n + ... + coeffs[n]`.
 ///
@@ -707,5 +837,108 @@ mod tests {
             let (lo, hi) = intervals[i];
             assert!(lo <= *r && *r <= hi, "root {} not in interval ({}, {})", r, lo, hi);
         }
+    }
+
+    // ---- sign-scan root finder --------------------------------------------
+
+    #[test]
+    fn scan_finds_all_sine_roots() {
+        // sin(x) = 0 has roots at every multiple of pi.
+        let opts = ScanOptions { lo: -7.0, hi: 7.0, ..Default::default() };
+        let roots = find_all_roots(|x| x.sin(), &opts);
+        assert_eq!(roots.len(), 5, "got {:?}", roots);
+        let want = [-2.0 * std::f64::consts::PI, -std::f64::consts::PI, 0.0, std::f64::consts::PI, 2.0 * std::f64::consts::PI];
+        for (r, w) in roots.iter().zip(want.iter()) {
+            assert!((r - w).abs() < 1e-6, "got {} want {}", r, w);
+        }
+    }
+
+    #[test]
+    fn scan_finds_single_root() {
+        // exp(x) = 5 has exactly one real root.
+        let opts = ScanOptions::default();
+        let roots = find_all_roots(|x| x.exp() - 5.0, &opts);
+        assert_eq!(roots.len(), 1, "got {:?}", roots);
+        assert!((roots[0] - 5.0f64.ln()).abs() < 1e-6, "got {}", roots[0]);
+    }
+
+    #[test]
+    fn scan_finds_polynomial_roots() {
+        let opts = ScanOptions::default();
+        let roots = find_all_roots(|x| x * x - 4.0, &opts);
+        assert_eq!(roots.len(), 2, "got {:?}", roots);
+        assert!((roots[0] + 2.0).abs() < 1e-6);
+        assert!((roots[1] - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scan_rejects_poles() {
+        // 1/(x-1) has a pole at x=1 and no root — the sign flip there
+        // must NOT be reported as a root.
+        let opts = ScanOptions::default();
+        let roots = find_all_roots(|x| 1.0 / (x - 1.0), &opts);
+        assert!(roots.is_empty(), "pole was reported as a root: {:?}", roots);
+    }
+
+    #[test]
+    fn scan_rejects_tangent_poles() {
+        // tan(x) has poles at +/- pi/2; the roots are at multiples of pi.
+        let opts = ScanOptions { lo: -4.0, hi: 4.0, ..Default::default() };
+        let roots = find_all_roots(|x| x.tan(), &opts);
+        assert_eq!(roots.len(), 3, "got {:?}", roots);
+        for r in &roots {
+            let k = r / std::f64::consts::PI;
+            assert!((k - k.round()).abs() < 1e-6, "root {} is not a multiple of pi", r);
+        }
+    }
+
+    #[test]
+    fn scan_finds_root_beside_a_pole() {
+        // 1/(x-1) - 2 = 0 has the root x = 1.5, right next to the pole.
+        let opts = ScanOptions::default();
+        let roots = find_all_roots(|x| 1.0 / (x - 1.0) - 2.0, &opts);
+        assert_eq!(roots.len(), 1, "got {:?}", roots);
+        assert!((roots[0] - 1.5).abs() < 1e-6, "got {}", roots[0]);
+    }
+
+    #[test]
+    fn scan_respects_bounds() {
+        // The root at pi is outside [-1, 1].
+        let opts = ScanOptions { lo: -1.0, hi: 1.0, ..Default::default() };
+        let roots = find_all_roots(|x| x.sin(), &opts);
+        assert_eq!(roots.len(), 1, "got {:?}", roots);
+        assert!(roots[0].abs() < 1e-6);
+    }
+
+    #[test]
+    fn scan_returns_sorted_roots() {
+        let opts = ScanOptions::default();
+        let roots = find_all_roots(|x| x.sin(), &opts);
+        for w in roots.windows(2) {
+            assert!(w[0] < w[1], "roots not sorted: {:?}", roots);
+        }
+    }
+
+    #[test]
+    fn scan_handles_nan_regions() {
+        // log(x) is undefined for x <= 0 — the scan must skip that region
+        // rather than produce a spurious root there. log(x) = 0 at x = 1,
+        // which is a genuine root.
+        let opts = ScanOptions { lo: -5.0, hi: 5.0, ..Default::default() };
+        let roots = find_all_roots(|x| if x > 0.0 { x.ln() } else { f64::NAN }, &opts);
+        assert_eq!(roots.len(), 1, "got {:?}", roots);
+        assert!((roots[0] - 1.0).abs() < 1e-6, "got {}", roots[0]);
+        // No root may be reported in the undefined region.
+        assert!(roots.iter().all(|r| *r > 0.0), "got {:?}", roots);
+    }
+
+    #[test]
+    fn scan_deduplicates_near_duplicates() {
+        // A function that oscillates fast can bracket the same root twice.
+        let opts = ScanOptions { lo: -1.0, hi: 1.0, samples: 2000, ..Default::default() };
+        let roots = find_all_roots(|x| (x * 500.0).sin() * (x - 0.25), &opts);
+        // The root at 0.25 must appear exactly once.
+        let near = roots.iter().filter(|r| (*r - 0.25).abs() < 1e-6).count();
+        assert_eq!(near, 1, "root 0.25 reported {} times: {:?}", near, roots);
     }
 }

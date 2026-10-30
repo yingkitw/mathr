@@ -13,9 +13,19 @@
 //! unknown coefficients form a square linear system (multiply through by
 //! `D` and equate coefficients) solved with Gaussian elimination.
 //!
-//! This is a numeric CAS decomposition: coefficients are `f64` and
-//! repeated roots carry the usual numerical fuzz of multiple-root
-//! finding. Coefficients near integers are snapped for display.
+//! # Exact path
+//!
+//! When the denominator splits into **distinct rational** linear factors, the
+//! **cover-up rule** applies and no linear system is needed:
+//!
+//! ```text
+//! Aᵢ = N(rᵢ) / D′(rᵢ),   D′(rᵢ) = lead · Π_{j≠i} (rᵢ − rⱼ)
+//! ```
+//!
+//! The coefficients then come out as **exact rationals** — `1/(x² − 1)`
+//! decomposes to `1/2/(x − 1) − 1/2/(x + 1)` with no floating-point
+//! arithmetic anywhere. The numeric path handles everything else (repeated
+//! roots, complex roots, irrational roots).
 //!
 //! # Example
 //!
@@ -54,17 +64,21 @@ enum Factor {
 
 /// Decompose `expr` (a quotient of univariate polynomials in `var`) into
 /// partial fractions. Returns the simplified result.
+///
+/// When the denominator splits into distinct rational linear factors the
+/// decomposition is computed *exactly* (the cover-up rule) and the exact
+/// rationals are preserved — the result is not run through `simplify`, which
+/// would turn them into floats.
 pub fn apart(expr: &Expr, var: &str) -> Result<Expr> {
     let mut steps = Vec::new();
-    let result = apart_inner(expr, var, &mut steps)?;
-    Ok(simplify(&result))
+    apart_inner(expr, var, &mut steps)
 }
 
 /// Decompose with human-readable intermediate steps.
 pub fn apart_steps(expr: &Expr, var: &str) -> Result<Vec<String>> {
     let mut steps = vec![format!("apart: {}", simplify(expr))];
     let result = apart_inner(expr, var, &mut steps)?;
-    steps.push(format!("= {}", simplify(&result)));
+    steps.push(format!("= {}", result));
     Ok(steps)
 }
 
@@ -151,6 +165,25 @@ fn apart_inner(expr: &Expr, var: &str, steps: &mut Vec<String>) -> Result<Expr> 
             .collect::<Vec<_>>()
             .join(" · ")
     ));
+
+    // 2b. Exact fast path: when the denominator splits into *distinct
+    // rational* linear factors, the cover-up rule gives the coefficients
+    // directly, in exact rational arithmetic.
+    if let Some(out) = cover_up_exact(&r, &d, var) {
+        steps.push(
+            "cover-up rule: Aᵢ = N(rᵢ) / D′(rᵢ), computed in exact rational arithmetic"
+                .to_string(),
+        );
+        let mut out = out;
+        if !q.is_empty() {
+            let q_sparse = sparse(&q, var);
+            out = Expr::add(poly_to_expr(&q_sparse), out);
+        }
+        // The result is already in its simplest form — and running it
+        // through `simplify` would turn the exact rationals into floats.
+        steps.push(format!("= {}", out));
+        return Ok(out);
+    }
 
     // 3. Build the linear system: R = Σ columns·coefficients.
     // One column per unknown — a linear factor power k contributes
@@ -290,8 +323,281 @@ fn apart_inner(expr: &Expr, var: &str, steps: &mut Vec<String>) -> Result<Expr> 
     Ok(out)
 }
 
-/// Magnitude form of a quadratic numerator `B·x + C` (leading coefficient
-/// positive). Returns the caller the sign separately.
+/// Exact partial-fraction decomposition via the **cover-up rule**.
+///
+/// When the denominator `D` factors into *distinct rational* linear factors
+/// `D = Π(x − rᵢ)`, the partial-fraction coefficients are
+///
+/// ```text
+/// Aᵢ = N(rᵢ) / D′(rᵢ),   D′(rᵢ) = lead · Π_{j≠i} (rᵢ − rⱼ)
+/// ```
+///
+/// which needs no linear system at all — the coefficients come out as exact
+/// rationals. `1/(x² − 1)` decomposes to `1/2·(1/(x−1) − 1/(x+1))` with no
+/// floating-point arithmetic anywhere.
+///
+/// Returns `None` (falling back to the numeric linear-system path) when the
+/// denominator has a repeated factor, a complex root, or an irrational root
+/// — the cover-up rule does not apply there.
+///
+/// Cross-port pattern from unsolve `apart.ts:179-197`.
+fn cover_up_exact(r: &[f64], d: &[f64], var: &str) -> Option<Expr> {
+    use crate::rational::Rational;
+
+    // `d` and `r` are in descending order.
+    let deg_d = d.len().checked_sub(1)?;
+    if deg_d == 0 {
+        return None;
+    }
+    // The remainder must have degree < deg_d for the cover-up rule to give
+    // the proper-fraction coefficients directly.
+    if !r.is_empty() && r.len() > deg_d {
+        return None;
+    }
+    // The denominator's coefficients must be exact rationals.
+    let d_rat: Vec<Rational> = d
+        .iter()
+        .map(|&c| exact_rational(c))
+        .collect::<Option<Vec<_>>>()?;
+    // The remainder's coefficients too.
+    let r_rat: Vec<Rational> = r
+        .iter()
+        .map(|&c| exact_rational(c))
+        .collect::<Option<Vec<_>>>()?;
+
+    // Find the roots: every root must be a distinct rational number.
+    let roots = rational_roots_of(&d_rat)?;
+    if roots.is_empty() {
+        return None;
+    }
+    // Distinctness: a repeated root needs the general (power) decomposition.
+    for i in 0..roots.len() {
+        for j in (i + 1)..roots.len() {
+            if roots[i] == roots[j] {
+                return None;
+            }
+        }
+    }
+    // The denominator must split *completely* into these linear factors.
+    if roots.len() != deg_d {
+        return None;
+    }
+
+    // Evaluate the remainder at each root (Horner, in exact rationals).
+    let eval_at = |poly: &[Rational], x: &Rational| -> Option<Rational> {
+        // `poly` is descending.
+        let mut acc = Rational::from_int(0);
+        for &c in poly {
+            acc = acc * *x + c;
+        }
+        Some(acc)
+    };
+
+    // The cover-up coefficients.
+    let mut coeffs: Vec<Rational> = Vec::with_capacity(roots.len());
+    for i in 0..roots.len() {
+        let num_at = eval_at(&r_rat, &roots[i])?;
+        // D′(rᵢ) = lead · Π_{j≠i} (rᵢ − rⱼ)
+        let mut den = d_rat[0];
+        for j in 0..roots.len() {
+            if j == i {
+                continue;
+            }
+            let diff = roots[i] - roots[j];
+            if diff.num() == 0 {
+                return None;
+            }
+            den = den * diff;
+        }
+        if den.num() == 0 {
+            return None;
+        }
+        coeffs.push(num_at / den);
+    }
+
+    // Assemble: Σ Aᵢ / (x − rᵢ), with the sign carried by the coefficient.
+    let mut out: Option<Expr> = None;
+    for (i, a) in coeffs.iter().enumerate() {
+        if a.num() == 0 {
+            continue;
+        }
+        // The denominator: (x − rᵢ) — built so it displays as `x − r`, or
+        // `x + |r|` when the root is negative, and plain `x` for a zero root.
+        let den_e = match roots[i].num().signum() {
+            0 => Expr::var(var.to_string()),
+            s if s < 0 => Expr::add(
+                Expr::var(var.to_string()),
+                expr_from_rational(-roots[i]),
+            ),
+            _ => Expr::sub(Expr::var(var.to_string()), roots[i].to_expr()),
+        };
+        // The numerator: |Aᵢ| as an exact rational. The sign is carried
+        // by the caller, so only the magnitude is built here.
+        let mag = if a.den() == 1 {
+            Expr::num(a.num().abs() as f64)
+        } else {
+            // |p/q| = p/q — a division, not a product.
+            Expr::div(
+                Expr::num(a.num().abs() as f64),
+                Expr::num(a.den() as f64),
+            )
+        };
+        let term = Expr::div(mag, den_e);
+        let neg = a.num() < 0;
+        out = Some(match out {
+            None => {
+                if neg {
+                    Expr::neg(term)
+                } else {
+                    term
+                }
+            }
+            Some(acc) => {
+                if neg {
+                    Expr::sub(acc, term)
+                } else {
+                    Expr::add(acc, term)
+                }
+            }
+        });
+    }
+    Some(out.unwrap_or(Expr::num(0.0)))
+}
+
+/// Build an expression from an exact rational, keeping it a fraction.
+fn expr_from_rational(r: crate::rational::Rational) -> Expr {
+    r.to_expr()
+}
+
+/// Read a coefficient as an exact rational, if it is one.
+///
+/// An integer, or a fraction that round-trips exactly.
+fn exact_rational(v: f64) -> Option<crate::rational::Rational> {    use crate::rational::Rational;
+    if !v.is_finite() {
+        return None;
+    }
+    if v == v.trunc() && v.abs() < 9e15 {
+        return Some(Rational::from_int(v as i64));
+    }
+    let r = Rational::from_float_snap(v, crate::rational::SNAP_MAX_DEN)?;
+    if (r.to_f64() - v).abs() > 1e-12 * v.abs().max(1.0) {
+        return None;
+    }
+    Some(r)
+}
+
+/// The rational roots of a polynomial with rational coefficients
+/// (descending order), or `None` if any root is irrational or complex.
+///
+/// Uses the rational-root theorem: a root `p/q` (in lowest terms) has `p`
+/// dividing the constant term and `q` dividing the leading coefficient.
+fn rational_roots_of(d: &[crate::rational::Rational]) -> Option<Vec<crate::rational::Rational>> {
+    use crate::rational::Rational;
+    let deg = d.len().checked_sub(1)?;
+    if deg == 0 {
+        return None;
+    }
+    let lead = d[0];
+    let constant = d[d.len() - 1];
+    if constant.num() == 0 {
+        // A zero root: factor it out and recurse.
+        let mut rest: Vec<Rational> = Vec::new();
+        let mut zeros = 0usize;
+        for &c in d.iter().rev() {
+            if c.num() == 0 && rest.is_empty() {
+                zeros += 1;
+            } else {
+                rest.push(c);
+            }
+        }
+        if zeros == 0 {
+            return None;
+        }
+        let mut roots = rational_roots_of(&rest)?;
+        // The zero root may repeat — that makes the cover-up rule invalid.
+        if roots.iter().any(|r| r.num() == 0) {
+            return None;
+        }
+        for _ in 0..zeros {
+            roots.push(Rational::from_int(0));
+        }
+        if roots.len() != deg {
+            return None;
+        }
+        return Some(roots);
+    }
+
+    // Candidate numerators divide the constant term; denominators divide
+    // the leading coefficient. Both *signs* of the numerator must be tried
+    // — a root can be negative (`x² − 1` has the root −1).
+    let num_divs = signed_divisors_of(constant.num().abs());
+    let den_divs = divisors_of(lead.den().abs());
+    let mut roots: Vec<Rational> = Vec::new();
+    for &p in &num_divs {
+        for &q in &den_divs {
+            let cand = Rational::new(p, q).ok()?;
+            if eval_rational_poly(d, &cand) == Rational::from_int(0) {
+                roots.push(cand);
+            }
+        }
+    }
+    if roots.len() != deg {
+        // Some root is irrational (or the search was too small).
+        return None;
+    }
+    // Distinctness is checked by the caller.
+    Some(roots)
+}
+
+/// Evaluate a polynomial with rational coefficients (descending) at a
+/// rational point.
+fn eval_rational_poly(
+    p: &[crate::rational::Rational],
+    x: &crate::rational::Rational,
+) -> crate::rational::Rational {
+    use crate::rational::Rational;
+    let mut acc = Rational::from_int(0);
+    for &c in p {
+        acc = acc * *x + c;
+    }
+    acc
+}
+
+/// The positive divisors of `n`.
+fn divisors_of(n: i64) -> Vec<i64> {
+    if n <= 0 {
+        return vec![1];
+    }
+    let mut out = Vec::new();
+    let mut i = 1i64;
+    while i * i <= n {
+        if n % i == 0 {
+            out.push(i);
+            if i != n / i {
+                out.push(n / i);
+            }
+        }
+        i += 1;
+    }
+    out.sort_unstable();
+    out
+}
+
+/// The signed divisors of `n` — every positive divisor and its negative.
+///
+/// The rational-root theorem needs both signs: `x² − 1` has the root −1.
+fn signed_divisors_of(n: i64) -> Vec<i64> {
+    let pos = divisors_of(n);
+    let mut out = Vec::with_capacity(pos.len() * 2);
+    for &p in &pos {
+        out.push(p);
+        if p != 0 {
+            out.push(-p);
+        }
+    }
+    out
+}
+
 fn quad_num_mag(b: f64, c: f64, var: &str) -> Expr {
     use crate::rational::{Rational, SNAP_MAX_DEN};
     let coeff = |v: f64| Rational::snap_coeff_expr(v.abs(), SNAP_MAX_DEN);
@@ -734,5 +1040,123 @@ mod tests {
         // 1/(x^2*(x-1)^2)
         let src = "1/(x^2 * (x - 1)^2)";
         assert!(agrees(src, "x", &[0.5, 2.0, 3.0, -1.0, -0.5, 4.0]));
+    }
+
+    // ---- exact cover-up path ----------------------------------------------
+    //
+    // When the denominator splits into distinct rational linear factors, the
+    // coefficients come from the cover-up rule in exact rational arithmetic.
+
+    fn exact_out(src: &str) -> String {
+        let e = Parser::parse(src).unwrap();
+        apart(&e, "x").unwrap().to_string()
+    }
+
+    #[test]
+    fn cover_up_gives_exact_rationals() {
+        // 1/(x²−1) = 1/2·1/(x−1) − 1/2·1/(x+1) — the halves must stay
+        // exact, not become 0.5.
+        let out = exact_out("1/(x^2 - 1)");
+        assert!(out.contains("1/2"), "got {}", out);
+        assert!(!out.contains("0.5"), "got {}", out);
+    }
+
+    #[test]
+    fn cover_up_negative_root_displays_as_plus() {
+        // The factor for the root −1 is (x + 1), not (x − −1).
+        let out = exact_out("1/(x^2 - 1)");
+        assert!(out.contains("x + 1"), "got {}", out);
+        assert!(!out.contains("x - -1"), "got {}", out);
+    }
+
+    #[test]
+    fn cover_up_zero_root_displays_as_plain_x() {
+        // 1/(x³−x) has a factor x — the root 0 gives a plain `x`.
+        let out = exact_out("1/(x^3 - x)");
+        assert!(out.contains("/x"), "got {}", out);
+        assert!(!out.contains("x - 0"), "got {}", out);
+    }
+
+    #[test]
+    fn cover_up_is_numerically_correct() {
+        assert!(agrees("1/(x^2 - 1)", "x", &[0.5, 2.0, 3.0, -2.0, 0.25]));
+        assert!(agrees("1/(x^3 - x)", "x", &[0.5, 2.0, 3.0, -2.0]));
+        assert!(agrees("1/((x-1)*(x-2))", "x", &[0.5, 3.0, -1.0, 4.0]));
+        assert!(agrees("(x+1)/(x^2 - 1)", "x", &[0.5, 3.0, -2.0]));
+    }
+
+    #[test]
+    fn cover_up_handles_improper_fractions() {
+        // (x+1)/(x²−1) = 1/(x−1): the quotient is 0, the remainder 1.
+        let out = exact_out("(x+1)/(x^2 - 1)");
+        assert!(out.contains("1/(x - 1)"), "got {}", out);
+        assert!(agrees("(x+1)/(x^2 - 1)", "x", &[0.5, 3.0, -2.0]));
+    }
+
+    #[test]
+    fn cover_up_rejects_irrational_roots() {
+        // x²−2 has irrational roots — the cover-up rule does not apply, so
+        // the numeric path runs.
+        let out = exact_out("1/(x^2 - 2)");
+        assert!(!out.contains("1/2"), "got {}", out);
+        assert!(agrees("1/(x^2 - 2)", "x", &[0.5, 3.0, -2.0]));
+    }
+
+    #[test]
+    fn cover_up_rejects_irreducible_quadratic() {
+        // x²+1 has no real roots — the numeric path runs.
+        let out = exact_out("1/(x^2 + 1)");
+        assert!(out.contains("x^2 + 1"), "got {}", out);
+    }
+
+    #[test]
+    fn cover_up_rejects_repeated_roots() {
+        // A repeated root needs the general power decomposition.
+        let out = exact_out("1/(x^2 * (x - 1)^2)");
+        // The repeated root (x−1)² must not be decomposed into simple
+        // fractions with a repeated denominator.
+        assert!(!out.contains("1/2/(x - 1) + "), "got {}", out);
+        assert!(agrees("1/(x^2 * (x - 1)^2)", "x", &[0.5, 2.0, 3.0, -1.0]));
+    }
+
+    #[test]
+    fn cover_up_requires_distinct_roots() {
+        // (x−1)² has a repeated root: 1/(x−1)² = 1/(x−1)², not a sum of
+        // simple fractions.
+        let out = exact_out("1/(x^2 - 2*x + 1)");
+        assert!(out.contains("x^2") || out.contains("(x - 1)^2"), "got {}", out);
+        assert!(agrees("1/(x^2 - 2*x + 1)", "x", &[0.5, 3.0, -1.0]));
+    }
+
+    #[test]
+    fn rational_roots_signed_divisors() {
+        // x²−1 has the root −1 — the search must try negative candidates.
+        let d = vec![
+            crate::rational::Rational::from_int(1),
+            crate::rational::Rational::from_int(0),
+            crate::rational::Rational::from_int(-1),
+        ];
+        let roots = rational_roots_of(&d).unwrap();
+        assert_eq!(roots.len(), 2, "got {:?}", roots);
+        assert!(roots.iter().any(|r| r.num() == 1 && r.den() == 1));
+        assert!(roots.iter().any(|r| r.num() == -1 && r.den() == 1));
+    }
+
+    #[test]
+    fn rational_roots_rejects_irrational() {
+        // x²−2 has no rational roots.
+        let d = vec![
+            crate::rational::Rational::from_int(1),
+            crate::rational::Rational::from_int(0),
+            crate::rational::Rational::from_int(-2),
+        ];
+        assert!(rational_roots_of(&d).is_none());
+    }
+
+    #[test]
+    fn signed_divisors_include_negatives() {
+        let d = signed_divisors_of(1);
+        assert!(d.contains(&1), "got {:?}", d);
+        assert!(d.contains(&-1), "got {:?}", d);
     }
 }

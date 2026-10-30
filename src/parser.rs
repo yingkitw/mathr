@@ -29,7 +29,10 @@ impl<'a> Parser<'a> {
 
     pub fn parse(src: &str) -> Result<Expr> {
         let src = strip_math_delimiters(src);
-        let mut p = Parser::new(&src);
+        // Normalize Unicode math input (√, ×, ÷, π, superscripts) to ASCII
+        // before tokenizing. Without this, `√2` and `x²` are parse errors.
+        let normalized = crate::unicode::normalize(&src);
+        let mut p = Parser::new(&normalized);
         let e = p.parse_expr()?;
         p.skip_ws();
         if p.pos < p.src.len() {
@@ -344,7 +347,9 @@ impl<'a> Parser<'a> {
         self.pos += 1; // consume '\'
         let cmd = self.read_tex_command_name();
         match cmd.as_str() {
-            "frac" => {
+            "frac" | "dfrac" | "tfrac" => {
+                // `\dfrac` / `\tfrac` are display/inline variants of `\frac`
+                // and parse identically.
                 let num = self.parse_brace_group()?;
                 let den = self.parse_brace_group()?;
                 Ok(Expr::div(num, den))
@@ -356,8 +361,24 @@ impl<'a> Parser<'a> {
                 Ok(Expr::func("C", vec![n, k]))
             }
             "sqrt" => {
-                let arg = self.parse_brace_group()?;
-                Ok(Expr::func("sqrt", vec![arg]))
+                // `\sqrt{x}` and `\sqrt[n]{x}` — the index form is an n-th
+                // root: `\sqrt[3]{8}` → `8^(1/3)`.
+                self.skip_ws();
+                if self.peek() == Some(b'[') {
+                    self.pos += 1;
+                    let index = self.parse_expr()?;
+                    self.skip_ws();
+                    self.expect(b']')?;
+                    let arg = self.parse_brace_group()?;
+                    // n-th root: x^(1/n)
+                    Ok(Expr::pow(
+                        arg,
+                        Expr::div(Expr::num(1.0), index),
+                    ))
+                } else {
+                    let arg = self.parse_brace_group()?;
+                    Ok(Expr::func("sqrt", vec![arg]))
+                }
             }
             "pi" => Ok(Expr::num(std::f64::consts::PI)),
             "tau" => Ok(Expr::num(std::f64::consts::TAU)),
@@ -435,6 +456,9 @@ impl<'a> Parser<'a> {
             | "log2" | "log10" | "abs" | "floor" | "ceil" | "round"
             | "sign" | "cbrt" | "fract" | "gamma" | "erf" | "erfc" | "sinc"
             | "gcd" | "lcm" => {
+                // A function may carry a power: `\sin^2(x)` → `sin(x)^2`.
+                // The exponent is read *before* the argument.
+                let exponent = self.read_tex_superscript()?;
                 self.skip_ws();
                 // Function may take argument in braces, parens, or just next atom
                 let arg = if self.peek() == Some(b'{') {
@@ -448,7 +472,11 @@ impl<'a> Parser<'a> {
                 } else {
                     self.parse_factor()?
                 };
-                Ok(Expr::func(cmd, vec![arg]))
+                let call = Expr::func(cmd, vec![arg]);
+                Ok(match exponent {
+                    Some(e) => Expr::pow(call, e),
+                    None => call,
+                })
             }
             "Gamma" => {
                 self.skip_ws();
@@ -530,6 +558,26 @@ impl<'a> Parser<'a> {
             .to_string();
         self.expect(b'}')?;
         Ok(s)
+    }
+
+    /// Read a superscript exponent (`^2`, `^{n+1}`) if one is present.
+    ///
+    /// Returns `None` when the next token is not a `^`. Used for the
+    /// function-power form `\sin^2(x)`.
+    fn read_tex_superscript(&mut self) -> Result<Option<Expr>> {
+        self.skip_ws();
+        if self.peek() != Some(b'^') {
+            return Ok(None);
+        }
+        self.pos += 1;
+        self.skip_ws();
+        let exp = if self.peek() == Some(b'{') {
+            self.parse_brace_group()?
+        } else {
+            // A single token: a number or a variable.
+            self.parse_factor()?
+        };
+        Ok(Some(exp))
     }
 
     /// Read a subscript (either a single char or a brace group), return as string.
@@ -907,6 +955,125 @@ mod tests {
             Parser::parse(r"\(\log_2{8}\)").unwrap(),
             Parser::parse("log(8, 2)").unwrap()
         );
+    }
+
+    // ---- missing LaTeX forms ----------------------------------------------
+
+    #[test]
+    fn tex_dfrac_and_tfrac_are_frac_aliases() {
+        assert_eq!(
+            Parser::parse(r"\dfrac{1}{2}").unwrap(),
+            Parser::parse(r"\frac{1}{2}").unwrap()
+        );
+        assert_eq!(
+            Parser::parse(r"\tfrac{3}{4}").unwrap(),
+            Parser::parse(r"\frac{3}{4}").unwrap()
+        );
+    }
+
+    #[test]
+    fn tex_sqrt_with_index_is_nth_root() {
+        // \sqrt[3]{8} = 8^(1/3) = 2
+        let e = Parser::parse(r"\sqrt[3]{8}").unwrap();
+        assert_eq!(e, Parser::parse("8^(1/3)").unwrap());
+        assert_eq!(crate::eval::eval(&e, &crate::eval::Context::standard()).unwrap(), 2.0);
+        // \sqrt[2]{16} = 4
+        let e = Parser::parse(r"\sqrt[2]{16}").unwrap();
+        assert_eq!(crate::eval::eval(&e, &crate::eval::Context::standard()).unwrap(), 4.0);
+    }
+
+    #[test]
+    fn tex_sqrt_with_index_compound_argument() {
+        let e = Parser::parse(r"\sqrt[2]{x + 1}").unwrap();
+        assert_eq!(e, Parser::parse("(x + 1)^(1/2)").unwrap());
+    }
+
+    #[test]
+    fn tex_function_power() {
+        // \sin^2(x) = sin(x)^2
+        assert_eq!(
+            Parser::parse(r"\sin^2(x)").unwrap(),
+            Parser::parse("sin(x)^2").unwrap()
+        );
+        assert_eq!(
+            Parser::parse(r"\cos^{2}(x)").unwrap(),
+            Parser::parse("cos(x)^2").unwrap()
+        );
+        // The value must match sin(x)^2 numerically.
+        let e = Parser::parse(r"\sin^2(x)").unwrap();
+        let mut ctx = crate::eval::Context::standard();
+        ctx.set("x", 0.5);
+        let v = crate::eval::eval(&e, &ctx).unwrap();
+        assert!((v - 0.5f64.sin().powi(2)).abs() < 1e-12, "got {}", v);
+    }
+
+    #[test]
+    fn tex_function_power_without_argument_is_rejected() {
+        // \sin^2 with no argument is malformed.
+        assert!(Parser::parse(r"\sin^2").is_err());
+    }
+
+    #[test]
+    fn tex_plain_function_still_works() {
+        // The power form must not break the ordinary call.
+        assert_eq!(
+            Parser::parse(r"\sin(x)").unwrap(),
+            Parser::parse("sin(x)").unwrap()
+        );
+        assert_eq!(
+            Parser::parse(r"\sin{x}").unwrap(),
+            Parser::parse("sin(x)").unwrap()
+        );
+    }
+
+    // ---- Unicode input ----------------------------------------------------
+
+    #[test]
+    fn unicode_multiplication_and_division() {
+        assert_eq!(Parser::parse("2×3").unwrap(), Parser::parse("2*3").unwrap());
+        assert_eq!(Parser::parse("6÷2").unwrap(), Parser::parse("6/2").unwrap());
+    }
+
+    #[test]
+    fn unicode_minus_sign() {
+        assert_eq!(Parser::parse("−5").unwrap(), Parser::parse("-5").unwrap());
+        assert_eq!(Parser::parse("3−2").unwrap(), Parser::parse("3-2").unwrap());
+    }
+
+    #[test]
+    fn unicode_constants() {
+        assert_eq!(
+            Parser::parse("π").unwrap(),
+            Parser::parse("pi").unwrap()
+        );
+        assert_eq!(
+            Parser::parse("τ").unwrap(),
+            Parser::parse("tau").unwrap()
+        );
+    }
+
+    #[test]
+    fn unicode_root_sign() {
+        assert_eq!(Parser::parse("√2").unwrap(), Parser::parse("sqrt(2)").unwrap());
+        assert_eq!(
+            Parser::parse("√(x+1)").unwrap(),
+            Parser::parse("sqrt(x+1)").unwrap()
+        );
+    }
+
+    #[test]
+    fn unicode_superscript_exponent() {
+        assert_eq!(Parser::parse("x²").unwrap(), Parser::parse("x^2").unwrap());
+        assert_eq!(Parser::parse("x⁻¹").unwrap(), Parser::parse("x^(-1)").unwrap());
+        assert_eq!(Parser::parse("2²").unwrap(), Parser::parse("2^2").unwrap());
+    }
+
+    #[test]
+    fn unicode_superscript_evaluates_correctly() {
+        let e = Parser::parse("x²").unwrap();
+        let mut ctx = crate::eval::Context::standard();
+        ctx.set("x", 3.0);
+        assert_eq!(crate::eval::eval(&e, &ctx).unwrap(), 9.0);
     }
 
     #[test]

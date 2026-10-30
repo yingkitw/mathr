@@ -20,6 +20,7 @@
 | `laurent` | `mathr laurent <expr> [a] [pole_order] [n_positive]` | Laurent series around a pole |
 | `rat` | `mathr rat <a> <op> <b>` | Exact rational arithmetic |
 | `notebook` | `mathr notebook [file.mnb] [port]` | Web notebook UI (Jupyter-like) |
+| `mcp` | `mathr mcp` | MCP server over stdio (JSON-RPC 2.0) — drives mathr from an AI agent |
 | `fourier` | `mathr fourier <expr> <L> <N> [x]` | Fourier series on [-L, L] with N terms |
 | `mc` | `mathr mc <expr> <a> <b> <N> [seed]` | Monte Carlo integral over [a, b] |
 | `sample` | `mathr sample <dist> <params...> <N> [seed]` | Random sampling (uniform/normal/exponential) |
@@ -45,8 +46,7 @@
 | `pchip` | `mathr pchip x1 y1 x2 y2 ... x_at` | Monotone piecewise cubic Hermite interpolation (no overshoot) |
 | `bspline` | `mathr bspline x1 y1 x2 y2 ... x_at` | Clamped B-spline interpolant (cubic for 4+ points) |
 | `hermite` | `mathr hermite x1 y1 d1 x2 y2 d2 ... x_at` | Piecewise cubic Hermite with given slopes |
-| `minimize` | `mathr minimize <expr> [var] a b` | Golden-section minimum of expr on `[a, b]` |
-| `gcd` | `mathr gcd <n1> <n2> [...]` | GCD of integers |
+| `minimize` | `mathr minimize <expr> [var] a b` | Golden-section minimum of expr on `[a, b]` || `gcd` | `mathr gcd <n1> <n2> [...]` | GCD of integers |
 | `lcm` | `mathr lcm <n1> <n2> [...]` | LCM of integers |
 | `is-prime` | `mathr is-prime <n>` | Primality test |
 | `factor` | `mathr factor <n>` | Prime factorization |
@@ -114,7 +114,34 @@ These number-theory functions are available as function calls in expressions:
 | `\gcd(a, b)` | `gcd(a, b)` | `\gcd(12, 8)` = 4 |
 | `\lcm(a, b)` | `lcm(a, b)` | `\lcm(4, 6)` = 12 |
 | `\frac{a}{b}` | `a / b` | `\frac{1}{2}` = 0.5 |
+| `\dfrac{a}{b}` | `a / b` | `\dfrac{1}{2}` = 0.5 |
+| `\tfrac{a}{b}` | `a / b` | `\tfrac{3}{4}` = 0.75 |
 | `\sqrt{x}` | `sqrt(x)` | `\sqrt{4}` = 2 |
+| `\sqrt[n]{x}` | `x^(1/n)` | `\sqrt[3]{8}` = 2 |
+| `\sin^n(x)` | `sin(x)^n` | `\sin^2(x)` = `sin(x)^2` |
+
+### Unicode Notation
+
+Unicode math input is normalized to ASCII before parsing, so ordinary
+Unicode symbols work directly:
+
+| Unicode | Equivalent | Example |
+|---------|------------|---------|
+| `×` `·` `⋅` | `*` | `2×3` = 6 |
+| `÷` `∕` | `/` | `6÷2` = 3 |
+| `−` (U+2212), `–`, `—` | `-` | `−5` = -5 |
+| `π` `Π` | `pi` | `π` = 3.14159… |
+| `τ` | `tau` | `τ` = 6.28319… |
+| `∞` | `inf` | `1/∞` = 0 |
+| `√` | `sqrt(…)` | `√2` = 1.41421… |
+| `∛` | `cbrt(…)` | `∛8` = 2 |
+| `x²` `x³` `x¹²` | `x^2` `x^3` `x^12` | `x²` = `x^2` |
+| `x⁻¹` | `x^(-1)` | `x⁻¹` = `x^(-1)` |
+| `xⁿ` | `x^(n)` | `xⁿ` = `x^(n)` |
+| `x½` | `x^(1/2)` | `x½` = `x^(1/2)` |
+
+Unmapped glyphs are passed through unchanged, so the parser reports the real
+error rather than a mangled one.
 
 ### MathML
 
@@ -245,7 +272,7 @@ Supported functions: `sqrt`, `exp`, `ln`, `log`, `log10`, `log2`, `sin`, `cos`, 
 
 ### Symbolic Quadratic Solve
 
-`qsolve` solves `expr = 0` (or `lhs = rhs`) symbolically for a single inferred variable when the equation is a polynomial of degree ≤ 4 after expansion. Linear/quadratic: discriminant classification (perfect-square → exact rationals; zero → double root; negative → complex-conjugate roots with the `i` literal, evaluable via `cval`; else 12-sig snap). Cubic/quartic with integer coefficients: rational-root test and exact deflation, then the same quadratic finish; remaining cases use numeric roots (Durand–Kerner).
+`qsolve` solves `expr = 0` (or `lhs = rhs`) symbolically for a single inferred variable when the equation is a polynomial of degree ≤ 4 after expansion. Linear/quadratic: discriminant classification (perfect-square → exact rationals; zero → double root; negative → complex-conjugate roots with the `i` literal, evaluable via `cval`; irrational → **exact radicals** such as `sqrt(2)` or `3/4 + sqrt(5)/4`; else 12-sig snap). Rational coefficients are handled exactly (the discriminant is computed in exact rational arithmetic). Cubic/quartic with integer coefficients: rational-root test and exact deflation, then the same quadratic finish; remaining cases use numeric roots (Durand–Kerner).
 
 ```
 mathr> qsolve x^2 - 4
@@ -335,6 +362,18 @@ x + 1 + 2/(x - 1)
 mathr> apart 1/(x^3+x^2)
 1/(x + 1) - 1/x + 1/x^2
 ```
+
+When the denominator splits into **distinct rational** linear factors, the
+coefficients are computed **exactly** by the cover-up rule
+`Aᵢ = N(rᵢ)/D′(rᵢ)` — no linear system, and the fractions stay exact:
+
+```
+mathr> apart 1/(x^2-1)
+1/2/(x - 1) - 1/2/(x + 1)
+```
+
+Repeated roots, complex roots and irrational roots fall back to the numeric
+factorization path.
 
 **Method**: polynomial long division first (`N = Q·D + R`), then numeric factorization of `D` (Durand–Kerner complex roots; conjugate pairs become irreducible quadratics; repeated roots are clustered for multiplicity), then a square linear system for the unknown coefficients solved by Gaussian elimination. Coefficients near integers are snapped for display.
 
@@ -572,11 +611,12 @@ p=0.001
 | `pdiff <expr> <var>` | Partial derivative |
 | `gradient <expr>` | Gradient (all partials) |
 | `idiff <expr> [= rhs] [<indep> <dep>]` | Implicit differentiation `d(dep)/d(indep) = −F_indep/F_dep` (defaults: two free vars, prefer `x` independent) |
-| `integrate <expr> [var]` | Symbolic integration |
+| `integrate <expr> [var]` | Symbolic integration (a factor free of the integration variable is pulled out: `∫ a·x dx = a·x²/2`) |
 | `simplify <expr>` | Simplify |
-| `int <expr> a b` | Numerical integral |
-| `romberg <expr> a b` | Romberg-integrated |
-| `solve <expr> [var] [guess]` | Root finding |
+| `int <expr> <a> <b>` | Numerical integral (bounds may be expressions, e.g. `pi`) |
+| `romberg <expr> <a> <b>` | Romberg-integrated (bounds may be expressions, e.g. `pi`) |
+| `solve <expr> [var] [guess]` | Root finding (one root, Newton–Raphson from a guess) |
+| `nsolve <expr> [var] [lo hi]` | **All** real roots by scanning for sign changes (default interval `[-30, 30]`; poles are rejected, not reported as roots) |
 | `plot <expr> a b [out.png]` | PNG plot |
 | `taylor <expr> [a] [order]` | Taylor series |
 | `laurent <expr> [a] [k] [N]` | Laurent series around a pole |
@@ -636,6 +676,46 @@ p=0.001
 | `help` | Help text |
 | `quit` | Exit |
 
+### The `for <var>` suffix
+
+`diff`, `d/dx`, `integrate`, `solve`, `taylor`, and `limit` accept a trailing
+`for <name>` that names the free variable of the operation:
+
+```
+diff y*x^2 for y          → x^2
+integrate y^2 for y       → ∫ y² dy = y³/3
+taylor exp(y) for y       → 1 + y + 0.5*y² + …
+limit sin(y)/y at 0 for y → lim sin(y)/y as y → 0 = 1
+solve y^2 - 4 for y       → root ≈ 2 (f = 0)
+```
+
+For the calculus commands the suffix names the differentiation / integration /
+expansion / limit variable; for `solve` it names the unknown to isolate. It
+takes precedence over the trailing single-letter variable heuristic.
+
+The keyword is matched case-insensitively, the name must be letters-only, and
+the suffix must be the final token group — `x^2 for x extra` is *not* a suffix
+and is parsed as an expression.
+
+### Bounds: `<expr> <a> <b>` or `<expr> from <a> to <b>`
+
+`int`, `romberg` and `minimize` take a pair of bounds. Two forms are accepted:
+
+```
+int sin(x) 0 pi          → ∫ = 2
+int sin(x) from 0 to pi  → ∫ = 2
+```
+
+The bounds are **expressions**, so `pi`, `pi/2`, `2*pi` and `1+1` all work. In
+the `from … to …` form they may contain spaces (`from pi / 2 to 2 * pi`).
+
+In the positional form the **last two tokens** are the bounds — extra tokens
+fold into the expression by implicit multiplication, so `romberg x^2 0 1 12`
+integrates `x^2*0` over `[1, 12]`.
+
+A malformed suffix (`from 0` with no `to`) is an error rather than being read
+as part of the expression.
+
 ## Notebook File Format (`.mnb`)
 
 A math notebook is a JSON file with a `cells` array. Each cell has an `id`, `input` (math expression or TeX), `output` (evaluation result), and `cell_type` (`"math"` or `"text"`):
@@ -653,6 +733,73 @@ A math notebook is a JSON file with a `cells` array. Each cell has an `id`, `inp
 The `cell_type` field is optional in old `.mnb` files (defaults to `"math"`).
 
 Start the web UI with `mathr notebook [file.mnb] [port]` (default port 3000).
+
+## MCP Server
+
+`mathr mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io)
+server over **stdio**, so an AI agent can drive mathr directly.
+
+### Transport
+
+JSON-RPC 2.0, one message per line, UTF-8, no embedded newlines. Protocol
+version `2025-06-18`. stdin carries requests; stdout carries responses and
+nothing else (diagnostics go to stderr).
+
+### Handshake
+
+```
+→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"client","version":"1.0"}}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"mathr","version":"0.1.12"}}}
+→ {"jsonrpc":"2.0","method":"notifications/initialized"}
+```
+
+The `notifications/initialized` notification is accepted and not answered.
+Supported methods: `initialize`, `tools/list`, `tools/call`, `ping`.
+
+### Tools
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `evaluate` | `expression`, `variables?` | exact rational or numeric value |
+| `differentiate` | `expression`, `variable?` | derivative |
+| `integrate` | `expression`, `variable?` | antiderivative + C |
+| `solve` | `equation`, `variable?` | root(s) |
+| `nsolve` | `expression`, `variable?`, `from?`, `to?` | all real roots in the interval |
+| `simplify` | `expression` | simplified form |
+| `expand` | `expression` | expanded polynomial |
+| `taylor` | `expression`, `variable?`, `at?`, `terms?` | series |
+| `limit` | `expression`, `variable?`, `at?` | limit |
+| `poly-roots` | `coefficients` (leading first) | real + complex roots |
+| `number-theory` | `operation` (`gcd`/`lcm`/`factor`/`is-prime`/`fib`/`binom`), `a`, `b?` | exact integer result |
+| `stats` | `data` | descriptive statistics |
+| `matrix` | `operation` (`det`/`inv`/`transpose`/`linsolve`/`trace`/`eigen`), `matrix` | matrix result |
+| `minimize` | `expression`, `variable?`, `from`, `to` | argmin + minimum |
+| `apart` | `expression`, `variable?` | partial fractions |
+
+Results are returned as MCP text content. The `variable` argument names the
+free variable of the operation (and the unknown to isolate for `solve`).
+
+### Errors
+
+Tool *execution* failures (a bad expression, an undefined integral) return a
+successful JSON-RPC response whose result carries `isError: true` and an
+explanatory message — the MCP convention. Protocol-level problems use
+JSON-RPC error codes:
+
+| Code | Meaning |
+|---|---|
+| `-32601` | unknown method |
+| `-32602` | unknown tool, missing argument, or malformed JSON |
+
+### Client configuration
+
+```json
+{
+  "mcpServers": {
+    "mathr": { "command": "mathr", "args": ["mcp"] }
+  }
+}
+```
 
 ### Web UI Features
 

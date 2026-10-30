@@ -270,6 +270,24 @@ fn free_vars(expr: &Expr) -> Vec<String> {
         .collect()
 }
 
+/// Does `expr` mention `var` anywhere?
+///
+/// This is a *syntactic* occurrence test, unlike [`Expr::is_constant`]:
+/// `a` is not constant, but it is free with respect to `x`. Used to pull
+/// non-numeric free factors out of an integrand.
+fn mentions_var(expr: &Expr, var: &str) -> bool {
+    match expr {
+        Expr::Num(_) => false,
+        Expr::Var(v) => v == var,
+        Expr::Neg(e) => mentions_var(e, var),
+        Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) => {
+            mentions_var(a, var) || mentions_var(b, var)
+        }
+        Expr::Pow(base, exp) => mentions_var(base, var) || mentions_var(exp, var),
+        Expr::Func(_, args) => args.iter().any(|a| mentions_var(a, var)),
+    }
+}
+
 /// Infer `(indep, dep)` for implicit differentiation.
 ///
 /// Prefer `(x, other)` when `x` is present among exactly two free variables;
@@ -399,9 +417,16 @@ fn int_step(expr: &Expr, var: &str) -> Result<Expr> {
         Expr::Add(a, b) => Ok(Expr::add(int_step(a, var)?, int_step(b, var)?)),
         Expr::Sub(a, b) => Ok(Expr::sub(int_step(a, var)?, int_step(b, var)?)),
         Expr::Mul(a, b) => {
-            if a.is_constant() {
+            // Pull out a factor that does not mention the integration
+            // variable: ∫ c·f dx = c·∫f dx, for numeric *or* symbolic c.
+            //
+            // The "free factor" test is a syntactic occurrence test, not a
+            // numeric-only one, so `∫ a·x dx = a·x²/2` works with `a` a
+            // free symbol. Cross-port pattern from unsolve `symbolic.ts:307-317`
+            // (which widened the test from `isNum` to `!containsVar`).
+            if !mentions_var(a, var) {
                 Ok(Expr::mul((**a).clone(), int_step(b, var)?))
-            } else if b.is_constant() {
+            } else if !mentions_var(b, var) {
                 Ok(Expr::mul(int_step(a, var)?, (**b).clone()))
             } else {
                 Err(MathError::Eval(format!(
@@ -914,6 +939,95 @@ mod tests {
     fn integrate_atan_arcsin() {
         integrate_agrees("1/(1+x^2)", "1/(1+x^2)", &[0.5, 1.0, 2.0]);
         integrate_agrees("1/sqrt(1-x^2)", "1/sqrt(1-x^2)", &[0.0, 0.3, 0.5]);
+    }
+
+    // ---- free-factor pull-out ---------------------------------------------
+    //
+    // A factor that does not mention the integration variable is a constant
+    // of integration and can be pulled out. The test is *syntactic* (does
+    // the subexpression mention the variable?), so a symbolic factor counts
+    // too — not just a numeric one.
+    //
+    // Cross-port pattern from unsolve `symbolic.ts:307-317`, which widened
+    // the test from `isNum` to `!containsVar`.
+
+    #[test]
+    fn integrate_pulls_symbolic_free_factor() {
+        // ∫ a·x dx = a·x²/2
+        let e = Parser::parse("a*x").unwrap();
+        let result = integrate(&e, "x").unwrap();
+        // Differentiate the result and compare with the original integrand
+        // for several values of `a`.
+        let derived = differentiate(&result, "x").unwrap();
+        let mut ctx = Context::standard();
+        for &(x, a) in &[(0.5, 2.0), (1.0, -3.0), (2.0, 0.25)] {
+            ctx.set("x", x);
+            ctx.set("a", a);
+            let d = eval(&derived, &ctx).unwrap();
+            let expected = a * x;
+            assert!((d - expected).abs() < 1e-9, "at x={x} a={a}: got {d} want {expected}");
+        }
+    }
+
+    #[test]
+    fn integrate_pulls_free_factor_in_either_position() {
+        // The free factor may sit on either side of the product.
+        let e = Parser::parse("x*y").unwrap();
+        let result = integrate(&e, "x").unwrap();
+        let derived = differentiate(&result, "x").unwrap();
+        let mut ctx = Context::standard();
+        for &(x, y) in &[(0.5, 2.0), (1.0, -3.0)] {
+            ctx.set("x", x);
+            ctx.set("y", y);
+            let d = eval(&derived, &ctx).unwrap();
+            assert!((d - y * x).abs() < 1e-9, "at x={x} y={y}: got {d}");
+        }
+    }
+
+    #[test]
+    fn integrate_pulls_free_factor_from_higher_power() {
+        // ∫ a·x² dx = a·x³/3
+        let e = Parser::parse("a*x^2").unwrap();
+        let result = integrate(&e, "x").unwrap();
+        let derived = differentiate(&result, "x").unwrap();
+        let mut ctx = Context::standard();
+        for &(x, a) in &[(0.5, 2.0), (1.0, -3.0)] {
+            ctx.set("x", x);
+            ctx.set("a", a);
+            let d = eval(&derived, &ctx).unwrap();
+            assert!((d - a * x * x).abs() < 1e-9, "at x={x} a={a}: got {d}");
+        }
+    }
+
+    #[test]
+    fn integrate_free_factor_does_not_swallow_variable() {
+        // A factor that *does* mention the variable must not be pulled out.
+        // `x*x` is `Mul(x, x)` — neither side is free of `x`, so the
+        // integrator must refuse rather than treating one `x` as a
+        // constant. (The power rule handles `x^2`, which is a different AST.)
+        let e = Parser::parse("x*x").unwrap();
+        let err = integrate(&e, "x").unwrap_err();
+        assert!(
+            err.to_string().contains("cannot integrate non-linear product"),
+            "got {}",
+            err
+        );
+    }
+
+    #[test]
+    fn integrate_pulls_free_factor_with_function() {
+        // ∫ a·sin(x) dx = -a·cos(x)
+        let e = Parser::parse("a*sin(x)").unwrap();
+        let result = integrate(&e, "x").unwrap();
+        let derived = differentiate(&result, "x").unwrap();
+        let mut ctx = Context::standard();
+        for &(x, a) in &[(0.5, 2.0), (1.0, -3.0)] {
+            ctx.set("x", x);
+            ctx.set("a", a);
+            let d = eval(&derived, &ctx).unwrap();
+            let expected = a * x.sin();
+            assert!((d - expected).abs() < 1e-9, "at x={x} a={a}: got {d} want {expected}");
+        }
     }
 
     #[test]

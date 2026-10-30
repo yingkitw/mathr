@@ -709,6 +709,89 @@ fn ddx_repl_alias() {
     assert_eq!(a, b);
 }
 
+// =========================================================================
+// `for <var>` suffix — cross-port pass #3 (unsolve `solve-problem.ts:119-124`)
+// =========================================================================
+
+#[test]
+fn for_var_diff_repl_dispatch() {
+    // `for y` names the differentiation variable. Before the port this
+    // returned "x^2*for" — the words were parsed as identifiers.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("diff y*x^2 for y", ctx).unwrap().unwrap();
+    assert_eq!(out, "x^2");
+}
+
+#[test]
+fn for_var_diff_matches_explicit_var() {
+    let ctx = mathr::eval::Context::standard();
+    let a = mathr::repl::dispatch_str("diff y*x^2 for y", ctx.clone()).unwrap().unwrap();
+    let b = mathr::repl::dispatch_str("diff y*x^2 y", ctx).unwrap().unwrap();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn for_var_integrate_repl_dispatch() {
+    // ∫ y² dy = y³/3 — the variable must be `y`, not `x`.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("integrate y^2 for y", ctx).unwrap().unwrap();
+    assert!(out.contains("dy"), "got {out}");
+    let e = Parser::parse(out.strip_prefix("∫ y^2 dy = ").unwrap()).unwrap();
+    let mut ctx2 = Context::standard();
+    ctx2.set("y", 2.0);
+    let v = eval(&e, &ctx2).unwrap();
+    assert!(close(v, 8.0 / 3.0, 1e-9), "got {v}");
+}
+
+#[test]
+fn for_var_taylor_repl_dispatch() {
+    // The expansion variable is `y`; before the port this errored with
+    // "unknown variable: y".
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("taylor exp(y) for y", ctx).unwrap().unwrap();
+    assert!(out.contains('y'), "got {out}");
+    assert!(!out.contains("unknown variable"), "got {out}");
+}
+
+#[test]
+fn for_var_limit_repl_dispatch() {
+    // lim sin(y)/y as y → 0 = 1
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("limit sin(y)/y at 0 for y", ctx).unwrap().unwrap();
+    assert!(out.ends_with("= 1"), "got {out}");
+}
+
+#[test]
+fn for_var_solve_repl_dispatch() {
+    // `for y` targets `y`: y² − 4 = 0 has the root 2.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("solve y^2 - 4 for y", ctx).unwrap().unwrap();
+    assert!(out.contains("root ≈ 2"), "got {out}");
+}
+
+#[test]
+fn for_var_absent_keeps_prior_behaviour() {
+    // No `for` suffix — the trailing single-letter heuristic still applies.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("diff x^2", ctx).unwrap().unwrap();
+    assert_eq!(out, "2*x");
+}
+
+#[test]
+fn integrate_pulls_symbolic_free_factor_repl_dispatch() {
+    // ∫ a·x dx = a·x²/2 — `a` is free with respect to `x`.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("integrate a*x for x", ctx).unwrap().unwrap();
+    let body = out.strip_prefix("∫ a*x dx = ").expect("unexpected shape");
+    let e = Parser::parse(body).unwrap();
+    let mut ctx2 = Context::standard();
+    ctx2.set("a", 3.0);
+    ctx2.set("x", 2.0);
+    // a·x²/2 = 3·4/2 = 6
+    let v = eval(&e, &ctx2).unwrap();
+    assert!(close(v, 6.0, 1e-9), "got {v}");
+}
+
 #[test]
 fn dot_cross_repl() {
     let ctx = mathr::eval::Context::standard();
@@ -2221,13 +2304,16 @@ fn lean_export_apart_pipeline() {
     use mathr::lean::to_lean;
     use mathr::parser::Parser;
     // 1/(x(x+1)) = 1/x − 1/(x+1) — a quotient shape the exporter must keep
-    // parenthesised so the Lean term means the same thing
+    // parenthesised so the Lean term means the same thing.
+    //
+    // The decomposition is computed exactly (the cover-up rule), so the
+    // exporter sees exact rationals rather than decimal approximations.
     let e = Parser::parse("1/(x*(x + 1))").unwrap();
     let a = mathr::apart::apart(&e, "x").unwrap();
     let term = to_lean(&a).unwrap();
     assert!(term.contains("/ x"), "got: {term}");
     // denominators must stay grouped: `… / (… + …)`, never `(… / …) + …`
-    assert!(term.contains("((1 : ℝ) + x))"), "got: {term}");
+    assert!(term.contains("(x + (1 : ℝ))"), "got: {term}");
     // full ascription everywhere (compile-proxy: no bare numerals; the
     // decomposition has exactly three numerals: two 1s and the implied one)
     assert_eq!(term.matches(" : ℝ)").count(), 3, "got: {term}");
@@ -2251,16 +2337,27 @@ fn lean_export_taylor_pipeline() {
 fn lean_export_qsolve_pipeline() {
     use mathr::lean::to_lean;
     use mathr::parser::Parser;
-    // quadratic roots are plain floats — exporter must not choke on the
-    // qsolve output shape (add of divs of numerals)
+    // quadratic roots are exact radicals — the exporter must not choke on
+    // the qsolve output shape (a sum of divs of numerals, plus a sqrt).
     let e = Parser::parse("x^2 - 2").unwrap();
     let r = mathr::qsolve::solve_symbolic(&e, "x").unwrap();
     assert_eq!(r.len(), 2);
-    // roots are snapped f64 decimals (√2 ≈ 1.41421356237) — each must
-    // export as an exact ascribed literal
+    // The roots are exact: `sqrt(2)` and `-sqrt(2)`. Each must export as a
+    // well-formed Lean term over ℝ.
     for root in &r {
         let term = to_lean(root).unwrap();
-        assert!(term.starts_with('(') && term.ends_with(" : ℝ)"), "got: {term}");
+        assert!(term.contains("Real.sqrt"), "got: {term}");
+    }
+    // A rational-coefficient quadratic still exports its rational parts as
+    // exact ascribed literals.
+    let e = Parser::parse("6x^2 - 5x - 1").unwrap();
+    let r = mathr::qsolve::solve_symbolic(&e, "x").unwrap();
+    assert_eq!(r.len(), 2);
+    for root in &r {
+        let term = to_lean(root).unwrap();
+        // Every numeral must carry an `ℝ` ascription.
+        assert!(term.contains(" : ℝ)"), "got: {term}");
+        assert!(term.starts_with('('), "got: {term}");
     }
 }
 
@@ -3302,4 +3399,510 @@ fn minimize_repl_dispatch() {
         .unwrap();
     assert!(res.converged);
     assert!(close(res.x[0], 1.0, 1e-4) && close(res.x[1], 1.0, 1e-4));
+}
+
+// =========================================================================
+// MCP server — end-to-end protocol behaviour
+// =========================================================================
+
+/// Local alias so the tests do not depend on a JSON crate.
+mod mcp_json {
+    pub use mathr::mcp::{handle_message, parse_json, Json};
+}
+
+/// Feed a sequence of JSON-RPC messages through the dispatcher and return the
+/// responses, one per message (as the stdio transport would emit them).
+fn mcp_roundtrip(messages: &[&str]) -> Vec<mcp_json::Json> {
+    messages
+        .iter()
+        .filter_map(|m| {
+            let msg = mcp_json::parse_json(m).expect("valid JSON");
+            mcp_json::handle_message(&msg)
+        })
+        .map(|r| r.expect("handler returns a response"))
+        .collect()
+}
+
+fn mcp_text(result: &mcp_json::Json) -> String {
+    result
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[test]
+fn mcp_initialize_handshake() {
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#]);
+    assert_eq!(out.len(), 1);
+    let result = out[0].get("result").expect("initialize returns a result");
+    assert_eq!(
+        result.get("protocolVersion").and_then(|v| v.as_str()),
+        Some(mathr::mcp::PROTOCOL_VERSION)
+    );
+    assert!(result.get("capabilities").unwrap().get("tools").is_some());
+}
+
+#[test]
+fn mcp_initialized_notification_is_not_answered() {
+    let msg = mcp_json::parse_json(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).unwrap();
+    assert!(mcp_json::handle_message(&msg).is_none());
+}
+
+#[test]
+fn mcp_tools_list_has_schemas() {
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#]);
+    let tools = out[0]
+        .get("result")
+        .unwrap()
+        .get("tools")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert!(tools.len() >= 13);
+    for t in tools {
+        let name = t.get("name").and_then(|v| v.as_str()).unwrap();
+        assert!(!name.is_empty());
+        assert!(t.get("description").and_then(|v| v.as_str()).is_some());
+        let schema = t.get("inputSchema").expect("tool has an input schema");
+        assert_eq!(schema.get("type").and_then(|v| v.as_str()), Some("object"));
+    }
+}
+
+#[test]
+fn mcp_tool_call_returns_text_content() {
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"evaluate","arguments":{"expression":"2+3"}}}"#]);
+    let result = out[0].get("result").unwrap();
+    assert_eq!(result.get("isError").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(mcp_text(result), "5");
+}
+
+#[test]
+fn mcp_tool_call_is_exact_for_rationals() {
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"evaluate","arguments":{"expression":"1/2 + 3/4"}}}"#]);
+    assert_eq!(mcp_text(out[0].get("result").unwrap()), "5/4");
+}
+
+#[test]
+fn mcp_tool_call_with_variable() {
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"differentiate","arguments":{"expression":"y*x^2","variable":"y"}}}"#]);
+    assert_eq!(mcp_text(out[0].get("result").unwrap()), "x^2");
+}
+
+#[test]
+fn mcp_tool_execution_error_is_not_a_protocol_error() {
+    // A failing tool yields a *successful* JSON-RPC response with isError —
+    // the MCP convention. Only protocol problems use error codes.
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"evaluate","arguments":{"expression":"@@@"}}}"#]);
+    assert!(out[0].get("error").is_none());
+    let result = out[0].get("result").unwrap();
+    assert_eq!(result.get("isError").and_then(|v| v.as_bool()), Some(true));
+}
+
+#[test]
+fn mcp_unknown_tool_is_a_protocol_error() {
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nope","arguments":{}}}"#]);
+    let err = out[0].get("error").expect("unknown tool is a protocol error");
+    assert_eq!(
+        err.get("code").and_then(|v| v.as_f64()),
+        Some(mathr::mcp::INVALID_PARAMS as f64)
+    );
+}
+
+#[test]
+fn mcp_unknown_method_is_method_not_found() {
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"nope"}"#]);
+    let err = out[0].get("error").expect("unknown method is a protocol error");
+    assert_eq!(
+        err.get("code").and_then(|v| v.as_f64()),
+        Some(mathr::mcp::METHOD_NOT_FOUND as f64)
+    );
+}
+
+#[test]
+fn mcp_responses_are_single_line() {
+    // The stdio transport requires one JSON message per line.
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#]);
+    assert!(!out[0].to_string().contains('\n'));
+}
+
+#[test]
+fn mcp_ids_are_echoed() {
+    let out = mcp_roundtrip(&[r#"{"jsonrpc":"2.0","id":99,"method":"ping"}"#]);
+    assert_eq!(out[0].get("id").and_then(|v| v.as_f64()), Some(99.0));
+}
+
+// =========================================================================
+// Unicode input and missing LaTeX forms — cross-port pass #4
+// =========================================================================
+
+#[test]
+fn unicode_input_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    // × and ÷
+    let out = mathr::repl::dispatch_str("2×3", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "6");
+    let out = mathr::repl::dispatch_str("6÷2", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "3");
+    // Unicode minus (U+2212)
+    let out = mathr::repl::dispatch_str("−5", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "-5");
+    // Greek constants
+    let out = mathr::repl::dispatch_str("π", ctx.clone()).unwrap().unwrap();
+    assert!(out.starts_with("3.14"), "got {}", out);
+}
+
+#[test]
+fn unicode_superscript_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    // x² must parse as x^2 — check the AST, not the evaluation.
+    let e = Parser::parse("x²").unwrap();
+    let want = Parser::parse("x^2").unwrap();
+    assert!(e.equals(&want), "got {} want {}", e, want);
+}
+
+#[test]
+fn unicode_root_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("√2", ctx).unwrap().unwrap();
+    assert!(out.starts_with("1.4142"), "got {}", out);
+}
+
+#[test]
+fn latex_dfrac_tfrac_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let a = mathr::repl::dispatch_str(r"\dfrac{1}{2}", ctx.clone()).unwrap().unwrap();
+    let b = mathr::repl::dispatch_str(r"\frac{1}{2}", ctx.clone()).unwrap().unwrap();
+    assert_eq!(a, b);
+    let c = mathr::repl::dispatch_str(r"\tfrac{3}{4}", ctx).unwrap().unwrap();
+    assert_eq!(c, "0.75");
+}
+
+#[test]
+fn latex_sqrt_index_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str(r"\sqrt[3]{8}", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "2");
+    let out = mathr::repl::dispatch_str(r"\sqrt[4]{16}", ctx).unwrap().unwrap();
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn latex_function_power_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    // \sin^2(x) parses to sin(x)^2 — compare the ASTs.
+    let a = Parser::parse(r"\sin^2(x)").unwrap();
+    let b = Parser::parse("sin(x)^2").unwrap();
+    assert!(a.equals(&b), "got {} want {}", a, b);
+}
+
+// =========================================================================
+// Selective exact function folding — cross-port pass #5
+// =========================================================================
+
+#[test]
+fn exact_folding_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    // Exact results fold.
+    let out = mathr::repl::dispatch_str("simplify sqrt(16)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "4");
+    let out = mathr::repl::dispatch_str("simplify cbrt(8)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "2");
+    let out = mathr::repl::dispatch_str("simplify log2(8)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "3");
+    let out = mathr::repl::dispatch_str("simplify log10(100)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn inexact_folding_stays_symbolic() {
+    let ctx = mathr::eval::Context::standard();
+    // An irrational result must not collapse to a float.
+    let out = mathr::repl::dispatch_str("simplify sqrt(2)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "sqrt(2)");
+    let out = mathr::repl::dispatch_str("simplify cbrt(2)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "cbrt(2)");
+    let out = mathr::repl::dispatch_str("simplify log2(3)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "log2(3)");
+    let out = mathr::repl::dispatch_str("simplify log10(3)", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "log10(3)");
+}
+
+#[test]
+fn exact_folding_preserves_numeric_value() {
+    // The value must be unchanged whichever form is kept.
+    let ctx = mathr::eval::Context::standard();
+    for (cmd, want) in [
+        ("simplify sqrt(16)", 4.0),
+        ("simplify sqrt(2)", 2.0f64.sqrt()),
+        ("simplify sqrt(1/4)", 0.5),
+        ("simplify log2(8)", 3.0),
+    ] {
+        let out = mathr::repl::dispatch_str(cmd, ctx.clone()).unwrap().unwrap();
+        let e = Parser::parse(&out).unwrap();
+        let v = eval(&e, &Context::standard()).unwrap();
+        assert!(close(v, want, 1e-12), "{}: got {} want {}", cmd, v, want);
+    }
+}
+
+#[test]
+fn exact_folding_does_not_affect_evaluation() {
+    // Evaluating is unaffected — the numeric answer is the same.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("sqrt(2)", ctx.clone()).unwrap().unwrap();
+    assert!(out.starts_with("1.4142"), "got {}", out);
+}
+
+#[test]
+fn exact_folding_keeps_symbolic_roots_in_derivatives() {
+    // A derivative of sqrt(x) must keep the symbolic form.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("diff sqrt(x)", ctx).unwrap().unwrap();
+    assert!(out.contains("sqrt(x)"), "got {}", out);
+}
+
+// =========================================================================
+// nsolve — sign-scan all-roots numeric solve (cross-port pass #6)
+// =========================================================================
+
+/// Parse the root list out of an `nsolve` result.
+fn nsolve_roots(out: &str) -> Vec<f64> {
+    out.strip_prefix("roots: ")
+        .unwrap_or_else(|| panic!("unexpected nsolve output: {}", out))
+        .split(", ")
+        .map(|s| s.trim().parse::<f64>().expect("numeric root"))
+        .collect()
+}
+
+#[test]
+fn nsolve_repl_dispatch_finds_all_sine_roots() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("nsolve sin(x) x -7 7", ctx).unwrap().unwrap();
+    let roots = nsolve_roots(&out);
+    assert_eq!(roots.len(), 5, "got {:?}", roots);
+    let pi = std::f64::consts::PI;
+    for (r, w) in roots.iter().zip([-2.0 * pi, -pi, 0.0, pi, 2.0 * pi].iter()) {
+        assert!((r - w).abs() < 1e-6, "got {} want {}", r, w);
+    }
+}
+
+#[test]
+fn nsolve_repl_dispatch_infers_variable() {
+    // No variable given — it is inferred from the expression.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("nsolve sin(x) -7 7", ctx.clone()).unwrap().unwrap();
+    assert_eq!(nsolve_roots(&out).len(), 5, "got {}", out);
+    // A `for <var>` suffix also works.
+    let out = mathr::repl::dispatch_str("nsolve sin(t) for t -7 7", ctx).unwrap().unwrap();
+    assert_eq!(nsolve_roots(&out).len(), 5, "got {}", out);
+}
+
+#[test]
+fn nsolve_rejects_poles() {
+    // 1/(x-1) has a pole at x=1 and no root — the pole must not be
+    // reported as a solution.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("nsolve 1/(x-1)", ctx).unwrap().unwrap();
+    assert!(out.starts_with("no real roots"), "got {}", out);
+}
+
+#[test]
+fn nsolve_finds_root_next_to_a_pole() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("nsolve 1/(x-1) - 2", ctx).unwrap().unwrap();
+    let roots = nsolve_roots(&out);
+    assert_eq!(roots.len(), 1, "got {}", out);
+    assert!((roots[0] - 1.5).abs() < 1e-6, "got {}", roots[0]);
+}
+
+#[test]
+fn nsolve_single_root() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("nsolve exp(x) - 5", ctx).unwrap().unwrap();
+    let roots = nsolve_roots(&out);
+    assert_eq!(roots.len(), 1, "got {}", out);
+    assert!((roots[0] - 5.0f64.ln()).abs() < 1e-6, "got {}", roots[0]);
+}
+
+#[test]
+fn nsolve_polynomial_roots() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("nsolve x^2 - 4", ctx).unwrap().unwrap();
+    let roots = nsolve_roots(&out);
+    assert_eq!(roots.len(), 2, "got {}", out);
+    assert!((roots[0] + 2.0).abs() < 1e-6);
+    assert!((roots[1] - 2.0).abs() < 1e-6);
+}
+
+#[test]
+fn nsolve_steps_output() {
+    let steps = mathr::repl::dispatch_steps(
+        "nsolve sin(x) x -7 7",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(steps.len() >= 2, "got {:?}", steps);
+    assert!(steps[0].contains("roots:"), "got {:?}", steps);
+    // One step per root.
+    assert_eq!(steps.len(), 6, "got {:?}", steps);
+}
+
+#[test]
+fn nsolve_rejects_inverted_bounds() {
+    let ctx = mathr::eval::Context::standard();
+    assert!(mathr::repl::dispatch_str("nsolve sin(x) x 10 -10", ctx).is_err());
+}
+
+#[test]
+fn nsolve_is_different_from_solve() {
+    // `solve` finds one root (near the guess); `nsolve` finds them all.
+    let ctx = mathr::eval::Context::standard();
+    let one = mathr::repl::dispatch_str("solve sin(x)", ctx.clone()).unwrap().unwrap();
+    assert!(one.contains("root ≈"), "got {}", one);
+    let all = mathr::repl::dispatch_str("nsolve sin(x) x -7 7", ctx).unwrap().unwrap();
+    assert!(nsolve_roots(&all).len() > 1, "got {}", all);
+}
+
+// =========================================================================
+// Exact radical quadratic roots — cross-port pass #7
+// =========================================================================
+
+#[test]
+fn qsolve_exact_radical_roots() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("qsolve x^2 - 2", ctx.clone()).unwrap().unwrap();
+    assert!(out.contains("sqrt(2)"), "got {}", out);
+    assert!(!out.contains("1.4142"), "got {}", out);
+}
+
+#[test]
+fn qsolve_rational_coefficients_exact_radical() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("qsolve (1/2)x^2-(3/4)x+1/8", ctx).unwrap().unwrap();
+    assert!(out.contains("sqrt(5)"), "got {}", out);
+    // The rational parts must stay rational, not become decimals.
+    assert!(out.contains("3/4"), "got {}", out);
+    assert!(!out.contains("0.75"), "got {}", out);
+}
+
+#[test]
+fn qsolve_rational_coefficients_rational_roots() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("qsolve (2/3)x^2+(1/3)x-1", ctx).unwrap().unwrap();
+    assert!(out.contains("-3/2"), "got {}", out);
+}
+
+#[test]
+fn qsolve_radical_roots_evaluate_to_true_roots() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("qsolve x^2 - 8", ctx).unwrap().unwrap();
+    let first = out.split(", ").next().unwrap().trim_start_matches("x = ");
+    let e = Parser::parse(first).unwrap();
+    let v = eval(&e, &Context::standard()).unwrap();
+    assert!(close(v, 8.0f64.sqrt(), 1e-12), "got {}", v);
+}
+
+// =========================================================================
+// Exact cover-up partial fractions — cross-port pass #8
+// =========================================================================
+
+#[test]
+fn apart_exact_rational_coefficients() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("apart 1/(x^2-1)", ctx).unwrap().unwrap();
+    // The half must stay an exact fraction.
+    assert!(out.contains("1/2"), "got {}", out);
+    assert!(!out.contains("0.5"), "got {}", out);
+}
+
+#[test]
+fn apart_exact_decomposition_is_correct() {
+    // The decomposition must equal the original at sample points.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("apart 1/(x^3-x)", ctx).unwrap().unwrap();
+    let e = Parser::parse("1/(x^3-x)").unwrap();
+    let d = Parser::parse(&out).unwrap();
+    for &x in &[0.5f64, 2.0, 3.0, -2.0] {
+        let mut c = Context::standard();
+        c.set("x", x);
+        let a = eval(&e, &c).unwrap();
+        let b = eval(&d, &c).unwrap();
+        assert!(close(a, b, 1e-9), "at x={}: {} vs {}", x, a, b);
+    }
+}
+
+#[test]
+fn apart_irrational_roots_fall_back_to_numeric() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("apart 1/(x^2-2)", ctx).unwrap().unwrap();
+    // No exact fraction — the numeric path ran.
+    assert!(!out.contains("1/2"), "got {}", out);
+    assert!(out.contains("sqrt") || out.contains("1.41"), "got {}", out);
+}
+
+#[test]
+fn apart_irreducible_quadratic_unchanged() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("apart 1/(x^2+1)", ctx).unwrap().unwrap();
+    assert!(out.contains("x^2 + 1"), "got {}", out);
+}
+
+// =========================================================================
+// `from a to b` bounds with expression values — cross-port pass #9
+// =========================================================================
+
+#[test]
+fn int_expression_bounds() {
+    let ctx = mathr::eval::Context::standard();
+    // ∫₀^π sin(x) dx = 2
+    let out = mathr::repl::dispatch_str("int sin(x) 0 pi", ctx.clone()).unwrap().unwrap();
+    assert!(out.contains("= 2"), "got {}", out);
+    // ∫₀^{π/2} sin(x) dx = 1
+    let out = mathr::repl::dispatch_str("int sin(x) 0 pi/2", ctx).unwrap().unwrap();
+    assert!(out.contains("= 1"), "got {}", out);
+}
+
+#[test]
+fn romberg_expression_bounds() {
+    // romberg used to reject symbolic bounds with "bad b".
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("romberg sin(x) 0 pi", ctx).unwrap().unwrap();
+    assert!(out.contains("= 2"), "got {}", out);
+}
+
+#[test]
+fn from_to_suffix_for_all_bound_commands() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("int sin(x) from 0 to pi", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("= 2"), "got {}", out);
+    let out = mathr::repl::dispatch_str("romberg sin(x) from 0 to pi", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("= 2"), "got {}", out);
+    let out = mathr::repl::dispatch_str("minimize (x-3)^2 from 0 to 10", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("x* = 3"), "got {}", out);
+}
+
+#[test]
+fn from_to_suffix_matches_positional() {
+    let ctx = mathr::eval::Context::standard();
+    let a = mathr::repl::dispatch_str("int x^2 from 0 to 3", ctx.clone())
+        .unwrap()
+        .unwrap();
+    let b = mathr::repl::dispatch_str("int x^2 0 3", ctx).unwrap().unwrap();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn malformed_from_to_suffix_is_an_error() {
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("int sin(x) from 0", ctx).unwrap_err();
+    assert!(err.to_string().contains("from"), "got {}", err);
 }

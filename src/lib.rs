@@ -52,6 +52,8 @@
 //! - **Rational arithmetic** ([`rational`]): exact `Rational` type with GCD reduction, arithmetic, parsing.
 //! - **Notebook** ([`notebook`]): `.mnb` file format with cells of TeX/math expressions and results.
 //! - **Web notebook server** ([`server`]): minimal HTTP server serving a Jupyter-like web UI.
+//! - **MCP server** ([`mcp`]): Model Context Protocol over stdio (JSON-RPC 2.0),
+//!   exposing the engine as tools an AI agent can drive directly.
 //! - **Interpolation** ([`interpolate`]): Lagrange, Newton divided-difference,
 //!   linear interpolation, and natural / clamped cubic splines.
 //! - **Monotone interpolation** ([`pchip`]): piecewise cubic Hermite
@@ -114,6 +116,8 @@ pub mod apart;
 pub mod qsolve;
 pub mod sumprod;
 pub mod vector;
+pub mod mcp;
+pub mod unicode;
 
 pub use error::{MathError, Result};
 
@@ -189,4 +193,5 @@ pub mod prelude {
     pub use crate::server::NotebookServer;
     pub use crate::fastmath::{fast_cos, fast_exp, fast_log, fast_pow, fast_sin, fast_sqrt, fast_tan, ChebyshevApprox};
     pub use crate::sparse::{bicgstab, bicgstab_ilu, conjugate_gradient, conjugate_gradient_jacobi, CgResult, Csc, Csr, Ilu0};
+    pub use crate::mcp::{call_tool, serve_stdio, Json as McpJson};
 }

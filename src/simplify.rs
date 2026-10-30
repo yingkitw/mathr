@@ -21,9 +21,43 @@ use crate::expr::Expr;
 
 /// Recursively simplify an expression.
 pub fn simplify(e: &Expr) -> Expr {
-    let e = preflatten(e);
+    // Exact-only function folding runs *first*, on the raw tree. The
+    // `collect` pass below turns `1/4` into the float `0.25`, after which
+    // the exactness of `sqrt(1/4)` can no longer be established.
+    let e = fold_exact_functions(e);
+    let e = preflatten(&e);
     let e = collect(&e);
     fold_constants(&e)
+}
+
+/// Fold "exact-only" function calls wherever the result is provably exact.
+///
+/// `sqrt(16)` → `4`, but `sqrt(2)` stays `sqrt(2)` — an irrational value has
+/// an exact symbolic form, and collapsing it to a float would discard that
+/// exactness.
+///
+/// Cross-port pattern from unsolve `simplify.ts:221-270`.
+fn fold_exact_functions(e: &Expr) -> Expr {
+    match e {
+        Expr::Func(name, args) => {
+            let args: Vec<Expr> = args.iter().map(fold_exact_functions).collect();
+            if args.len() == 1 && is_exact_only_function(name) {
+                if let Some(folded) = try_fold_exact_function(name, &args[0]) {
+                    return folded;
+                }
+                // Not exact — keep the call symbolic.
+                return Expr::func(name.clone(), args);
+            }
+            Expr::func(name.clone(), args)
+        }
+        Expr::Neg(a) => Expr::neg(fold_exact_functions(a)),
+        Expr::Add(a, b) => Expr::add(fold_exact_functions(a), fold_exact_functions(b)),
+        Expr::Sub(a, b) => Expr::sub(fold_exact_functions(a), fold_exact_functions(b)),
+        Expr::Mul(a, b) => Expr::mul(fold_exact_functions(a), fold_exact_functions(b)),
+        Expr::Div(a, b) => Expr::div(fold_exact_functions(a), fold_exact_functions(b)),
+        Expr::Pow(a, b) => Expr::pow(fold_exact_functions(a), fold_exact_functions(b)),
+        _ => e.clone(),
+    }
 }
 
 /// Recursively flatten identities (`+0`, `*1`, `*0`, `^0`, `^1`, `--x`,
@@ -39,6 +73,11 @@ fn preflatten(e: &Expr) -> Expr {
             match &inner {
                 Expr::Num(n) => Expr::num(-n),
                 Expr::Neg(x) => *x.clone(), // --x -> x
+                // -(a - b) -> b - a: negating a subtraction swaps its
+                // operands. Without this, `solve 2*y + 3*x = 6 for y`
+                // prints `y = -(3*x - 6)/2` instead of `y = (6 - 3*x)/2`.
+                // Cross-port pattern from unsolve `simplify.ts:218-219`.
+                Expr::Sub(a, b) => Expr::sub((**b).clone(), (**a).clone()),
                 _ => Expr::neg(inner),
             }
         }
@@ -329,6 +368,80 @@ fn fold_constants(e: &Expr) -> Expr {
         e.clone()
     }
 }
+/// Functions whose value is folded **only when the result is exact**.
+///
+/// For these, an inexact result has a shorter, exact symbolic form
+/// (`sqrt(2)` is exactly `√2`; a float is not). Folding them to a float
+/// would silently discard exactness.
+///
+/// Cross-port pattern from unsolve `simplify.ts:221-270`.
+fn is_exact_only_function(name: &str) -> bool {
+    matches!(name, "sqrt" | "cbrt" | "log2" | "log10" | "abs")
+}
+
+/// Try to fold a single-argument function call *exactly*.
+///
+/// Returns the folded expression when the result is provably exact, or
+/// `None` to leave the call symbolic.
+fn try_fold_exact_function(name: &str, arg: &Expr) -> Option<Expr> {
+    // The argument must be an exact rational — a plain integer, or a ratio
+    // of integers (`1/4`). A general float is not exact enough to reason
+    // about, so it is left alone.
+    let r = exact_rational_of(arg)?;
+    match name {
+        "abs" => {
+            // |x| is exact for every rational x.
+            Some(r.abs().to_expr())
+        }
+        "sqrt" => {
+            if r.num() < 0 {
+                return None;
+            }
+            // Exact only when the value is a perfect square of a rational.
+            Some(r.exact_sqrt()?.to_expr())
+        }
+        "cbrt" => Some(r.exact_cbrt()?.to_expr()),
+        "log2" => {
+            if r.num() <= 0 {
+                return None;
+            }
+            Some(r.exact_log2()?.to_expr())
+        }
+        "log10" => {
+            if r.num() <= 0 {
+                return None;
+            }
+            Some(r.exact_log10()?.to_expr())
+        }
+        _ => None,
+    }
+}
+
+/// Read an expression as an exact rational, if it is one.
+///
+/// Accepts an integer literal (`4`) and a ratio of integer literals (`1/4`).
+/// A general float is rejected: `0.25` is *not* known to be exactly 1/4.
+fn exact_rational_of(e: &Expr) -> Option<crate::rational::Rational> {
+    use crate::rational::Rational;
+    match e {
+        Expr::Num(n) => {
+            if !n.is_finite() || n.fract() != 0.0 || n.abs() > 9e15 {
+                return None;
+            }
+            Some(Rational::from_int(*n as i64))
+        }
+        Expr::Div(a, b) => {
+            let num = exact_rational_of(a)?;
+            let den = exact_rational_of(b)?;
+            if den.num() == 0 {
+                return None;
+            }
+            Rational::new(num.num() * den.den(), num.den() * den.num()).ok()
+        }
+        Expr::Neg(a) => exact_rational_of(a).map(|r| -r),
+        _ => None,
+    }
+}
 
 fn try_eval_const(e: &Expr) -> Option<f64> {
     use Expr::*;
@@ -349,7 +462,13 @@ fn try_eval_const(e: &Expr) -> Option<f64> {
         }
         Pow(a, b) => Some(try_eval_const(a)?.powf(try_eval_const(b)?)),
         Func(name, args) => {
-            let _ = name;
+            // An "exact-only" function is folded by `fold_exact_functions`
+            // (which runs earlier, on the raw tree). It must not be folded
+            // again here: an inexact result such as `sqrt(2)` has to stay
+            // symbolic rather than collapse to a float.
+            if args.len() == 1 && is_exact_only_function(name) {
+                return None;
+            }
             let vs: Option<Vec<f64>> = args.iter().map(try_eval_const).collect();
             vs.and_then(|_| crate::eval::eval(e, standard_ctx()).ok())
         }
@@ -367,6 +486,7 @@ fn standard_ctx() -> &'static crate::eval::Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::{eval, Context};
     use crate::parser::Parser;
 
     fn s(src: &str) -> Expr {
@@ -542,6 +662,211 @@ mod tests {
     fn nested_sub_cancel() {
         // x - y - (x - y) -> 0
         assert_eq!(s("x - y - (x - y)"), Expr::num(0.0));
+    }
+
+    // ---- negating a subtraction -------------------------------------------
+    //
+    // -(a - b) -> b - a: negating a subtraction swaps its operands, so the
+    // negated form never lingers as a `Neg` wrapping a `Sub`. This keeps
+    // answers readable when a solver builds `neg(constant)` — e.g.
+    // `solve 2*y + 3*x = 6 for y` should read `y = (6 - 3*x)/2`, not
+    // `y = -(3*x - 6)/2`.
+    //
+    // Cross-port pattern from unsolve `simplify.ts:218-219`.
+
+    #[test]
+    fn neg_of_sub_flips_operands() {
+        // -(a - b) -> b - a
+        let got = s("-(a - b)");
+        let want = Expr::sub(Expr::var("b"), Expr::var("a"));
+        assert!(got.equals(&want), "got {} want {}", got, want);
+    }
+
+    #[test]
+    fn neg_of_numeric_sub_flips_operands() {
+        // -(3*x - 6) must not stay a `Neg` wrapping a `Sub`.
+        //
+        // mathr's canonical form keeps `Add` with a negative coefficient
+        // rather than a `Sub` node, so the result is "6 + -3*x" — the
+        // value check in `neg_of_sub_preserves_value` is the meaningful
+        // contract; this test pins the structural change.
+        let got = s("-(3*x - 6)");
+        if let Expr::Neg(inner) = &got {
+            if matches!(inner.as_ref(), Expr::Sub(_, _)) {
+                panic!("expected the subtraction to be flipped, got {}", got);
+            }
+            panic!("expected a non-negated result, got {}", got);
+        }
+        // The leading constant is now positive.
+        assert_eq!(got.to_string(), "6 + -3*x");
+    }
+
+    #[test]
+    fn neg_of_sub_is_not_a_neg_node() {
+        // The result must not still be a `Neg` wrapping a `Sub`.
+        if let Expr::Neg(_) = s("-(a - b)") {
+            panic!("expected the subtraction to be flipped, not negated");
+        }
+    }
+
+    #[test]
+    fn neg_of_sub_preserves_value() {
+        // The flip must not change the numeric value.
+        let e = Parser::parse("-(3*x - 6)").unwrap();
+        let got = simplify(&e);
+        let want = Parser::parse("6 - 3*x").unwrap();
+        let mut ctx = Context::standard();
+        for &x in &[0.0, 1.0, 2.5, -3.0] {
+            ctx.set("x", x);
+            let g = eval(&got, &ctx).unwrap();
+            let w = eval(&want, &ctx).unwrap();
+            assert!((g - w).abs() < 1e-12, "at x={x}: got {g} want {w}");
+        }
+    }
+
+    #[test]
+    fn double_neg_of_sub_collapses() {
+        // -(-(a - b)) -> a - b
+        let got = s("-(-(a - b))");
+        let want = Expr::sub(Expr::var("a"), Expr::var("b"));
+        assert!(got.equals(&want), "got {} want {}", got, want);
+    }
+
+    #[test]
+    fn neg_of_sub_that_cancels_is_zero() {
+        // -(x - x) -> 0
+        assert_eq!(s("-(x - x)"), Expr::num(0.0));
+    }
+
+    // ---- selective exact function folding ----------------------------------
+    //
+    // An "exact-only" function folds only when the result is provably exact.
+    // An inexact result has a shorter, exact symbolic form (`sqrt(2)` is
+    // exactly √2), so collapsing it to a float would discard exactness.
+    //
+    // Cross-port pattern from unsolve `simplify.ts:221-270`.
+
+    #[test]
+    fn exact_folding_sqrt_perfect_square() {
+        assert_eq!(s("sqrt(16)"), Expr::num(4.0));
+        assert_eq!(s("sqrt(0)"), Expr::num(0.0));
+        assert_eq!(s("sqrt(1)"), Expr::num(1.0));
+        assert_eq!(s("sqrt(81)"), Expr::num(9.0));
+    }
+
+    #[test]
+    fn exact_folding_sqrt_inexact_stays_symbolic() {
+        // The key case: sqrt(2) must NOT become a float.
+        let got = s("sqrt(2)");
+        assert!(
+            matches!(&got, Expr::Func(name, _) if name == "sqrt"),
+            "expected sqrt(2) to stay symbolic, got {}",
+            got
+        );
+        // The value is still right.
+        let ctx = Context::standard();
+        let v = eval(&got, &ctx).unwrap();
+        assert!((v - 2.0f64.sqrt()).abs() < 1e-12, "got {}", v);
+    }
+
+    #[test]
+    fn exact_folding_cbrt() {
+        assert_eq!(s("cbrt(8)"), Expr::num(2.0));
+        assert_eq!(s("cbrt(27)"), Expr::num(3.0));
+        let got = s("cbrt(2)");
+        assert!(
+            matches!(&got, Expr::Func(name, _) if name == "cbrt"),
+            "expected cbrt(2) to stay symbolic, got {}",
+            got
+        );
+    }
+
+    #[test]
+    fn exact_folding_log2() {
+        assert_eq!(s("log2(8)"), Expr::num(3.0));
+        assert_eq!(s("log2(1024)"), Expr::num(10.0));
+        let got = s("log2(3)");
+        assert!(
+            matches!(&got, Expr::Func(name, _) if name == "log2"),
+            "expected log2(3) to stay symbolic, got {}",
+            got
+        );
+    }
+
+    #[test]
+    fn exact_folding_log10() {
+        assert_eq!(s("log10(100)"), Expr::num(2.0));
+        assert_eq!(s("log10(1000)"), Expr::num(3.0));
+        let got = s("log10(3)");
+        assert!(
+            matches!(&got, Expr::Func(name, _) if name == "log10"),
+            "expected log10(3) to stay symbolic, got {}",
+            got
+        );
+    }
+
+    #[test]
+    fn exact_folding_abs_is_always_exact() {
+        assert_eq!(s("abs(-5)"), Expr::num(5.0));
+        assert_eq!(s("abs(5)"), Expr::num(5.0));
+    }
+
+    #[test]
+    fn exact_folding_sqrt_of_rational() {
+        // sqrt(1/4) = 1/2 — the rational argument must survive the
+        // `collect` pass, which would otherwise turn 1/4 into 0.25.
+        let got = s("sqrt(1/4)");
+        let ctx = Context::standard();
+        let v = eval(&got, &ctx).unwrap();
+        assert!((v - 0.5).abs() < 1e-12, "got {} ({})", v, got);
+    }
+
+    #[test]
+    fn exact_folding_sqrt_of_inexact_rational_stays_symbolic() {
+        // sqrt(2/3) has no exact form.
+        let got = s("sqrt(2/3)");
+        assert!(
+            matches!(&got, Expr::Func(name, _) if name == "sqrt"),
+            "expected sqrt(2/3) to stay symbolic, got {}",
+            got
+        );
+    }
+
+    #[test]
+    fn exact_folding_applies_inside_larger_expressions() {
+        // 2*sqrt(2) + sqrt(16) → 2*sqrt(2) + 4
+        let got = s("2*sqrt(2) + sqrt(16)");
+        assert!(got.to_string().contains("sqrt(2)"), "got {}", got);
+        assert!(got.to_string().contains('4'), "got {}", got);
+    }
+
+    #[test]
+    fn exact_folding_leaves_other_functions_alone() {
+        // sin/exp have no exact symbolic form — they still fold eagerly.
+        assert!(matches!(s("sin(0)"), Expr::Num(_)));
+        assert!(matches!(s("exp(0)"), Expr::Num(_)));
+    }
+
+    #[test]
+    fn exact_folding_preserves_value() {
+        // Whatever the form, the numeric value must not change.
+        for (src, want) in [("sqrt(16)", 4.0), ("sqrt(2)", 2.0f64.sqrt())] {
+            let got = s(src);
+            let ctx = Context::standard();
+            let v = eval(&got, &ctx).unwrap();
+            assert!((v - want).abs() < 1e-12, "{}: got {} want {}", src, v, want);
+        }
+    }
+
+    #[test]
+    fn exact_folding_negative_sqrt_is_not_folded() {
+        // sqrt(-1) has no real value — leave it for the evaluator to reject.
+        let got = s("sqrt(-1)");
+        assert!(
+            matches!(&got, Expr::Func(name, _) if name == "sqrt"),
+            "expected sqrt(-1) to stay symbolic, got {}",
+            got
+        );
     }
 
     // ---- Mul × Add interaction -------------------------------------------

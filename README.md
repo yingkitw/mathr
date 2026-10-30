@@ -24,8 +24,9 @@
 ### Symbolic Computation
 - **Symbolic differentiation** — product, quotient, chain rules; partial derivatives, gradients, implicit differentiation (`idiff`), and higher-order `diff … [order]` / `d/dx`
 - **Vector products** — numeric `dot` and `cross` on comma-separated component lists (2-D or 3-D)
-- **Symbolic integration** — polynomial, exponential, trigonometric, and inverse-trigonometric primitives
-- **Algebraic simplification** — constant folding and algebraic identity simplification
+- **Symbolic integration** — polynomial, exponential, trigonometric, and inverse-trigonometric primitives; factors free of the integration variable are pulled out (`∫ a·x dx = a·x²/2`)
+- **Explicit variable selection** — `diff`, `integrate`, `solve`, `taylor`, and `limit` accept a trailing `for <var>` that names the free variable (`diff y*x^2 for y` → `x^2`)
+- **Algebraic simplification** — constant folding and algebraic identity simplification; `sqrt`/`cbrt`/`log2`/`log10`/`abs` fold **only when exact** (`sqrt(16)` → 4, `sqrt(2)` stays `sqrt(2)`)
 - **Taylor series** — symbolic expansion around any point
 - **Laurent series** — expansion around poles with negative powers
 - **Exact rational arithmetic** — `Rational` type with GCD reduction; expressions with integer fractions evaluate exactly (e.g. `\frac{1}{2} + \frac{3}{4}` → `5/4`)
@@ -33,7 +34,7 @@
 ### Numerical Computation
 - **Numerical calculus** — high-order finite-difference derivatives, trapezoidal / Simpson's / adaptive quadrature, **Romberg with Richardson extrapolation**
 - **FFT** — Cooley–Tukey radix-2: forward, inverse, 2D, real-input, magnitude / power spectra, convolution, cross-correlation, window functions (Hann, Hamming, Blackman, Rectangular)
-- **Equation solving** — bisection, Newton–Raphson, secant, Durand–Kerner polynomial roots, **Newton's method for nonlinear systems**, VAS root isolation
+- **Equation solving** — bisection, Newton–Raphson, secant, Durand–Kerner polynomial roots, **Newton's method for nonlinear systems**, VAS root isolation, **all-roots sign scan** (`nsolve`, with pole rejection)
 - **ODE solvers** — Euler, RK4, RK4 systems, adaptive RKF45
 - **Monte Carlo integration** — 1-D and N-D with reproducible LCG and standard error
 - **Fourier series** — numerical coefficient computation via Simpson's rule
@@ -62,9 +63,9 @@
 - **Symbolic limits** — `lim x→a f(x)` for finite points and ±∞ via direct substitution, L'Hôpital's rule (recursive, for 0/0 and ∞/∞), and numeric probing with pole/divergence detection. `limit <expr> [<var>] <point>` REPL command with step-by-step output in the notebook.
 - **Complex-number evaluation** — evaluate any expression over `ℂ`: `i` as a literal (`1 + 2i`), principal-branch `ln`/`sqrt`/powers/trig, exact integer powers, `exp(i*pi) = -1`. `cval <expr> [with <var>=<val>,...]` REPL command; `ceval` module (`eval_complex`) for library use.
 - **Summation & product (Σ/∏)** — evaluate `sum <expr> [<var>] <a> <b>` / `prod <expr> [<var>] <a> <b>` over integer bounds with O(1) closed forms (arithmetic series, Faulhaber `k²`/`k³`, geometric), exact rational accumulation (`Σ 1/k = 7381/2520`), and f64 fallback; empty ranges give 0 / 1.
-- **Symbolic polynomial solving (deg ≤ 4)** — `qsolve` via `to_poly`: quadratics use the discriminant (exact rationals, complex `i`-literal roots, or numeric snap); cubics/quartics with integer coefficients use rational-root deflation in exact arithmetic, then numeric roots when needed. `qsolve <expr> [= rhs]` REPL command with step-by-step output.
+- **Symbolic polynomial solving (deg ≤ 4)** — `qsolve` via `to_poly`: quadratics use the discriminant (exact rationals, **exact radicals** like `sqrt(2)`, complex `i`-literal roots, or numeric snap); cubics/quartics with integer coefficients use rational-root deflation in exact arithmetic, then numeric roots when needed. `qsolve <expr> [= rhs]` REPL command with step-by-step output.
 - **Polynomial expansion** — `expand (x+1)^3 → x^3 + 3*x^2 + 3*x + 1`: distributes products and integer powers into collected multivariate polynomials; non-polynomial factors stay intact. `expand` REPL command; `poly::to_poly`/`poly_to_expr` for library use.
-- **Partial fractions** — SymPy-style `apart`: decomposes rational functions into a quotient plus fractions over linear and irreducible quadratic denominators (numeric factorization + linear solve). `apart <expr> [<var>]` REPL command with step-by-step output in the notebook.
+- **Partial fractions** — SymPy-style `apart`: decomposes rational functions into a quotient plus fractions over linear and irreducible quadratic denominators. **Exact** cover-up rule when the denominator has distinct rational roots (`1/(x²−1)` → `1/2/(x−1) − 1/2/(x+1)`); numeric factorization + linear solve otherwise. `apart <expr> [<var>]` REPL command with step-by-step output in the notebook.
 - **Condition number & nullspace** — `cond <rows>` gives the 2-norm condition number from the SVD (singular matrices report `inf`); `null <rows>` returns an orthonormal basis of `{x : A·x = 0}` via the eigendecomposition of `AᵀA` (works for wide matrices). `Matrix::condition_number`/`Matrix::nullspace` for library use.
 - **Matrix REPL commands** — parity with the unsolve MCP `matrix` tool: `inv <rows>`, `transpose <rows>`, `trace <rows>`, `eigen <rows>` (symmetry checked), `linsolve [A|b]` (augmented matrix). Thin wrappers over the existing `Matrix` public API.
 - **Probability distributions & hypothesis tests** — Student-t, chi-squared, F, binomial, Poisson, and uniform distributions (pdf/cdf/pmf), quantile functions for critical values (`normal_ppf`, `student_t_ppf`, `chi2_ppf`, `f_ppf`), and the regularized incomplete beta `beta_inc`. Parametric tests: one-sample / Welch / paired t-tests (`ttest`), chi-squared goodness-of-fit (`chitest`), one-way ANOVA (`anova`). Nonparametric tests: Mann–Whitney U (`mwu`), Wilcoxon signed-rank (`wilcoxon`), Kruskal–Wallis (`kw`), Spearman rank correlation. Bootstrap confidence intervals (`boot mean|median ...`). `qtile <dist> <p> <params...>` REPL command for critical values.
@@ -82,11 +83,13 @@
 - **Fast math** — Chebyshev-based approximations of `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `pow` with argument reduction (~1e-12 accuracy)
 
 ### Input & Output
-- **LaTeX / TeX input** — parse `\frac`, `\sqrt`, `\sin`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, and more; supports `$...$`, `$$...$$`, `\[...\]`, `\(...\)` delimiters
+- **LaTeX / TeX input** — parse `\frac`, `\dfrac`, `\tfrac`, `\sqrt`, `\sqrt[n]{x}`, `\sin^n(x)`, `\pi`, `\left(\right)`, `^{...}`, `\Gamma`, `\log_2`, and more; supports `$...$`, `$$...$$`, `\[...\]`, `\(...\)` delimiters
+- **Unicode math input** — `×` `÷` `−` `π` `τ` `∞` `√` `∛` and superscript exponents (`x²`, `x⁻¹`, `xⁿ`) are normalized to ASCII before parsing
 - **Interactive REPL** — rustyline-powered with history, variable/function bindings
 - **Expression parser** — recursive-descent, implicit multiplication, scientific notation, 30+ built-in functions
 - **PNG plotting** — line, multi-series, scatter via `plotters`
 - **Web notebook** — Jupyter-like UI with KaTeX math rendering, step-by-step solving, exact fraction arithmetic, `.mnb` file format, cell-based evaluation
+- **MCP server** — Model Context Protocol over stdio (JSON-RPC 2.0); 14 tools let an AI agent drive the engine directly
 
 ## Quick Start
 
@@ -110,10 +113,14 @@ Just pass a string — `mathr` figures out what to do:
 mathr "sin(pi/4) + 2^3"               # evaluate an expression
 mathr "gamma(0.5)"                    # special functions
 mathr "diff x^3 + 2*x^2"              # symbolic derivative
+mathr "diff y*x^2 for y"              # name the variable explicitly → x^2
 mathr "integrate sin(x)"              # symbolic integration → -cos(x)
+mathr "integrate a*x for x"           # free factor pulled out → a*x^2/2
 mathr "simplify 2*x + 3*x + 0"        # algebraic simplification
 mathr "solve x^2 - 4"                 # find roots (Newton–Raphson)
+mathr "nsolve sin(x) x -7 7"           # find ALL roots by scanning (0, ±π, ±2π)
 mathr "int sin(x) 0 pi"               # numerical integral over [0, π]
+mathr "int sin(x) from 0 to pi/2"     # bounds may be expressions
 mathr "romberg sin(x) 0 3.14159"      # Romberg-integral of sin on [0, π]
 mathr "taylor exp(x) 0 5"             # Taylor series (5 terms around 0)
 mathr "poly-roots 1 -5 6"             # polynomial roots (Durand–Kerner)
@@ -157,6 +164,9 @@ mathr                         # interactive REPL
 mathr notebook                 # open web UI at http://127.0.0.1:3000
 mathr notebook examples/notebooks/demo.mnb   # load a notebook file
 mathr notebook examples/notebooks/demo.mnb 8080  # custom port
+
+# MCP server — drive mathr from an AI agent (JSON-RPC 2.0 over stdio)
+mathr mcp
 ```
 
 ## LaTeX / TeX Input
@@ -175,11 +185,36 @@ mathr "\Gamma{0.5}"                         # → 1.7724...  (√π)
 mathr "diff \sin(x^2)"                      # → cos(x^2)*2*x
 mathr "solve $\frac{x^2 - 4}{1}$"           # → root ≈ 2
 mathr "\frac{x^2 - 1}{x - 1}"              # → (x^2 - 1)/(x - 1) (simplify on unbound vars)
+mathr "\dfrac{1}{2}"                      # → 0.5          (\dfrac = \frac)
+mathr "\tfrac{3}{4}"                      # → 0.75         (\tfrac = \frac)
+mathr "\sqrt[3]{8}"                       # → 2            (n-th root)
+mathr "\sin^2(x)"                         # → sin(x)^2     (function power)
 ```
 
 **Supported delimiters**: `$...$`, `$$...$$`, `\[...\]`, `\(...\)`, or raw TeX with no delimiters.
 
-**Supported TeX commands**: `\frac`, `\sqrt`, `\pi`, `\tau`, `\infty`, `\cdot`, `\times`, `\left(`, `\right)`, `^{...}`, `\sin`, `\cos`, `\tan`, `\arcsin`, `\arccos`, `\arctan`, `\sinh`, `\cosh`, `\tanh`, `\exp`, `\ln`, `\log`, `\log_2`, `\log_{10}`, `\Gamma`, `\operatorname{...}`, `\text{...}`.
+**Supported TeX commands**: `\frac`, `\dfrac`, `\tfrac`, `\sqrt`, `\sqrt[n]{x}`, `\pi`, `\tau`, `\infty`, `\cdot`, `\times`, `\left(`, `\right)`, `^{...}`, `\sin`, `\cos`, `\tan`, `\arcsin`, `\arccos`, `\arctan`, `\sinh`, `\cosh`, `\tanh`, `\exp`, `\ln`, `\log`, `\log_2`, `\log_{10}`, `\Gamma`, `\operatorname{...}`, `\text{...}`.
+
+## Unicode Math Input
+
+Unicode math symbols are normalized to ASCII before parsing, so you can type
+them directly:
+
+```bash
+mathr "2×3"            # → 6              (× is U+00D7)
+mathr "6÷2"            # → 3              (÷ is U+00F7)
+mathr "−5"             # → -5             (− is U+2212, not a hyphen)
+mathr "π"              # → 3.14159...     (π is U+03C0)
+mathr "√2"             # → 1.41421...     (√ is U+221A)
+mathr "∛8"             # → 2              (∛ is U+221B)
+mathr "x²"             # → x^2            (superscript 2)
+mathr "x⁻¹"            # → x^(-1)         (superscript minus one)
+mathr "xⁿ"             # → x^(n)          (superscript n)
+mathr "√(x² + 1)"      # → sqrt(x^2 + 1)
+```
+
+Unmapped glyphs are passed through unchanged, so a genuine typo still reports
+the real error.
 
 ## REPL
 
@@ -332,6 +367,50 @@ mathr notebook examples/notebooks/demo.mnb 8080 # custom port
 | `POST` | `/api/reset` | Reset the shared evaluation context |
 | `GET` | `/api/context` | Get current variables and user functions |
 
+## MCP Server
+
+`mathr mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io)
+server over stdio, so an AI agent can drive mathr's engine directly.
+
+```bash
+mathr mcp
+```
+
+Point an MCP client at it:
+
+```json
+{
+  "mcpServers": {
+    "mathr": { "command": "mathr", "args": ["mcp"] }
+  }
+}
+```
+
+The server speaks JSON-RPC 2.0 (protocol version `2025-06-18`), one message
+per line, and exposes 14 tools:
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `evaluate` | `expression`, `variables?` | exact rational or numeric value |
+| `differentiate` | `expression`, `variable?` | derivative |
+| `integrate` | `expression`, `variable?` | antiderivative + C |
+| `solve` | `equation`, `variable?` | root(s) |
+| `nsolve` | `expression`, `variable?`, `from?`, `to?` | all real roots in the interval |
+| `simplify` | `expression` | simplified form |
+| `expand` | `expression` | expanded polynomial |
+| `taylor` | `expression`, `variable?`, `at?`, `terms?` | series |
+| `limit` | `expression`, `variable?`, `at?` | limit |
+| `poly-roots` | `coefficients` (leading first) | real + complex roots |
+| `number-theory` | `operation`, `a`, `b?` | exact integer result |
+| `stats` | `data` | descriptive statistics |
+| `matrix` | `operation`, `matrix` | matrix result |
+| `minimize` | `expression`, `variable?`, `from`, `to` | argmin + minimum |
+| `apart` | `expression`, `variable?` | partial fractions |
+
+Each tool is a thin wrapper over the same dispatch the CLI uses, so results
+never drift from `mathr "<command>"`. Exact rational arithmetic is preserved
+(`1/2 + 3/4` → `5/4`), and there is no LLM in the solve path.
+
 ## Crate API
 
 ```rust
@@ -439,7 +518,7 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `bigdec` | Arbitrary-precision decimal arithmetic: `pi`/`e`/`sqrt`/`exp`/`ln`/trig to N significant digits, `eval_decimal` over `Expr` AST, `dec` REPL command |
 | `limit` | Symbolic limits: direct substitution, recursive L'Hôpital's rule, numeric probing fallback, limits at ±∞, pole/DNE detection |
 | `poly` | Polynomial expansion/collection over `Expr`: multivariate `expand`, `to_poly`/`poly_to_expr` conversions |
-| `apart` | Partial fraction decomposition of rational functions (`apart <expr> [var]`): long division, numeric factorization, coefficient solve |
+| `apart` | Partial fraction decomposition of rational functions (`apart <expr> [var]`): long division, exact cover-up rule for distinct rational roots, numeric factorization otherwise |
 | `ode` | Euler, RK4, RK4 systems, adaptive RKF45 |
 | `taylor` | Symbolic Taylor series expansion |
 | `laurent` | Laurent series expansion around poles |
@@ -449,6 +528,7 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `rational` | Exact rational arithmetic (`Rational` type), `eval_rational` for exact AST evaluation |
 | `notebook` | `.mnb` notebook format, JSON cells with TeX/math input + output, **cell types** (math/text), **cell reordering**, **shared context** |
 | `server` | Minimal HTTP server for web notebook UI (KaTeX rendering, step-by-step solving) |
+| `mcp` | Model Context Protocol server over stdio (JSON-RPC 2.0) — 14 tools backed by the REPL dispatch |
 | `plot` | PNG plotting via `plotters` |
 
 ## Dependencies

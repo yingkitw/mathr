@@ -46,8 +46,188 @@ fn perfect_square_i64(n: i64) -> Option<i64> {
     }
 }
 
+/// Read a coefficient as an exact rational, if it is one.
+///
+/// A coefficient is exact when it is an integer, or a *small* rational that
+/// the value round-trips to (so `1/2` read back as `0.5` is recognised as
+/// `1/2`, but `0.3333333333` is not mistaken for `1/3`).
+fn exact_coeff(v: f64) -> Option<Rational> {
+    if !v.is_finite() {
+        return None;
+    }
+    if let Some(i) = near_int(v) {
+        return Some(Rational::from_int(i));
+    }
+    // A fraction with a small denominator: verify by round-tripping.
+    let r = Rational::from_float_snap(v, crate::rational::SNAP_MAX_DEN_COMPACT)?;
+    if (r.to_f64() - v).abs() > 1e-12 * v.abs().max(1.0) {
+        return None;
+    }
+    Some(r)
+}
+
 fn expr_from_rational(r: Rational) -> Expr {
     r.to_expr()
+}
+
+/// Exact quadratic roots for **rational** coefficients, expressed with exact
+/// radicals when the discriminant is not a perfect square.
+///
+/// The roots of `a·x² + b·x + c` are `(-b ± √(b² − 4ac)) / 2a`. When the
+/// coefficients are rationals, that whole expression can be kept exact:
+///
+/// - `(1/2)x² − (3/4)x + 1/8` → `(3 + sqrt(5))/4` and `(3 − sqrt(5))/4`
+/// - `(2/3)x² + (1/3)x − 1` → `1` and `-3/2` (the discriminant is a
+///   perfect square, so the radical disappears)
+///
+/// The radical is built with [`Expr::func`]("sqrt", …) over a *rational*
+/// discriminant, so no floating-point value is ever introduced.
+fn exact_rational_quadratic_radicals(a: f64, b: f64, c: f64) -> Option<Vec<Expr>> {
+    let ar = exact_coeff(a)?;
+    let br = exact_coeff(b)?;
+    let cr = exact_coeff(c)?;
+    if ar.num() == 0 {
+        return None;
+    }
+    // Discriminant: b² − 4ac, computed exactly.
+    let disc = br * br - Rational::from_int(4) * ar * cr;
+    if disc.num() < 0 {
+        // Negative discriminant — the roots are complex, not real radicals.
+        return None;
+    }
+    let two_a = ar + ar;
+    if two_a.num() == 0 {
+        return None;
+    }
+    // A perfect-square discriminant gives plain rationals.
+    if let Some(sd) = disc.exact_sqrt() {
+        let r1 = (-br + sd) / two_a;
+        let r2 = (-br - sd) / two_a;
+        return Some(vec![expr_from_rational(r1), expr_from_rational(r2)]);
+    }
+    // Otherwise keep the radical symbolic: (-b ± √disc) / 2a.
+    //
+    // The radical is built in *simplified* form: the perfect-square factor
+    // of the discriminant is pulled out, so `√8` becomes `2·√2` and `√(5/16)`
+    // becomes `¼·√5`. Every coefficient stays a rational, so no
+    // floating-point value is ever introduced.
+    let (rad_coeff, rad_inner) = split_radical(disc);
+    let sqrt_disc = Expr::func("sqrt", vec![expr_from_rational(rad_inner)]);
+    Some(vec![
+        build_radical_root(&br, &rad_coeff, &sqrt_disc, &two_a, false),
+        build_radical_root(&br, &rad_coeff, &sqrt_disc, &two_a, true),
+    ])
+}
+
+/// Build one root of the quadratic in tidied radical form.
+///
+/// The root is `(-b ± c·√d) / e` with `b`, `c`, `e` rational and `d`
+/// square-free. The result is written as `p + q·√d` (or `q·√d`) with the
+/// denominator already folded in, so `2·√2 / 2` reads `√2` and
+/// `(3/4 + ¼·√5) / 1` reads `3/4 + ¼·√5`.
+fn build_radical_root(
+    b: &Rational,
+    rad_coeff: &Rational,
+    sqrt_disc: &Expr,
+    den: &Rational,
+    minus: bool,
+) -> Expr {
+    // The rational part: -b / e.
+    let rat = (-*b) / *den;
+    // The radical coefficient: ±c / e.
+    let mut coef = *rad_coeff / *den;
+    if minus {
+        coef = -coef;
+    }
+    // A rational part of zero is dropped.
+    let rat_part = if rat.num() == 0 {
+        None
+    } else {
+        Some(expr_from_rational(rat))
+    };
+    // The radical term: coef·√d. A coefficient with a denominator is
+    // written as a division (`√5/4` rather than `1/4*√5`), which reads
+    // better and matches how a rational is displayed elsewhere.
+    let radical_part = if coef.num() == 0 {
+        None
+    } else if coef.num() == 1 && coef.den() == 1 {
+        Some(sqrt_disc.clone())
+    } else if coef.num() == -1 && coef.den() == 1 {
+        Some(Expr::neg(sqrt_disc.clone()))
+    } else if coef.den() != 1 {
+        // √d · num / den — keep the sign on the numerator.
+        let signed = if coef.num() < 0 {
+            Expr::neg(sqrt_disc.clone())
+        } else {
+            sqrt_disc.clone()
+        };
+        Some(Expr::div(signed, Expr::num(coef.den() as f64)))
+    } else {
+        Some(Expr::mul(Expr::num(coef.num() as f64), sqrt_disc.clone()))
+    };
+    match (rat_part, radical_part) {
+        (None, None) => Expr::num(0.0),
+        (Some(r), None) => r,
+        (None, Some(t)) => t,
+        (Some(r), Some(t)) => {
+            // A negative radical term reads better as a subtraction:
+            // `3/4 - sqrt(5)/4` rather than `3/4 + -sqrt(5)/4`.
+            match &t {
+                Expr::Neg(inner) => Expr::sub(r, (**inner).clone()),
+                // `-√d / n` → `r - √d/n`.
+                Expr::Div(n, d) => match n.as_ref() {
+                    Expr::Neg(inner) => Expr::sub(r, Expr::div((**inner).clone(), (**d).clone())),
+                    _ => Expr::add(r, t),
+                },
+                _ => Expr::add(r, t),
+            }
+        }
+    }
+}
+
+/// Split a positive rational into `coefficient · √(inner)` with `inner`
+/// square-free.
+///
+/// `8` → `(2, 2)`, `5/16` → `(1/4, 5)`, `12` → `(2, 3)`. The coefficient is
+/// returned as a [`Rational`] so no floating-point value is introduced.
+fn split_radical(r: Rational) -> (Rational, Rational) {
+    // Pull the largest square *factor* out of the numerator and the
+    // denominator. `8 = 4·2` → the square factor is 4, so √8 = 2·√2.
+    let (n_root, inner_num) = split_square_factor(r.num().unsigned_abs());
+    let (d_root, inner_den) = split_square_factor(r.den().unsigned_abs());
+    let inner = Rational::new(inner_num as i64, inner_den as i64).unwrap_or(r);
+    let coeff = Rational::new(n_root as i64, d_root as i64).unwrap_or_else(|_| Rational::from_int(1));
+    (coeff, inner)
+}
+
+/// Split `n` into `root² · rest` with `rest` square-free.
+///
+/// `8` → `(2, 2)`, `12` → `(2, 3)`, `16` → `(4, 1)`, `5` → `(1, 5)`,
+/// `18` → `(3, 2)`, `50` → `(5, 2)`.
+fn split_square_factor(n: u64) -> (u64, u64) {
+    if n == 0 {
+        return (0, 0);
+    }
+    let mut rest = n;
+    let mut root: u64 = 1;
+    // Trial division by small primes is enough to find the square factor.
+    let mut p: u64 = 2;
+    while p * p <= rest {
+        let mut count = 0u32;
+        while rest.is_multiple_of(p) {
+            rest /= p;
+            count += 1;
+        }
+        // Every *pair* of the prime contributes to the square root; a lone
+        // leftover one stays in the square-free part.
+        root *= p.pow(count / 2);
+        if count % 2 == 1 {
+            rest *= p;
+        }
+        p += if p == 2 { 1 } else { 2 };
+    }
+    // Whatever remains is either 1 or a prime (already square-free).
+    (root, rest)
 }
 
 /// When `a`, `b`, `c` are exact integers and `d = b² − 4ac` is a perfect square,
@@ -198,6 +378,11 @@ fn asc_to_rational_int(asc: &[f64]) -> Option<Vec<Rational>> {
 fn solve_quadratic_f64(a: f64, b: f64, c: f64) -> Result<Vec<Expr>> {
     if a != 0.0 {
         if let Some(roots) = try_exact_rational_quadratic_roots(a, b, c) {
+            return Ok(roots);
+        }
+        // Rational coefficients: exact rationals when the discriminant is a
+        // perfect square, exact radicals otherwise.
+        if let Some(roots) = exact_rational_quadratic_radicals(a, b, c) {
             return Ok(roots);
         }
         let d = b * b - 4.0 * a * c;
@@ -609,10 +794,94 @@ mod tests {
     }
 
     #[test]
-    fn irrational_discriminant_gives_decimals() {
+    fn irrational_discriminant_gives_exact_radicals() {
+        // x^2 - 2 has roots ±√2 — kept exact rather than collapsed to
+        // decimals.
         let r = roots("x^2 - 2");
-        let x1: f64 = r[0].strip_prefix("x = ").unwrap().parse().unwrap();
-        assert!((x1 - std::f64::consts::SQRT_2).abs() < 1e-10, "got {r:?}");
+        assert_eq!(r[0], "x = sqrt(2)", "got {r:?}");
+        assert_eq!(r[1], "x = -sqrt(2)", "got {r:?}");
+        // The value must still be right.
+        let e = crate::parser::Parser::parse("sqrt(2)").unwrap();
+        let v = crate::eval::eval(&e, &crate::eval::Context::standard()).unwrap();
+        assert!((v - std::f64::consts::SQRT_2).abs() < 1e-10, "got {v}");
+    }
+
+    // ---- exact radical roots ------------------------------------------------
+
+    #[test]
+    fn radical_pulls_out_square_factors() {
+        // √8 = 2√2, √12 = 2√3, √50 = 5√2.
+        assert_eq!(roots("x^2 - 8")[0], "x = 2*sqrt(2)", "got {:?}", roots("x^2 - 8"));
+        assert_eq!(roots("x^2 - 12")[0], "x = 2*sqrt(3)", "got {:?}", roots("x^2 - 12"));
+        assert_eq!(roots("x^2 - 50")[0], "x = 5*sqrt(2)", "got {:?}", roots("x^2 - 50"));
+    }
+
+    #[test]
+    fn radical_roots_are_signed() {
+        let r = roots("x^2 - 8");
+        assert_eq!(r[0], "x = 2*sqrt(2)", "got {r:?}");
+        assert_eq!(r[1], "x = -2*sqrt(2)", "got {r:?}");
+    }
+
+    #[test]
+    fn rational_coefficients_give_exact_radicals() {
+        // (1/2)x² − (3/4)x + 1/8: discriminant 5/16, roots (3 ± √5)/4.
+        let r = roots("(1/2)x^2-(3/4)x+1/8");
+        assert_eq!(r[0], "x = 3/4 + sqrt(5)/4", "got {r:?}");
+        assert_eq!(r[1], "x = 3/4 - sqrt(5)/4", "got {r:?}");
+    }
+
+    #[test]
+    fn rational_coefficients_with_square_discriminant_give_rationals() {
+        // (2/3)x² + (1/3)x − 1 has discriminant 1/9 → rational roots.
+        let r = roots("(2/3)x^2+(1/3)x-1");
+        assert_eq!(r[0], "x = 1", "got {r:?}");
+        assert_eq!(r[1], "x = -3/2", "got {r:?}");
+    }
+
+    #[test]
+    fn radical_roots_evaluate_correctly() {
+        // The numeric value must match the true root.
+        for (expr, want) in [("x^2-2", 2.0f64.sqrt()), ("x^2-8", 8.0f64.sqrt())] {
+            let r = roots(expr);
+            let e = crate::parser::Parser::parse(r[0].strip_prefix("x = ").unwrap()).unwrap();
+            let v = crate::eval::eval(&e, &crate::eval::Context::standard()).unwrap();
+            assert!((v - want).abs() < 1e-12, "{}: got {} want {}", expr, v, want);
+        }
+    }
+
+    #[test]
+    fn radical_roots_satisfy_the_polynomial() {
+        // Substituting a radical root back into the equation gives ~0.
+        for expr in ["x^2-2", "x^2-8", "(1/2)x^2-(3/4)x+1/8"] {
+            let r = roots(expr);
+            let e = crate::parser::Parser::parse(expr).unwrap();
+            for root in &r {
+                let root_expr =
+                    crate::parser::Parser::parse(root.strip_prefix("x = ").unwrap()).unwrap();
+                let mut ctx = crate::eval::Context::standard();
+                ctx.set("x", 0.0);
+                // Evaluate the polynomial with the root substituted.
+                let val = crate::eval::eval(&e.substitute("x", &root_expr), &ctx).unwrap();
+                assert!(val.abs() < 1e-9, "{} root {} gives {}", expr, root, val);
+            }
+        }
+    }
+
+    #[test]
+    fn integer_quadratic_roots_unchanged() {
+        // The pre-existing exact-integer path must not regress.
+        let r = roots("6x^2-5x-1");
+        assert_eq!(r[0], "x = 1", "got {r:?}");
+        assert_eq!(r[1], "x = -1/6", "got {r:?}");
+    }
+
+    #[test]
+    fn complex_roots_still_use_floats() {
+        // A negative discriminant has no real radical — the complex path
+        // is unchanged.
+        let r = roots("x^2+x+1");
+        assert!(r[0].contains('i'), "got {r:?}");
     }
 
     #[test]
