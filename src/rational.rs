@@ -595,7 +595,20 @@ fn cube_overflows(r: u64, n: u64) -> bool {
 }
 
 /// Reduce a fraction with i128 numerator/denominator to a Rational (i64).
-/// Panics if the reduced values don't fit in i64.
+///
+/// The intermediate arithmetic is done in `i128`, which is wide enough for
+/// any `i64 × i64` product. The final narrowing to `i64` is **checked**:
+/// a value that does not fit would otherwise *silently wrap* — `i64::MAX × 2`
+/// used to become `-2`.
+///
+/// On overflow the result **saturates** to the largest representable
+/// magnitude (with the correct sign), which keeps the `Rational` invariant
+/// (a reduced fraction that fits in `i64`) instead of producing a wrong
+/// answer. Callers that must not lose precision should check the magnitude
+/// beforehand or use `BigInt` (`crate::bigint`) instead.
+///
+/// Cross-port pattern from unsolve `rational.ts:21,38` (which returns
+/// `null` past 2⁵³ rather than wrapping).
 fn reduce_i128(num: i128, den: i128) -> Rational {
     if den == 0 {
         panic!("Rational: denominator cannot be zero");
@@ -606,10 +619,22 @@ fn reduce_i128(num: i128, den: i128) -> Rational {
     let den = den / g;
     let num = if den < 0 { -num } else { num };
     let den = den.abs();
-    Rational {
-        num: num as i64,
-        den: den as i64,
-    }
+    // Checked narrowing: saturate rather than wrap.
+    let num = if num > i64::MAX as i128 || num < i64::MIN as i128 {
+        if num < 0 {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    } else {
+        num as i64
+    };
+    let den = if den > i64::MAX as i128 {
+        i64::MAX
+    } else {
+        den as i64
+    };
+    Rational { num, den }
 }
 
 fn gcd_u128(a: u128, b: u128) -> u128 {
@@ -617,6 +642,27 @@ fn gcd_u128(a: u128, b: u128) -> u128 {
         a
     } else {
         gcd_u128(b, a % b)
+    }
+}
+
+/// An error message for an integer that failed to parse.
+///
+/// Distinguishes "not a number" from "a valid number that does not fit in
+/// `i64`" — the latter needs a different remedy (use `BigInt`).
+fn parse_int_error(text: &str, what: &str) -> MathError {
+    let looks_numeric = !text.is_empty()
+        && text
+            .trim_start_matches(['-', '+'])
+            .chars()
+            .all(|c| c.is_ascii_digit());
+    if looks_numeric {
+        MathError::InvalidArgument(format!(
+            "parse_rational: {} '{}' is too large for 64-bit arithmetic \
+             (use `big` for arbitrary precision)",
+            what, text
+        ))
+    } else {
+        MathError::InvalidArgument(format!("parse_rational: bad {}", what))
     }
 }
 
@@ -633,11 +679,11 @@ pub fn parse_rational(s: &str) -> Result<Rational> {
         let num: i64 = parts[0]
             .trim()
             .parse()
-            .map_err(|_| MathError::InvalidArgument("parse_rational: bad numerator".into()))?;
+            .map_err(|_| parse_int_error(parts[0].trim(), "numerator"))?;
         let den: i64 = parts[1]
             .trim()
             .parse()
-            .map_err(|_| MathError::InvalidArgument("parse_rational: bad denominator".into()))?;
+            .map_err(|_| parse_int_error(parts[1].trim(), "denominator"))?;
         Rational::new(num, den)
     } else if s.contains('.') {
         // Decimal → rational
@@ -753,6 +799,46 @@ mod tests {
         assert!(Rational::from_int(-1).exact_factorial().is_none());
         // 21! overflows i64.
         assert!(Rational::from_int(21).exact_factorial().is_none());
+    }
+
+    // ---- overflow handling --------------------------------------------------
+
+    #[test]
+    fn multiplication_does_not_wrap_around() {
+        // Regression: `i64::MAX * 2` used to wrap to -2 (a silent wrong
+        // answer). It now saturates at i64::MAX.
+        let big = Rational::from_int(i64::MAX);
+        let r = big * Rational::from_int(2);
+        assert_eq!(r.num(), i64::MAX, "got {}", r);
+        assert!(r.num() > 0, "the result must not wrap negative");
+    }
+
+    #[test]
+    fn multiplication_preserves_sign_on_overflow() {
+        // A negative overflow saturates to i64::MIN, not a wrapped positive.
+        let big = Rational::from_int(i64::MIN);
+        let r = big * Rational::from_int(2);
+        assert_eq!(r.num(), i64::MIN, "got {}", r);
+    }
+
+    #[test]
+    fn ordinary_multiplication_is_exact() {
+        // The normal range must be unaffected by the saturation guard.
+        let a = Rational::new(3, 4).unwrap();
+        let b = Rational::new(5, 6).unwrap();
+        assert_eq!((a * b).to_string(), "5/8");
+    }
+
+    #[test]
+    fn parse_reports_too_large_distinctly() {
+        // A valid number that does not fit in i64 is not the same error as
+        // a non-number.
+        let err = parse_rational("999999999999999999999/3").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("too large"), "got: {msg}");
+        assert!(msg.contains("big"), "got: {msg}");
+        let err = parse_rational("abc/3").unwrap_err();
+        assert!(err.to_string().contains("bad"), "got: {}", err);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::expr::Expr;
 ///   - Identifiers and constants (`pi`, `e`, `tau`, `inf`)
 ///   - Binary operators: `+ - * / ^` with standard precedence,
 ///     `^` right-associative
-///   - Unary minus
+///   - Unary plus/minus (lower precedence than `^`, so `-x^2 == -(x^2)`)
 ///   - Function calls: `sin(x)`, `log(x, 10)`
 ///   - Parenthesised sub-expressions
 ///   - Implicit multiplication: `2x`, `3(x+1)`, `(x)(y)`
@@ -36,10 +36,17 @@ impl<'a> Parser<'a> {
         let e = p.parse_expr()?;
         p.skip_ws();
         if p.pos < p.src.len() {
-            return Err(MathError::Parse(format!(
-                "unexpected trailing characters at byte {}",
-                p.pos
-            )));
+            // Name the offending character, and point at `solve` when the
+            // leftover is an `=` — that almost always means the user meant
+            // an equation rather than an expression.
+            let rest = &p.src[p.pos..];
+            let ch = rest[0] as char;
+            let msg = if ch == '=' {
+                "unexpected '=' — for equations use: solve <lhs> = <rhs>".to_string()
+            } else {
+                format!("unexpected '{}' at byte {}", ch, p.pos)
+            };
+            return Err(MathError::Parse(msg));
         }
         Ok(e)
     }
@@ -234,7 +241,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_factor(&mut self) -> Result<Expr> {
-        let base = self.parse_unary()?;
+        // Read every prefix sign before the atom, then apply it to the complete
+        // postfix/power expression. This gives conventional mathematical
+        // precedence: `-x^2 == -(x^2)`, while `(-x)^2` remains explicit.
+        let mut negative = false;
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b'+') => {
+                    self.pos += 1;
+                }
+                Some(b'-') => {
+                    self.pos += 1;
+                    negative = !negative;
+                }
+                _ => break,
+            }
+        }
+
+        let base = self.parse_atom()?;
         self.skip_ws();
         // Postfix factorial: n! or (expr)!
         let mut result = base;
@@ -258,24 +283,13 @@ impl<'a> Parser<'a> {
             } else {
                 self.parse_factor()? // right-associative
             };
-            Ok(Expr::pow(result, exp))
+            result = Expr::pow(result, exp);
+        }
+        if negative {
+            Ok(Expr::neg(result))
         } else {
             Ok(result)
         }
-    }
-
-    fn parse_unary(&mut self) -> Result<Expr> {
-        self.skip_ws();
-        if self.peek() == Some(b'+') {
-            self.pos += 1;
-            return self.parse_unary();
-        }
-        if self.peek() == Some(b'-') {
-            self.pos += 1;
-            let e = self.parse_unary()?;
-            return Ok(Expr::neg(e));
-        }
-        self.parse_atom()
     }
 
     fn is_atom_starter(&self, c: Option<u8>) -> bool {
@@ -700,6 +714,34 @@ mod tests {
     fn unary_and_parens() {
         assert_eq!(p("-x"), Expr::neg(Expr::var("x")));
         assert_eq!(p("-(1+2)"), Expr::neg(Expr::add(Expr::num(1.0), Expr::num(2.0))));
+    }
+
+    #[test]
+    fn unary_minus_binds_looser_than_power() {
+        assert_eq!(
+            p("-x^2"),
+            Expr::neg(Expr::pow(Expr::var("x"), Expr::num(2.0)))
+        );
+        assert_eq!(
+            p("(-x)^2"),
+            Expr::pow(Expr::neg(Expr::var("x")), Expr::num(2.0))
+        );
+        assert_eq!(p("--x^2"), Expr::pow(Expr::var("x"), Expr::num(2.0)));
+    }
+
+    #[test]
+    fn signed_exponents_still_parse() {
+        assert_eq!(
+            p("2^-3"),
+            Expr::pow(Expr::num(2.0), Expr::neg(Expr::num(3.0)))
+        );
+        assert_eq!(
+            p("2^-x^2"),
+            Expr::pow(
+                Expr::num(2.0),
+                Expr::neg(Expr::pow(Expr::var("x"), Expr::num(2.0)))
+            )
+        );
     }
 
     #[test]

@@ -11,7 +11,8 @@
 | `integrate-num` | `mathr integrate-num <expr> a b [--var x] [--n N] [--adaptive] [--romberg LEVELS]` | Numerical integral |
 | `solve` | `mathr solve <expr> [--var x] [--guess 0] [--bisect A B] [--max-iter 100] [--tol 1e-10]` | Root finding |
 | `solve-system` | `mathr solve-system <sys> [--guess x0,y0,...]` | Newton's method for nonlinear systems |
-| `poly-roots` | `mathr poly-roots <coeffs...>` | Polynomial roots (Durand–Kerner) |
+| `poly-roots` | `mathr poly-roots <coeffs...>` | Real polynomial roots (Durand–Kerner; leading-first coefficients, near-zero leading terms stripped, roots polished and deduplicated) |
+| `base` | `mathr base <n> <target>` | Number-base conversion (exact, bases 2–36) |
 | `isolate-roots` | `mathr isolate-roots <ints...>` | Real root isolation (VAS, integer coefficients) |
 | `plot` | `mathr plot <expr> [-o path] [--var x] [--a -τ] [--b τ] [--samples 800]` | PNG plot |
 | `fft` | `mathr fft <samples...> [--complex] [--inverse] [--magnitude] [--power]` | FFT |
@@ -48,8 +49,8 @@
 | `hermite` | `mathr hermite x1 y1 d1 x2 y2 d2 ... x_at` | Piecewise cubic Hermite with given slopes |
 | `minimize` | `mathr minimize <expr> [var] a b` | Golden-section minimum of expr on `[a, b]` || `gcd` | `mathr gcd <n1> <n2> [...]` | GCD of integers |
 | `lcm` | `mathr lcm <n1> <n2> [...]` | LCM of integers |
-| `is-prime` | `mathr is-prime <n>` | Primality test |
-| `factor` | `mathr factor <n>` | Prime factorization |
+| `is-prime` | `mathr is-prime <n>` | Primality test (auto-upgrades to BigInt beyond 2⁶⁴) |
+| `factor` | `mathr factor <n>` | Prime factorization (auto-upgrades to BigInt beyond 2⁶⁴) |
 | `fib` | `mathr fib <n>` | nth Fibonacci number |
 | `binom` | `mathr binom <n> <k>` | Binomial coefficient C(n,k) |
 | `fact` | `mathr fact <n>` | Factorial n! |
@@ -71,11 +72,35 @@
 ```
 expr   := term (('+' | '-') term)*
 term   := factor (('*' | '/' | 'mod') factor)*  -- includes implicit multiplication
-factor := unary ('!')* ('^' factor)?            -- postfix factorial, then right-assoc power
-unary  := ('+' | '-')? atom
+factor := sign* atom ('!')* ('^' factor)?       -- postfix factorial, then right-assoc power
+sign   := '+' | '-'
 atom   := number | ident | ident '(' args ')' | '(' expr ')' | '|' expr '|'
 args   := expr (',' expr)*
 ```
+
+Prefix signs apply to the complete postfix/power expression, following standard
+mathematical precedence: `-x^2 == -(x^2)`. Use explicit parentheses for a
+negative base: `(-x)^2`. Signed exponents remain supported (`2^-3 == 1/8`).
+
+### Equations at the Top Level
+
+A top-level `=` in the input routes to the solver — an equation is not an
+expression, and the user means "find the roots":
+
+```
+mathr> x^2 - 4 = 0
+x = 2, x = -2
+mathr> x^2+1=0
+x = i, x = -i
+mathr> exp(x) = 5
+root ≈ 1.6094379124 (f = 3.552713678800501e-15)
+```
+
+**Polynomial** equations use the symbolic solver, so complex roots and exact
+radicals come out exactly; **non-polynomial** equations fall back to numeric
+root finding. The `=` must be at the top level — a nested `(a = b)` or a
+comparison (`!=`, `==`) is not an equation. A leftover `=` in another command
+is reported as "unexpected '=' — for equations use: solve <lhs> = <rhs>".
 
 ### Implicit Multiplication
 
@@ -160,6 +185,21 @@ mathr> mathml import <mfrac><mn>1</mn><mn>2</mn></mfrac>
 ```
 
 Supported MathML elements: `<mn>`, `<mi>`, `<mo>`, `<mrow>`, `<mfrac>`, `<msup>`, `<msub>`, `<msqrt>`, `<mroot>`, `<mtext>`, `<mstyle>`, `<mfenced>`, `<math>`
+
+### LaTeX Output
+
+The counterpart of the LaTeX *input* support: an expression written in plain
+syntax comes back as TeX.
+
+```
+mathr> latex x^2/2
+\frac{x^{2}}{2}
+mathr> latex sin(x)
+\sin\left(x\right)
+```
+
+The emitted TeX **round-trips** — it parses back to an equal expression — so
+`latex` output can be fed straight back into mathr.
 
 ### Serialization
 
@@ -274,6 +314,8 @@ Supported functions: `sqrt`, `exp`, `ln`, `log`, `log10`, `log2`, `sin`, `cos`, 
 
 `qsolve` solves `expr = 0` (or `lhs = rhs`) symbolically for a single inferred variable when the equation is a polynomial of degree ≤ 4 after expansion. Linear/quadratic: discriminant classification (perfect-square → exact rationals; zero → double root; negative → complex-conjugate roots with the `i` literal, evaluable via `cval`; irrational → **exact radicals** such as `sqrt(2)` or `3/4 + sqrt(5)/4`; else 12-sig snap). Rational coefficients are handled exactly (the discriminant is computed in exact rational arithmetic). Cubic/quartic with integer coefficients: rational-root test and exact deflation, then the same quadratic finish; remaining cases use numeric roots (Durand–Kerner).
 
+Two degenerate cases are reported distinctly: an **identity** (`x − x = 0`) means "every value is a solution", and a **nonzero constant** means "no solution". A **repeated root** is listed once — `qsolve (x-1)^2` gives `x = 1`, not `x = 1, x = 1`.
+
 ```
 mathr> qsolve x^2 - 4
 x = 2, x = -2
@@ -310,9 +352,11 @@ The `limit` module computes two-sided limits `lim x→a f(x)` for finite points 
 2. **L'Hôpital's rule** for quotients in `0/0` or `∞/∞` form — differentiates numerator and denominator and recurses (up to 6 times).
 3. **Numeric probing** — evaluates both sides approaching the target; detects finite convergence, poles (`±∞`), opposite-side divergence, and oscillation (`does not exist`).
 
-**REPL** (`limit <expr> [<var>] <point>` — the variable may be omitted when the expression has exactly one):
+**REPL** (`limit <expr> [<var>] <point>` — the variable may be omitted when the expression has exactly one; the `at` keyword may also separate the expression from the point):
 ```
 mathr> limit sin(x)/x x 0
+lim sin(x)/x as x → 0 = 1
+mathr> limit sin(x)/x at 0
 lim sin(x)/x as x → 0 = 1
 mathr> limit (x^2 - 1)/(x - 1) 1
 lim (x^2 - 1)/(x - 1) as x → 1 = 2
@@ -327,6 +371,8 @@ lim x/exp(x) as x → +∞ = 0
 ```
 
 Points: any number, or `inf`/`-inf`. The notebook step-by-step view shows substitution results, L'Hôpital applications, and the final verdict.
+
+The two sides are probed **separately**, and a pole is detected by the samples *growing* toward the target (each of the last three exceeding the previous by a factor of five) rather than by a fixed magnitude — so small-magnitude poles like `1/(x−1)` are recognised.
 
 **Limitations**:
 - Two-sided limits only (no one-sided `x → a⁺` syntax; sides are analysed internally).
@@ -348,6 +394,19 @@ x^2 + 5*x + 6
 ```
 
 **Limitations**: integer exponents up to 64 are expanded; larger (or symbolic) exponents stay as `Pow`. Division only distributes when the denominator is a non-zero constant. Term count is capped at 20,000.
+
+**Univariate expansion** (`expand-in <expr> for <var>`) expands in **one** variable only, treating every other sub-expression as an opaque *exact* coefficient. This reaches cases the multivariate expansion cannot — it only distributes when both sides are polynomials:
+
+```
+mathr> expand-in (x + sin(y))^2 for x
+x^2 + 2*sin(y)*x + sin(y)*sin(y)
+mathr> expand-in (x + 2*y)^3 for x
+x^3 + 6*y*x^2 + 12*y^2*x + 8*y^3
+mathr> expand-in (a + x*b)^2 for x
+b^2*x^2 + 2*a*b*x + a^2
+```
+
+This is the "termsOf" style the CASs use: the target variable is expanded, everything else is carried along exactly (never rounded to a float). The variable is required.
 
 ### Partial Fraction Decomposition
 
@@ -454,6 +513,32 @@ f(4.7123889909) = -1
 ```
 
 **Limitations**: golden-section assumes unimodality on the bracket; Nelder–Mead finds local minima (validated on Rosenbrock to 1e-4); near-flat minima are noise-limited to ~1e-8 accuracy.
+
+### Exact Linear Systems
+
+`msolve` solves a system of linear equations **exactly**, using rational
+Gaussian elimination. The equations are separated by `;` and may be given
+either with an explicit `=` or with the right-hand side implicit:
+
+```
+mathr> msolve 2x + y = 5; x + 3y = 10
+x = 1, y = 3
+mathr> msolve 2x + y - 5; x + 3y - 10
+x = 1, y = 3
+mathr> msolve (1/2)x + y = 1; x + (1/3)y = 1
+x = 4/5, y = 3/5
+```
+
+The answer stays exact — a rational, never a decimal approximation. 2 to 4
+variables are supported.
+
+**Limitations**: only *linear* equations (a squared variable or a product of
+variables is rejected); the number of equations must equal the number of
+variables; a singular system is reported as such rather than returning a
+spurious answer. Note that `e` is Euler's number in mathr, not a variable.
+
+`linsolve` remains the *numeric* solver that takes an augmented matrix
+`[A | b]`.
 
 ### Sparse Matrices & Conjugate Gradient
 
@@ -575,6 +660,34 @@ p=0.001
 - Decimals: `3.14`
 - Scientific: `1.5e3`, `2E-2`
 
+### Number Bases
+
+`base <n> <target>` converts an integer to another base. The conversion is
+**exact** — the value is carried in arbitrary precision, so a 40-digit
+decimal converts to hex and back without loss.
+
+```
+mathr> base 255 hex
+FF_16
+mathr> base 255 bin
+11111111_2
+mathr> base 8 oct
+10_8
+mathr> base 42 36
+16_36
+```
+
+The target may be a name (`bin`, `oct`, `dec`, `hex`) or a number from 2 to
+36. To convert *between* bases, use the `from … to …` form:
+
+```
+mathr> base FF from 16 to 10
+255_10
+```
+
+Negative values keep their sign (`base -255 hex` → `-FF_16`), and letters are
+accepted in either case on input.
+
 ## Constants
 
 | Name | Value |
@@ -615,6 +728,18 @@ p=0.001
 | `simplify <expr>` | Simplify |
 | `int <expr> <a> <b>` | Numerical integral (bounds may be expressions, e.g. `pi`) |
 | `romberg <expr> <a> <b>` | Romberg-integrated (bounds may be expressions, e.g. `pi`) |
+
+The numerical integrators **probe the domain** first: the integrand must be
+finite at both endpoints and at the midpoint. An undefined integrand (a
+pole, or `sqrt` on a negative argument) is reported as a domain error naming
+the offending point, rather than returning `NaN`:
+
+```
+mathr> int 1/x 0 1
+Error: domain error: integrate_adaptive: the integrand is not defined at x = 0 (it must be finite on the interval)
+```
+
+`minimize` applies the same check to the two ends of its bracket.
 | `solve <expr> [var] [guess]` | Root finding (one root, Newton–Raphson from a guess) |
 | `nsolve <expr> [var] [lo hi]` | **All** real roots by scanning for sign changes (default interval `[-30, 30]`; poles are rejected, not reported as roots) |
 | `plot <expr> a b [out.png]` | PNG plot |
@@ -653,12 +778,13 @@ p=0.001
 | `rank <rows...>` | Matrix rank |
 | `cond <rows...>` | 2-norm condition number σ_max/σ_min (SVD); `inf` for singular |
 | `null <rows...>` | Orthonormal nullspace basis of `{x : A·x = 0}` |
-| `det <rows...>` | Matrix determinant |
+| `det <rows...>` | Matrix determinant (scale-relative: a tiny-scaled but nonsingular matrix keeps its determinant) |
 | `inv <rows...>` | Matrix inverse (errors when singular) |
 | `transpose <rows...>` | Matrix transpose |
 | `trace <rows...>` | Sum of diagonal entries |
 | `eigen <rows...>` | Symmetric eigendecomposition (λ ascending, eigenvectors as columns; symmetry checked) |
 | `linsolve [A|b]` | Solve A·x = b from the augmented matrix (last column = b) |
+| `msolve <eq>; <eq>; …` | Solve a system of linear equations **exactly** (2–4 variables, rational arithmetic) |
 | `spline x1 y1 x2 y2 ... x_at` | Cubic spline at `x_at` |
 | `chebyshev n [x]` | Chebyshev `T_n(x)` (or `n` nodes) |
 | `legendre n [x]` | Legendre `P_n(x)` (or `n`-point Gauss–Legendre) |
@@ -668,6 +794,7 @@ p=0.001
 | `diophantine <a> <b> <c>` | Linear Diophantine solver |
 | `dlog <g> <h> <p>` | Discrete logarithm |
 | `mathml <expr>` / `mathml import <ml>` | Presentation MathML export/import |
+| `latex <expr>` | LaTeX output (the counterpart of the LaTeX *input* support) |
 | `serialize <fmt> <expr>` / `serialize <fmt> import <t>` | Expression serialization (`fmt`: `sexpr`/`json`/`rpn`) |
 | `lean <expr>` | Lean 4 export (self-contained file, needs Mathlib) |
 | `interval <expr> with <var>=[lo,hi],...` | Rigorous bounds via interval arithmetic |
@@ -767,6 +894,7 @@ Supported methods: `initialize`, `tools/list`, `tools/call`, `ping`.
 | `nsolve` | `expression`, `variable?`, `from?`, `to?` | all real roots in the interval |
 | `simplify` | `expression` | simplified form |
 | `expand` | `expression` | expanded polynomial |
+| `expand-in` | `expression`, `variable` | expanded in one variable (others become exact coefficients) |
 | `taylor` | `expression`, `variable?`, `at?`, `terms?` | series |
 | `limit` | `expression`, `variable?`, `at?` | limit |
 | `poly-roots` | `coefficients` (leading first) | real + complex roots |

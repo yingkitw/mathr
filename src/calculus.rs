@@ -56,6 +56,14 @@ pub fn integrate_simpson<F: Fn(f64) -> f64>(f: F, a: f64, b: f64, n: usize) -> R
 
 /// Adaptive Simpson's quadrature: recursively subdivides the interval until
 /// the estimate meets the requested absolute/relative tolerance.
+///
+/// **Domain probe**: the endpoints and the midpoint must all be finite. A
+/// function that is undefined inside the interval (a pole, or `sqrt` on a
+/// negative argument) would otherwise produce a `NaN` estimate — or, worse,
+/// recurse to the depth limit without ever converging. The error names the
+/// offending point.
+///
+/// Cross-port pattern from unsolve `numeric.ts:51-57`.
 pub fn integrate_adaptive<F: Fn(f64) -> f64>(
     f: F,
     a: f64,
@@ -68,6 +76,18 @@ pub fn integrate_adaptive<F: Fn(f64) -> f64>(
             "integrate_adaptive: bad interval [{}, {}]",
             a, b
         )));
+    }
+
+    // The integrand must be defined at the endpoints and the midpoint.
+    for x in [a, 0.5 * (a + b), b] {
+        let v = f(x);
+        if !v.is_finite() {
+            return Err(MathError::Domain(format!(
+                "integrate_adaptive: the integrand is not defined at x = {} \
+                 (it must be finite on the interval)",
+                x
+            )));
+        }
     }
 
     fn rec<F2: Fn(f64) -> f64>(
@@ -164,6 +184,17 @@ pub fn integrate_romberg<F: Fn(f64) -> f64>(f: F, a: f64, b: f64, levels: usize)
         ));
     }
     let levels = levels.min(20);
+    // Domain probe: the integrand must be defined at the endpoints and the
+    // midpoint (see `integrate_adaptive`).
+    for x in [a, 0.5 * (a + b), b] {
+        if !f(x).is_finite() {
+            return Err(MathError::Domain(format!(
+                "integrate_romberg: the integrand is not defined at x = {} \
+                 (it must be finite on the interval)",
+                x
+            )));
+        }
+    }
     // Compute the first column: trapezoidal rule with increasing panel counts.
     // We track the trapezoidal sum `s_n` such that `T_n = h_n · s_n`.  The
     // doubling recurrence for the sum (NOT pre-multiplied by h) is just
@@ -439,6 +470,58 @@ mod tests {
         let f = |x: f64| (-x * x).exp();
         let v = integrate_adaptive(f, 0.0, 1.0, 1e-9, 30).unwrap();
         assert!((v - 0.7468241328).abs() < 1e-7);
+    }
+
+    // ---- domain probes ----------------------------------------------------
+
+    #[test]
+    fn adaptive_rejects_undefined_endpoint() {
+        // 1/x is undefined at 0 — the error must name the offending point.
+        let f = |x: f64| 1.0 / x;
+        let err = integrate_adaptive(f, 0.0, 1.0, 1e-9, 30).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not defined"), "got: {msg}");
+        assert!(msg.contains('0'), "got: {msg}");
+    }
+
+    #[test]
+    fn adaptive_rejects_undefined_midpoint() {
+        // sqrt(x) is undefined for x < 0; the midpoint of [-1, 1] is 0, which
+        // is fine — but [-2, 0] has an undefined midpoint? No: use a function
+        // undefined at the midpoint instead.
+        let f = |x: f64| if (x - 0.5).abs() < 1e-12 { f64::NAN } else { 1.0 };
+        let err = integrate_adaptive(f, 0.0, 1.0, 1e-9, 30).unwrap_err();
+        assert!(err.to_string().contains("not defined"), "got: {err}");
+    }
+
+    #[test]
+    fn adaptive_rejects_undefined_at_negative_argument() {
+        // sqrt(x) on [-1, 1] — the left endpoint is undefined.
+        let f = |x: f64| x.sqrt();
+        let err = integrate_adaptive(f, -1.0, 1.0, 1e-9, 30).unwrap_err();
+        assert!(err.to_string().contains("not defined"), "got: {err}");
+    }
+
+    #[test]
+    fn adaptive_still_works_on_a_valid_interval() {
+        // 1/x on [-2, -1] is fine (the pole at 0 is outside): ∫ = ln(1/2) = −ln 2.
+        let f = |x: f64| 1.0 / x;
+        let v = integrate_adaptive(f, -2.0, -1.0, 1e-9, 30).unwrap();
+        assert!((v + 2.0f64.ln()).abs() < 1e-7, "got {v}");
+    }
+
+    #[test]
+    fn romberg_rejects_undefined_endpoint() {
+        let f = |x: f64| 1.0 / x;
+        let err = integrate_romberg(f, 0.0, 1.0, 8).unwrap_err();
+        assert!(err.to_string().contains("not defined"), "got: {err}");
+    }
+
+    #[test]
+    fn romberg_still_works_on_a_valid_interval() {
+        let f = |x: f64| x.sin();
+        let v = integrate_romberg(f, 0.0, std::f64::consts::PI, 8).unwrap();
+        assert!((v - 2.0).abs() < 1e-9, "got {v}");
     }
 
     #[test]

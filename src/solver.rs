@@ -1,4 +1,4 @@
-//! Equation solvers: Newton–Raphson, bisection, secant, and polynomial
+//! Equation solvers: Newton–Raphson, bisection, secant, Brent, and polynomial
 //! root finding via the Durand–Kerner method.
 
 use crate::error::{MathError, Result};
@@ -145,6 +145,134 @@ pub fn secant<F: Fn(f64) -> f64>(
     )))
 }
 
+/// Brent's method for a bracketed root.
+///
+/// Combines bisection with secant and inverse-quadratic interpolation: the
+/// sign-changing bracket is always maintained, so the method cannot diverge
+/// the way a pure secant iteration can, while it usually converges much
+/// faster than plain bisection. The bracket endpoints may be given in either
+/// order.
+///
+/// The state machine follows the classic Zeroin/Brent formulation: `xcur` is
+/// the current best point, `xblk` the last point of opposite sign, and `xpre`
+/// the previous iterate (used for the interpolation steps).
+pub fn brent<F: Fn(f64) -> f64>(
+    f: F,
+    a: f64,
+    b: f64,
+    opts: SolveOptions,
+) -> Result<(f64, f64)> {
+    if !a.is_finite() || !b.is_finite() {
+        return Err(MathError::InvalidArgument(
+            "brent: bracket endpoints must be finite".into(),
+        ));
+    }
+    let mut xpre = a;
+    let mut xcur = b;
+    let mut fpre = f(xpre);
+    let mut fcur = f(xcur);
+    if !fpre.is_finite() || !fcur.is_finite() {
+        return Err(MathError::Domain(
+            "brent: function must be finite at both bracket endpoints".into(),
+        ));
+    }
+    if fpre == 0.0 {
+        return Ok((xpre, fpre));
+    }
+    if fcur == 0.0 {
+        return Ok((xcur, fcur));
+    }
+    if fpre.signum() == fcur.signum() {
+        return Err(MathError::InvalidArgument(format!(
+            "brent: f(a) and f(b) must have opposite signs (got f({})={}, f({})={})",
+            xpre, fpre, xcur, fcur
+        )));
+    }
+
+    // The blocking point: the last iterate whose function value has the
+    // opposite sign to the current one.
+    let mut xblk = xpre;
+    let mut fblk = fpre;
+    // The last step actually taken, and the previous one (for the
+    // interpolation fallback).
+    let mut spre = 0.0;
+    let mut scur = 0.0;
+
+    for _ in 0..opts.max_iter {
+        // Restore the bracket whenever the current and previous values
+        // straddle the root. Both step trackers are reset to the step just
+        // taken: that keeps the interpolation acceptance test strict, so the
+        // method falls back to bisection (which shrinks the bracket) instead
+        // of stalling on a point it never crosses.
+        if fpre != 0.0 && fcur != 0.0 && fpre.signum() != fcur.signum() {
+            xblk = xpre;
+            fblk = fpre;
+            spre = xcur - xpre;
+            scur = spre;
+        }
+        // Keep the point with the smaller |f| as the current one.
+        if fblk.abs() < fcur.abs() {
+            let (nxpre, nxcur, nxblk) = (xcur, xblk, xcur);
+            let (nfpre, nfcur, nfblk) = (fcur, fblk, fcur);
+            xpre = nxpre;
+            xcur = nxcur;
+            xblk = nxblk;
+            fpre = nfpre;
+            fcur = nfcur;
+            fblk = nfblk;
+        }
+
+        let delta = (opts.tol + 4.0 * f64::EPSILON * xcur.abs()) / 2.0;
+        let sbis = (xblk - xcur) / 2.0;
+        if fcur == 0.0 || sbis.abs() < delta {
+            return Ok((xcur, fcur));
+        }
+
+        // Try an interpolated step; fall back to bisection when it would
+        // leave the bracket or is too close to the previous point.
+        if spre.abs() > delta && fcur.abs() < fpre.abs() {
+            let stry = if xpre == xblk {
+                -fcur * (xcur - xpre) / (fcur - fpre)
+            } else {
+                let dpre = (fpre - fcur) / (xpre - xcur);
+                let dblk = (fblk - fcur) / (xblk - xcur);
+                -fcur * (fblk * dblk - fpre * dpre) / (dblk * dpre * (fblk - fpre))
+            };
+            if 2.0 * stry.abs() < spre.abs().min(3.0 * sbis.abs() - delta) {
+                spre = scur;
+                scur = stry;
+            } else {
+                spre = sbis;
+                scur = sbis;
+            }
+        } else {
+            spre = sbis;
+            scur = sbis;
+        }
+
+        xpre = xcur;
+        fpre = fcur;
+        if scur.abs() > delta {
+            xcur += scur;
+        } else {
+            // Never move less than the convergence threshold, so the
+            // iteration cannot stall before it reaches it.
+            xcur += if sbis > 0.0 { delta } else { -delta };
+        }
+        fcur = f(xcur);
+        if !fcur.is_finite() {
+            return Err(MathError::Domain(format!(
+                "brent: function is not finite at x = {}",
+                xcur
+            )));
+        }
+    }
+    Err(MathError::NotConvergent(format!(
+        "brent did not converge in {} iterations",
+        opts.max_iter
+    )))
+}
+
 /// Configuration for the sign-scan root finder.
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
@@ -281,29 +409,68 @@ fn dedupe_roots(roots: Vec<f64>, dedup: f64) -> Vec<f64> {
 /// Implemented with the Durand–Kerner method, which converges quickly for
 /// well-separated roots and is robust enough for moderate degrees.
 pub fn polynomial_roots(coeffs: &[f64]) -> Result<Vec<(f64, f64)>> {
-    let roots = durand_kerner_all_roots(coeffs)?;
+    let coeffs = trim_near_zero_leading(coeffs);
+    let roots = durand_kerner_all_roots(&coeffs)?;
 
-    // collect real roots (within tolerance) and pair them with f(root)
-    let mut out = Vec::new();
-    for zi in roots {
-        if zi.im.abs() < 1e-6 {
-            let x = zi.re;
-            let fx = polynomial_eval(coeffs, x);
-            out.push((x, fx));
-        }
-    }
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(out)
+    // A repeated root is one real solution. Keep multiplicities in the complex
+    // API (apart needs them), but coalesce them in this user-facing list.
+    let xs = dedupe_roots(
+        roots.into_iter().filter(|z| z.im == 0.0).map(|z| z.re).collect(),
+        1e-6,
+    );
+    Ok(xs
+        .into_iter()
+        .map(|x| {
+            let fx = polynomial_eval(&coeffs, x);
+            (x, fx)
+        })
+        .collect())
 }
 
 /// Find all complex roots of a polynomial with real coefficients, returned
 /// as `(re, im)` pairs via the Durand–Kerner method. Complex roots appear
-/// together with their conjugates.
+/// together with their conjugates. Repeated roots are retained so callers can
+/// recover their multiplicities.
 pub fn polynomial_roots_complex(coeffs: &[f64]) -> Result<Vec<(f64, f64)>> {
-    let roots = durand_kerner_all_roots(coeffs)?;
+    let coeffs = trim_near_zero_leading(coeffs);
+    let roots = durand_kerner_all_roots(&coeffs)?;
     let mut out: Vec<(f64, f64)> = roots.iter().map(|z| (z.re, z.im)).collect();
     out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     Ok(out)
+}
+
+/// Discard leading coefficients that are negligible relative to the largest
+/// coefficient. Exact leading zeros and tiny high-degree terms otherwise make
+/// Durand–Kerner report spurious roots at enormous magnitudes.
+fn trim_near_zero_leading(coeffs: &[f64]) -> Vec<f64> {
+    if coeffs.is_empty() {
+        return Vec::new();
+    }
+    let scale = coeffs.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+    let tol = 1e-14 * scale;
+    let first = coeffs
+        .iter()
+        .position(|c| c.abs() > tol)
+        .unwrap_or(coeffs.len() - 1);
+    coeffs[first..].to_vec()
+}
+
+fn snap_integer(x: f64, tol: f64) -> f64 {
+    let nearest = x.round();
+    if (x - nearest).abs() < tol {
+        nearest
+    } else {
+        x
+    }
+}
+
+fn polish_root(mut z: crate::complex::Complex<f64>) -> crate::complex::Complex<f64> {
+    if z.im.abs() < 1e-8 * z.abs().max(1.0) {
+        crate::complex::Complex::new(snap_integer(z.re, 1e-7), 0.0)
+    } else {
+        z.re = snap_integer(z.re, 1e-9);
+        z
+    }
 }
 
 /// Run the Durand–Kerner iteration and return all n complex roots of the
@@ -357,7 +524,7 @@ fn durand_kerner_all_roots(coeffs: &[f64]) -> Result<Vec<crate::complex::Complex
         }
     }
 
-    Ok(z)
+    Ok(z.into_iter().map(polish_root).collect())
 }
 
 fn polynomial_eval(coeffs: &[f64], x: f64) -> f64 {
@@ -709,6 +876,71 @@ mod tests {
     }
 
     #[test]
+    fn brent_root() {
+        let f = |x: f64| x * x - 4.0;
+        let (r, fx) = brent(f, 0.0, 5.0, SolveOptions::default()).unwrap();
+        assert!((r - 2.0).abs() < 1e-10, "root = {}", r);
+        assert!(fx.abs() < 1e-9, "f(root) = {}", fx);
+    }
+
+    #[test]
+    fn brent_accepts_reversed_bracket_and_exact_endpoints() {
+        let f = |x: f64| x * x - 4.0;
+        let (r, _) = brent(f, 5.0, 0.0, SolveOptions::default()).unwrap();
+        assert!((r - 2.0).abs() < 1e-10);
+        let (r, fx) = brent(f, 2.0, 5.0, SolveOptions::default()).unwrap();
+        assert_eq!((r, fx), (2.0, 0.0));
+    }
+
+    #[test]
+    fn brent_requires_a_finite_sign_change() {
+        let f = |x: f64| x * x + 1.0;
+        let err = brent(f, 0.0, 2.0, SolveOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("opposite signs"), "got {}", err);
+
+        let f = |x: f64| if x < 1.0 { f64::NAN } else { x - 2.0 };
+        let err = brent(f, 0.0, 3.0, SolveOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("finite"), "got {}", err);
+    }
+
+    #[test]
+    fn brent_handles_a_flat_root() {
+        // x^3 has a triple root at 0 — a sign change, but a flat one, so the
+        // method converges linearly (rate 2/3) like Newton instead of
+        // superlinearly. The iteration budget has to allow for that.
+        let f = |x: f64| x.powi(3);
+        let opts = SolveOptions { max_iter: 1000, ..SolveOptions::default() };
+        let (r, fx) = brent(f, -1.0, 2.0, opts).unwrap();
+        assert!(r.abs() < 1e-8, "root = {}", r);
+        assert!(fx.abs() < 1e-20, "f(root) = {}", fx);
+    }
+
+    #[test]
+    fn brent_uses_fewer_evaluations_than_bisection() {
+        use std::cell::Cell;
+        let brent_evals = Cell::new(0usize);
+        let bisect_evals = Cell::new(0usize);
+        let bf = |x: f64| {
+            brent_evals.set(brent_evals.get() + 1);
+            x.cos() - x
+        };
+        let sf = |x: f64| {
+            bisect_evals.set(bisect_evals.get() + 1);
+            x.cos() - x
+        };
+        let opts = SolveOptions { max_iter: 100, tol: 1e-10, h: 1e-6 };
+        let (br, _) = brent(bf, 0.0, 1.0, opts.clone()).unwrap();
+        let (sr, _) = bisect(sf, 0.0, 1.0, opts).unwrap();
+        assert!((br - sr).abs() < 1e-8);
+        assert!(
+            brent_evals.get() < bisect_evals.get(),
+            "brent {} evals, bisection {} evals",
+            brent_evals.get(),
+            bisect_evals.get()
+        );
+    }
+
+    #[test]
     fn polynomial_two_roots() {
         // x^2 - 5x + 6 = (x-2)(x-3)
         let r = polynomial_roots(&[1.0, -5.0, 6.0]).unwrap();
@@ -718,6 +950,44 @@ mod tests {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert!((sorted[0] - 2.0).abs() < 1e-4);
         assert!((sorted[1] - 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn polynomial_trims_exact_and_near_zero_leading_coefficients() {
+        for coeffs in [&[0.0, 1.0, -5.0, 6.0][..], &[1e-20, 1.0, -5.0, 6.0][..]] {
+            let roots = polynomial_roots(coeffs).unwrap();
+            let xs: Vec<f64> = roots.iter().map(|(x, _)| *x).collect();
+            assert_eq!(xs, vec![2.0, 3.0], "coeffs = {:?}", coeffs);
+        }
+    }
+
+    #[test]
+    fn polynomial_leading_trimming_is_scale_relative() {
+        // Uniformly tiny coefficients describe the same cubic as [1, 1, -5, 6];
+        // the first coefficient must not be discarded merely for being small.
+        let tiny = [1e-20, 1e-20, -5e-20, 6e-20];
+        assert_eq!(trim_near_zero_leading(&tiny), tiny);
+        assert_eq!(trim_near_zero_leading(&[0.0, 0.0]), vec![0.0]);
+    }
+
+    #[test]
+    fn polynomial_repeated_real_root_is_listed_once() {
+        let roots = polynomial_roots(&[1.0, -2.0, 1.0]).unwrap();
+        assert_eq!(roots, vec![(1.0, 0.0)]);
+    }
+
+    #[test]
+    fn polynomial_complex_roots_are_snapped() {
+        let mut roots = polynomial_roots_complex(&[1.0, 0.0, 1.0]).unwrap();
+        roots.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        assert_eq!(roots, vec![(0.0, -1.0), (0.0, 1.0)]);
+    }
+
+    #[test]
+    fn polynomial_complex_roots_keep_multiplicity() {
+        // apart relies on repeated complex roots to reconstruct multiplicity.
+        let roots = polynomial_roots_complex(&[1.0, -2.0, 1.0]).unwrap();
+        assert_eq!(roots, vec![(1.0, 0.0), (1.0, 0.0)]);
     }
 
     #[test]

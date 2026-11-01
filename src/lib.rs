@@ -118,6 +118,9 @@ pub mod sumprod;
 pub mod vector;
 pub mod mcp;
 pub mod unicode;
+pub mod numbase;
+pub mod linsolve;
+pub mod dsolve;
 
 pub use error::{MathError, Result};
 
@@ -165,7 +168,8 @@ pub mod prelude {
     pub use crate::optim::{golden_section, nelder_mead, OptOptions, OptResult};
     pub use crate::ode::{euler, rk4, rk4_system, rkf45};
     pub use crate::solver::{
-        bisect, isolate_real_roots, newton_central, newton_system, polynomial_roots, secant, SolveOptions,
+        bisect, brent, isolate_real_roots, newton_central, newton_system, polynomial_roots, secant,
+        SolveOptions,
     };
     pub use crate::special::{bessel_j0, bessel_j1, bessel_jn, beta, erfc, erf, gamma, log_gamma, sinc};
     pub use crate::calculus::{

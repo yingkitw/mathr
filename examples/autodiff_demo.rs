@@ -25,8 +25,8 @@ fn main() {
     println!("f(1.5) = {}  f'(1.5) = {}", d.val, d.deriv);
     println!();
 
-    // Exponential: f(x) = exp(-(x^2)), f'(x) = -2x*exp(-x^2)
-    let expr = Parser::parse("exp(-(x^2))").unwrap();
+    // Exponential: f(x) = exp(-x^2), f'(x) = -2x*exp(-x^2)
+    let expr = Parser::parse("exp(-x^2)").unwrap();
     let d = autodiff::derivative(&expr, "x", 1.0, &ctx).unwrap();
     println!("f(x) = exp(-x^2)");
     println!("f(1) = {}  f'(1) = {}", d.val, d.deriv);

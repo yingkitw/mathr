@@ -3906,3 +3906,469 @@ fn malformed_from_to_suffix_is_an_error() {
     let err = mathr::repl::dispatch_str("int sin(x) from 0", ctx).unwrap_err();
     assert!(err.to_string().contains("from"), "got {}", err);
 }
+
+// =========================================================================
+// Numeric domain probes — cross-port pass #10
+// =========================================================================
+
+#[test]
+fn integrate_rejects_undefined_integrand() {
+    let ctx = mathr::eval::Context::standard();
+    // 1/x is undefined at 0 — the error must name the point, not return NaN.
+    let err = mathr::repl::dispatch_str("int 1/x 0 1", ctx.clone()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not defined"), "got {}", msg);
+    assert!(msg.contains('0'), "got {}", msg);
+}
+
+#[test]
+fn integrate_does_not_hang_on_an_undefined_integrand() {
+    // Regression: sqrt(x) over [-1, 1] used to recurse to the depth limit
+    // without converging — an effective hang.
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("int sqrt(x) -1 1", ctx).unwrap_err();
+    assert!(err.to_string().contains("not defined"), "got {}", err);
+}
+
+#[test]
+fn romberg_rejects_undefined_integrand() {
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("romberg 1/x 0 1", ctx).unwrap_err();
+    assert!(err.to_string().contains("not defined"), "got {}", err);
+}
+
+#[test]
+fn minimize_rejects_undefined_endpoint() {
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("minimize sqrt(x) -1 5", ctx).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not defined"), "got {}", msg);
+    assert!(msg.contains("-1"), "got {}", msg);
+}
+
+#[test]
+fn valid_intervals_still_work() {
+    let ctx = mathr::eval::Context::standard();
+    // ∫₀^π sin(x) dx = 2
+    let out = mathr::repl::dispatch_str("int sin(x) 0 pi", ctx.clone()).unwrap().unwrap();
+    assert!(out.contains("= 2"), "got {}", out);
+    // min (x−2)² over [0, 10] = 2
+    let out = mathr::repl::dispatch_str("minimize (x-2)^2 0 10", ctx).unwrap().unwrap();
+    assert!(out.contains("x* = 2"), "got {}", out);
+}
+
+// =========================================================================
+// BigInt auto-upgrade and number-base conversion — cross-port pass #11
+// =========================================================================
+
+#[test]
+fn is_prime_auto_upgrade() {
+    let ctx = mathr::eval::Context::standard();
+    // 10^20 is composite.
+    let out = mathr::repl::dispatch_str("is-prime 100000000000000000000", ctx)
+        .unwrap()
+        .unwrap();
+    assert_eq!(out, "false");
+}
+
+#[test]
+fn factor_auto_upgrade() {
+    let ctx = mathr::eval::Context::standard();
+    // 10^20 = 2^20 * 5^20
+    let out = mathr::repl::dispatch_str("factor 100000000000000000000", ctx)
+        .unwrap()
+        .unwrap();
+    assert_eq!(out, "2^20 · 5^20");
+}
+
+#[test]
+fn base_conversion_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("base 255 hex", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(out, "FF_16");
+    let out = mathr::repl::dispatch_str("base 255 bin", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(out, "11111111_2");
+    let out = mathr::repl::dispatch_str("base 255 from 10 to 2", ctx)
+        .unwrap()
+        .unwrap();
+    assert_eq!(out, "11111111_2");
+}
+
+#[test]
+fn base_conversion_is_exact_for_big_values() {
+    // A 40-digit decimal converts to binary without loss.
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str(
+        "base 1234567890123456789012345678901234567890 hex",
+        ctx.clone(),
+    )
+    .unwrap()
+    .unwrap();
+    let hex = out.trim_end_matches("_16");
+    // Round-trip back to decimal.
+    let back = mathr::repl::dispatch_str(
+        &format!("base {} from 16 to 10", hex),
+        ctx,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        back.trim_end_matches("_10"),
+        "1234567890123456789012345678901234567890"
+    );
+}
+
+// =========================================================================
+// Degenerate equations, duplicate roots, rational overflow — pass #12
+// =========================================================================
+
+#[test]
+fn qsolve_identity_equation() {
+    let ctx = mathr::eval::Context::standard();
+    // x − x = 0 holds for every x.
+    let err = mathr::repl::dispatch_str("qsolve x-x", ctx.clone()).unwrap_err();
+    assert!(err.to_string().contains("every value"), "got {}", err);
+}
+
+#[test]
+fn qsolve_constant_equation() {
+    let ctx = mathr::eval::Context::standard();
+    // A nonzero constant has no solution.
+    let e = mathr::parser::Parser::parse("5").unwrap();
+    let err = mathr::qsolve::solve_symbolic(&e, "x").unwrap_err();
+    assert!(err.to_string().contains("no solution"), "got {}", err);
+}
+
+#[test]
+fn qsolve_double_root_listed_once() {
+    let ctx = mathr::eval::Context::standard();
+    // A repeated root is one solution, not two.
+    let out = mathr::repl::dispatch_str("qsolve (x-1)^2", ctx.clone()).unwrap().unwrap();
+    assert_eq!(out, "x = 1");
+    // Distinct roots are still listed separately.
+    let out = mathr::repl::dispatch_str("qsolve x^2-4", ctx).unwrap().unwrap();
+    assert!(out.contains("2") && out.contains("-2"), "got {}", out);
+}
+
+#[test]
+fn rational_multiplication_does_not_wrap() {
+    // Regression: i64::MAX * 2 used to wrap to -2.
+    let big = mathr::rational::Rational::from_int(i64::MAX);
+    let r = big * mathr::rational::Rational::from_int(2);
+    assert!(r.num() > 0, "the result must not wrap negative: {}", r);
+}
+
+#[test]
+fn rational_parse_too_large_message() {
+    let err = mathr::rational::parse_rational("999999999999999999999/3").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("too large"), "got {}", msg);
+    assert!(msg.contains("big"), "got {}", msg);
+}
+
+// =========================================================================
+// Matrix det scale, limit `at` keyword — pass #13
+// =========================================================================
+
+#[test]
+fn matrix_det_tiny_scaled_nonsingular() {
+    let ctx = mathr::eval::Context::standard();
+    // The absolute pivot threshold used to report this as singular.
+    let out = mathr::repl::dispatch_str("det 1e-15 0 | 0 1", ctx).unwrap().unwrap();
+    assert!(out.contains("1e-15"), "got {}", out);
+    assert!(!out.contains("det = 0"), "got {}", out);
+}
+
+#[test]
+fn matrix_det_singular_still_zero() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("det 1 1 | 1 1", ctx).unwrap().unwrap();
+    assert!(out.contains("det = 0"), "got {}", out);
+}
+
+#[test]
+fn limit_at_keyword_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    // `at` used to be read as the variable name.
+    let out = mathr::repl::dispatch_str("limit sin(x)/x at 0", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("= 1"), "got {}", out);
+    assert!(out.contains("as x"), "got {}", out);
+}
+
+#[test]
+fn limit_pole_is_detected_by_growth() {
+    let ctx = mathr::eval::Context::standard();
+    // Both sides to +∞.
+    let out = mathr::repl::dispatch_str("limit 1/(x-1)^2 at 1", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert!(out.contains('∞'), "got {}", out);
+    // Opposite sides.
+    let out = mathr::repl::dispatch_str("limit 1/x at 0", ctx).unwrap().unwrap();
+    assert!(out.contains("does not exist"), "got {}", out);
+}
+
+#[test]
+fn small_magnitudes_are_not_rounded_away() {
+    let ctx = mathr::eval::Context::standard();
+    // A value with a tiny magnitude must not print as "0".
+    let out = mathr::repl::dispatch_str("det 1e-20 0 | 0 1e-20", ctx).unwrap().unwrap();
+    assert!(out.contains("1e-40"), "got {}", out);
+}
+
+// =========================================================================
+// Bare equations and LaTeX output — pass #14
+// =========================================================================
+
+#[test]
+fn bare_equation_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    // A top-level `=` routes to the solver.
+    let out = mathr::repl::dispatch_str("x^2 - 4 = 0", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert!(out.contains('2') && out.contains("-2"), "got {}", out);
+    // Exactly, with radicals preserved.
+    let out = mathr::repl::dispatch_str("x^2-2=0", ctx.clone()).unwrap().unwrap();
+    assert!(out.contains("sqrt(2)"), "got {}", out);
+    // Complex roots.
+    let out = mathr::repl::dispatch_str("x^2+1=0", ctx).unwrap().unwrap();
+    assert!(out.contains('i'), "got {}", out);
+}
+
+#[test]
+fn leftover_equals_error_is_friendly() {
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("diff x^2 = 4", ctx).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("solve"), "got {}", msg);
+}
+
+#[test]
+fn latex_command_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("latex x^2/2", ctx).unwrap().unwrap();
+    assert_eq!(out, r"\frac{x^{2}}{2}");
+}
+
+#[test]
+fn latex_output_round_trips() {
+    // The TeX the command emits parses back to an equal expression.
+    for src in ["x^2 + 1", "x^2/2", "sin(x)", "1/2 + 3/4"] {
+        let tex = mathr::expr::Expr::to_tex(&Parser::parse(src).unwrap());
+        let back = Parser::parse(&tex).unwrap();
+        let orig = Parser::parse(src).unwrap();
+        assert!(orig.equals(&back), "{src} -> {tex} -> {}", back);
+    }
+}
+
+// =========================================================================
+// Univariate expansion with opaque coefficients — pass #15
+// =========================================================================
+
+#[test]
+fn expand_in_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    // The function call stays an exact coefficient.
+    let out = mathr::repl::dispatch_str("expand-in (x + sin(y))^2 for x", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("sin(y)"), "got {}", out);
+    assert!(out.contains("x^2"), "got {}", out);
+}
+
+#[test]
+fn expand_in_matches_the_original() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("expand-in (x + 2*y)^3 for x", ctx)
+        .unwrap()
+        .unwrap();
+    let e = Parser::parse("(x + 2*y)^3").unwrap();
+    let d = Parser::parse(&out).unwrap();
+    for &(x, y) in &[(0.7f64, 0.5f64), (1.3, 1.7), (-2.1, 0.3)] {
+        let mut c1 = Context::standard();
+        c1.set("x", x);
+        c1.set("y", y);
+        let c2 = c1.clone();
+        let a = eval(&e, &c1).unwrap();
+        let b = eval(&d, &c2).unwrap();
+        assert!(close(a, b, 1e-9), "at x={} y={}: {} vs {}", x, y, a, b);
+    }
+}
+
+#[test]
+fn expand_in_needs_a_variable() {
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("expand-in (x+1)^2", ctx).unwrap_err();
+    assert!(err.to_string().contains("for <var>"), "got {}", err);
+}
+
+#[test]
+fn expand_in_steps_output() {
+    let steps = mathr::repl::dispatch_steps(
+        "expand-in (x + sin(y))^2 for x",
+        mathr::eval::Context::standard(),
+    )
+    .unwrap();
+    assert!(steps.len() >= 2, "got {:?}", steps);
+    assert!(steps[0].contains("expand in x"), "got {:?}", steps);
+}
+
+// =========================================================================
+// Exact symbolic linear systems — pass #16
+// =========================================================================
+
+#[test]
+fn msolve_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("msolve 2x + y = 5; x + 3y = 10", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(out, "x = 1, y = 3");
+}
+
+#[test]
+fn msolve_is_exact_for_rational_answers() {
+    let ctx = mathr::eval::Context::standard();
+    // The solution stays a fraction, not a float.
+    let out = mathr::repl::dispatch_str("msolve (1/2)x + y = 1; x + (1/3)y = 1", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("4/5"), "got {}", out);
+    assert!(out.contains("3/5"), "got {}", out);
+}
+
+#[test]
+fn msolve_three_variables() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str(
+        "msolve x + y + z = 6; 2x + 3y + z = 10; x + y + 2z = 9",
+        ctx,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(out.contains("x = 2"), "got {}", out);
+    assert!(out.contains("y = 1"), "got {}", out);
+    assert!(out.contains("z = 3"), "got {}", out);
+}
+
+#[test]
+fn msolve_rejects_a_singular_system() {
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("msolve x + y = 1; 2x + 2y = 2", ctx).unwrap_err();
+    assert!(err.to_string().contains("singular"), "got {}", err);
+}
+
+#[test]
+fn msolve_rejects_nonlinear_equations() {
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("msolve x^2 + y = 1; x + y = 0", ctx).unwrap_err();
+    assert!(err.to_string().contains("not linear"), "got {}", err);
+}
+
+#[test]
+fn msolve_solution_satisfies_the_equations() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("msolve 2x + y = 5; x + 3y = 10", ctx)
+        .unwrap()
+        .unwrap();
+    // Parse the solution back and check each equation.
+    let mut x = 0.0f64;
+    let mut y = 0.0f64;
+    for part in out.split(", ") {
+        let (v, val) = part.split_once(" = ").unwrap();
+        let n: f64 = val.parse().unwrap();
+        match v {
+            "x" => x = n,
+            "y" => y = n,
+            _ => panic!("unexpected variable {}", v),
+        }
+    }
+    assert!(close(2.0 * x + y, 5.0, 1e-12), "got x={} y={}", x, y);
+    assert!(close(x + 3.0 * y, 10.0, 1e-12), "got x={} y={}", x, y);
+}
+
+// =========================================================================
+// Durand–Kerner cleanup — pass #14
+// =========================================================================
+
+#[test]
+fn poly_roots_trims_leading_coefficients() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("poly-roots 0 1 -5 6", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("x = 2") && out.contains("x = 3"), "got {}", out);
+
+    let out = mathr::repl::dispatch_str("poly-roots 1e-20 1 -5 6", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("x = 2") && out.contains("x = 3"), "got {}", out);
+    assert!(!out.contains("100000000000000000000"), "spurious root: {}", out);
+}
+
+#[test]
+fn poly_roots_polishes_and_deduplicates_repeated_roots() {
+    let ctx = mathr::eval::Context::standard();
+    let out = mathr::repl::dispatch_str("poly-roots 1 -2 1", ctx)
+        .unwrap()
+        .unwrap();
+    assert_eq!(out, "x = 1  (f = 0)");
+}
+
+// =========================================================================
+// Unary-minus/power precedence — approved breaking parser change
+// =========================================================================
+
+#[test]
+fn unary_minus_power_precedence_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    assert_eq!(
+        mathr::repl::dispatch_str("-3^2", ctx.clone()).unwrap().unwrap(),
+        "-9"
+    );
+    assert_eq!(
+        mathr::repl::dispatch_str("(-3)^2", ctx).unwrap().unwrap(),
+        "9"
+    );
+}
+
+// =========================================================================
+// Brent root finding
+// =========================================================================
+
+#[test]
+fn brent_repl_dispatch() {
+    let ctx = mathr::eval::Context::standard();
+    // x² − 4 on [0, 5] has the root 2.
+    let out = mathr::repl::dispatch_str("brent x^2 - 4 0 5", ctx.clone())
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("root ≈ 2"), "got {}", out);
+}
+
+#[test]
+fn brent_repl_dispatch_with_explicit_variable() {
+    let ctx = mathr::eval::Context::standard();
+    // Two free variables: the variable must be named.
+    let err = mathr::repl::dispatch_str("brent x*y 0 1 2", ctx.clone()).unwrap_err();
+    assert!(err.to_string().contains("variable"), "got {}", err);
+    // With an explicit variable it solves.
+    let out = mathr::repl::dispatch_str("brent x*y for x 0 1 2", ctx)
+        .unwrap()
+        .unwrap();
+    assert!(out.contains("root ≈ 2"), "got {}", out);
+}
+
+#[test]
+fn brent_reports_a_missing_bracket() {
+    let ctx = mathr::eval::Context::standard();
+    let err = mathr::repl::dispatch_str("brent x^2 - 4", ctx).unwrap_err();
+    assert!(err.to_string().contains("brent"), "got {}", err);
+}

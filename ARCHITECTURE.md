@@ -14,7 +14,7 @@ parser.rs ──parse──▶ expr.rs (Expr AST)
                         │           → Expr
                         ▼
                     calculus.rs (numerical)
-                    solver.rs   (root finding, 1-D and systems, polynomial root isolation)
+                    solver.rs   (root finding, 1-D and systems, polished Durand–Kerner roots, polynomial root isolation)
                     taylor.rs   (uses symbolic + eval)
                     laurent.rs  (uses symbolic + eval, expansion around poles)
 
@@ -32,9 +32,41 @@ notebook.rs     (standalone, .mnb notebook format, JSON parse/serialize, cell ev
 server.rs       (standalone, minimal HTTP server for web notebook UI,
                  shared context across cells, /api/reset, /api/context)
 mcp.rs          (standalone, Model Context Protocol server over stdio:
-                 JSON-RPC 2.0, 14 tools backed by repl::dispatch_str)
+                 JSON-RPC 2.0, 16 tools backed by repl::dispatch_str)
 unicode.rs      (standalone, Unicode math input normalization: √ × ÷ π τ −,
                  superscript exponents x² → x^(2); runs before tokenizing)
+numbase.rs      (standalone, number-base conversion: bin/oct/dec/hex or any
+                 base 2–36, exact via BigInt)
+linsolve.rs     (standalone, exact symbolic linear-system solve: 2–4
+                 variables, rational Gaussian elimination)
+dsolve.rs       (standalone, symbolic first-order ODE solve: separable and
+                 linear patterns, verified by numeric differentiation)
+matrix/         (Matrix struct + constructors + core ops in mod.rs;
+ decomp.rs        LU, Cholesky, SVD, QR, Tikhonov, Hilbert in decomp.rs;
+ eigen.rs         Hessenberg, Schur, symmetric eig, power iteration,
+                  condition number, nullspace in eigen.rs — all additional
+                  inherent `impl Matrix` blocks, so the public API and the
+                  `crate::matrix::*` re-exports are unchanged)
+mcp/            (MCP server split by layer:
+ mod.rs           JSON-RPC 2.0 protocol: initialize/tools/call/ping,
+                  stdio loop, tests
+ json.rs          hand-rolled JSON value/parser/writer (no serde)
+ tools.rs         the 16 tool schemas + execution over repl::dispatch_str)
+repl/           (REPL dispatch + command handlers, split by domain:
+ mod.rs           REPL loop, dispatch_str/dispatch_steps, dispatch_inner,
+                  shared parsing helpers, format_value, HELP, tests
+ calc.rs          calculus handlers: diff, pdiff, gradient, idiff,
+                  integrate, taylor, laurent, rat, limit, apart, sumprod,
+                  ad, romberg, integrate_sym
+ solve.rs         solving + numerics + linear algebra + signals: solve,
+                  nsolve, msolve, dsolve, poly-roots, matrix ops, fft, conv,
+                  plot, interpolation, minimization
+ stats.rs         statistics: stats, fit, ttest, chitest, anova, mwu,
+                  wilcoxon, kw, boot, logit, qtile, dist, sample
+ numtheory.rs     number theory: gcd/lcm/is-prime/factor/fib/binom,
+                  fast, big, dec, base
+ io.rs            export/import: mathml, latex, lean, serialize, interval,
+                  cval)
 ode.rs          (standalone, numerical ODE integration)
 interpolate.rs  (standalone, Lagrange, Newton, cubic spline, Chebyshev,
                  Legendre, Gauss–Legendre)
@@ -99,7 +131,7 @@ error.rs ──used by──▶ all modules
 
 ## Data Flow
 
-1. **Parse**: `Parser::parse(str) → Expr` — recursive-descent, handles precedence, implicit multiplication, function calls
+1. **Parse**: `Parser::parse(str) → Expr` — recursive-descent, handles conventional sign/power precedence, implicit multiplication, function calls
 2. **Evaluate**: `eval(&Expr, &Context) → f64` — tree-walking with variable/function context
 3. **Symbolic**: `differentiate(&Expr, var) → Expr` (partial derivative w.r.t. one variable), `gradient(&Expr) → Vec<(String, Expr)>` (all partials), and `integrate(&Expr, var) → Expr` — apply calculus rules, then simplify
 4. **Numerical**: `calculus::derivative/integrate_trap/integrate_simpson/integrate_adaptive/integrate_romberg` — operate on closures `F: Fn(f64) → f64`. **Fourier series** via `calculus::fourier_series/fourier_eval` — computes coefficients using Simpson's rule integration. **Monte Carlo** via `calculus::monte_carlo_integrate_1d/monte_carlo_integrate_nd` — reproducible LCG-based sampling with standard error estimates.
@@ -122,13 +154,24 @@ error.rs ──used by──▶ all modules
 18b. **Implicit differentiation**: `symbolic::implicit_diff` / `idiff_steps_str` — `d(dep)/d(indep) = −F_indep/F_dep` for `F=0`; REPL `idiff`
 18c. **Higher-order differentiation**: `symbolic::differentiate_n` — repeated `differentiate` (order capped at 64); REPL `diff <expr> [var] [order]` and `d/dx <expr> [order]`
 18d. **Vector ops**: `vector::dot` / `vector::cross` / `vector::cross3` — numeric dot and cross products from comma-separated REPL lists; `dot` / `cross` commands
-18e. **MCP server**: `mcp::serve_stdio` — Model Context Protocol over **stdio** (newline-delimited JSON-RPC 2.0, protocol version 2025-06-18). Handshake (`initialize` → `notifications/initialized`), `tools/list`, `tools/call`, `ping`. 14 tools (`evaluate`, `differentiate`, `integrate`, `solve`, `nsolve`, `simplify`, `taylor`, `limit`, `poly-roots`, `number-theory`, `stats`, `matrix`, `minimize`, `apart`, `expand`), each a thin wrapper that builds a command string and runs it through `repl::dispatch_str` — so the MCP surface cannot drift from the CLI. Hand-rolled JSON layer (no `serde` dep), matching the `serialize.rs` convention. Tool *execution* failures return a successful response with `isError: true` (the MCP convention); only protocol problems (unknown tool/method, bad JSON) use JSON-RPC error codes. Launched with `mathr mcp`
+18e. **MCP server**: `mcp::serve_stdio` — Model Context Protocol over **stdio** (newline-delimited JSON-RPC 2.0, protocol version 2025-06-18). Handshake (`initialize` → `notifications/initialized`), `tools/list`, `tools/call`, `ping`. 16 tools (`evaluate`, `differentiate`, `integrate`, `solve`, `nsolve`, `simplify`, `taylor`, `limit`, `poly-roots`, `number-theory`, `stats`, `matrix`, `minimize`, `apart`, `expand`, `msolve`, `expand-in`), each a thin wrapper that builds a command string and runs it through `repl::dispatch_str` — so the MCP surface cannot drift from the CLI. Hand-rolled JSON layer (no `serde` dep), matching the `serialize.rs` convention. Tool *execution* failures return a successful response with `isError: true` (the MCP convention); only protocol problems (unknown tool/method, bad JSON) use JSON-RPC error codes. Launched with `mathr mcp`
 18f. **Unicode input normalization**: `unicode::normalize` runs in `Parser::parse` **before** tokenizing, rewriting Unicode math into the ASCII the parser understands: `×`→`*`, `÷`→`/`, `−`(U+2212)/en-dash/em-dash→`-`, `π`→`pi`, `τ`→`tau`, `∞`→`inf`, and superscript runs → explicit powers (`x²`→`x^(2)`, `x⁻¹`→`x^(-1)`). The root signs need argument delimiting, not plain substitution: `√2`→`sqrt(2)` (not `sqrt2`, which would read as one identifier), so the root branch captures its argument and normalizes it separately. Unmapped glyphs are passed through unchanged so the parser reports the *real* error rather than a mangled one
 18g. **Selective exact function folding**: `simplify` folds `sqrt`/`cbrt`/`log2`/`log10`/`abs` **only when the result is provably exact** — `sqrt(16)`→`4` but `sqrt(2)` stays `sqrt(2)`, because an irrational value has a shorter exact symbolic form and collapsing it to a float discards exactness. Exactness is decided by `Rational::exact_sqrt`/`exact_cbrt`/`exact_log2`/`exact_log10` (exact roots of rationals, each cross-checked exactly). The folding is a **separate first pass** (`fold_exact_functions`) that runs *before* `collect`, because `collect` turns `1/4` into the float `0.25` — after which the exactness of `sqrt(1/4)` can no longer be established. `try_eval_const` deliberately does **not** fold exact-only functions, so the final constant-folding pass cannot re-flatten them
 18h. **All-roots sign scan**: `solver::find_all_roots` + `ScanOptions` — samples an interval (default `[-30, 30]`, 2400 points), bisects every sign change, and returns all roots sorted and de-duplicated. `nsolve <expr> [var] [lo hi]` REPL command (plus step-by-step output). **Pole rejection is the critical property**: a sign flip across a pole is indistinguishable from a sign flip across a root, so a bisected bracket is accepted only when `f` lands near zero at the bisection point — `1/(x-1)` reports *no real roots*, and `tan(x)` reports only the multiples of π, not the poles at ±π/2. Undefined points (NaN) break the scan instead of producing a spurious bracket. Bounds are stripped *before* the `for <var>` suffix, so `nsolve sin(t) for t -7 7` parses correctly
 18i. **Exact radical quadratic roots**: `qsolve` keeps irrational quadratic roots **exact** rather than collapsing them to decimals — `x²−2` → `sqrt(2)`, `x²−8` → `2*sqrt(2)`, `(1/2)x²−(3/4)x+1/8` → `3/4 + sqrt(5)/4`. The coefficients are read as exact rationals (`exact_coeff`, round-trip verified), the discriminant `b²−4ac` is computed in exact `Rational` arithmetic, and `split_radical` pulls out the largest square *factor* of the discriminant (`√8 → 2√2`, `√(5/16) → √5/4`) so the inner radicand is square-free. `build_radical_root` writes the result as `p ± q·√d` with every coefficient kept rational. A perfect-square discriminant still yields plain rationals; a negative one still yields complex `i`-literal roots
 18j. **Exact cover-up partial fractions**: `apart` uses the **cover-up rule** `Aᵢ = N(rᵢ)/D′(rᵢ)` (with `D′(rᵢ) = lead·Π_{j≠i}(rᵢ−rⱼ)`) when the denominator splits into *distinct rational* linear factors — no linear system is needed, and the coefficients come out as exact rationals (`1/(x²−1)` → `1/2/(x−1) − 1/2/(x+1)`). The roots are found with the rational-root theorem in exact `Rational` arithmetic (candidates `p/q` with `p` dividing the constant term and `q` the leading coefficient, **both signs** of `p`). The path is declined for repeated roots, complex roots, or irrational roots, which fall back to the numeric factorization + linear-system path. `apart`/`apart_steps` no longer re-simplify the result — `simplify` folds rationals to floats, which would undo the exactness
 18k. **Shared bound parsing**: `repl::split_bounds` gives `int`, `romberg` and `minimize` one bound parser that accepts either the positional form (`<expr> <a> <b>`) or an explicit `from <a> to <b>` suffix whose bounds are full *expressions* (so `pi`, `pi/2`, `2*pi` work and may contain spaces). The suffix form is preferred when present because it is unambiguous; the positional form still takes the **last two tokens** as the bounds, which keeps the trailing-token ambiguity class retired. A malformed suffix is a clear error rather than being read as part of the expression. This also fixed an inconsistency: `romberg sin(x) 0 pi` used to fail with "bad b" while `int sin(x) 0 pi` worked
+18l. **Numeric domain probes**: `calculus::integrate_adaptive` and `integrate_romberg` check the integrand at the endpoints and the midpoint and return `MathError::Domain` naming the offending point; `repl::do_minimize` does the same for the two ends of its bracket. This fixed a genuine **hang** — `int sqrt(x) -1 1` recursed to the depth limit without converging, because a `NaN` error estimate never satisfies the convergence test and the branching recursion is `2^max_depth` (up to 2³⁰ calls). An undefined integrand now reports "the integrand is not defined at x = −1" instead of returning `NaN` or hanging
+18m. **BigInt auto-upgrade for `is-prime`/`factor`**: both now fall back to `BigInt` when the argument does not fit in `u64` — the same pattern `fib`/`binom`/`fact` already used. The `u64` path stays as the fast path; the BigInt path is the fallback
+18n. **Number-base conversion**: `numbase::to_base`/`from_base` convert between bases 2–36, **exactly** — the value is carried in a `BigInt`, so a 40-digit decimal converts to hex and back without loss. Base names (`bin`/`oct`/`dec`/`hex`) or a number. The `base <n> <target>` REPL command, plus a `base <n> from <base> to <base>` form for converting *between* bases. Parser literal support (`0x..`) is deliberately deferred — `parser.rs` is a mature module
+18o. **Rational overflow is checked, not wrapped**: `rational::reduce_i128` narrows the `i128` intermediates with a **checked** conversion that saturates to the largest representable magnitude. It used to cast with `as i64`, so `i64::MAX × 2` silently became `−2` — a wrong answer rather than an error. `parse_rational` likewise distinguishes "not a number" from "a valid number too large for 64-bit", pointing at the `big` command for the latter
+18p. **Degenerate equations and duplicate roots**: `qsolve` distinguishes an **identity** ("every value is a solution") from a **nonzero constant** ("no solution"), and `dedupe_roots` lists a repeated root once (`(x−1)²` → `x = 1`, not `x = 1, x = 1` — which reads as two distinct solutions)
+18q. **Scale-relative determinant pivot**: `matrix::determinant` tests the pivot against the **matrix's scale** (largest absolute entry × EPSILON × n), not an absolute constant. The old absolute test (`1e-14`) reported a tiny-scaled but nonsingular matrix as singular — `det [[1e-15,0],[0,1]]` returned `0` instead of `1e-15`. `repl::format_value` likewise prints values below the 10-decimal format's resolution in scientific notation instead of rounding them away to `0`
+18r. **Separate limit probes + growth-trend poles**: `limit::probe_limit` collects the left and right sample sequences **separately** — the old code interleaved `point−h, point+h` and then split the array in half, so "left" was really the coarse samples and "right" the fine ones. Pole detection uses a **growth trend** over the last three samples (each >5× the previous) rather than a single `>1e9` magnitude threshold, which missed small-magnitude poles like `1/(x−1)` and misfired on merely-large finite values. The REPL's `limit` also understands the `at` keyword (`limit sin(x)/x at 0`), which previously read the literal "at" as the variable name
+18s. **Bare equations route to the solver**: a top-level `=` in the input (`x^2 - 4 = 0`) is solved rather than rejected. `top_level_equals` finds a top-level `=` (not nested, not `!=`/`==`); polynomial equations go through `qsolve` so complex roots and exact radicals come out exactly, and non-polynomial ones fall back to the numeric solver. A leftover `=` elsewhere is reported as "unexpected '=' — for equations use: solve <lhs> = <rhs>"
+18t. **LaTeX output**: the `latex <expr>` REPL command exposes the existing `Expr::to_tex`. The emitted TeX **round-trips** — it parses back to an equal expression — making it the counterpart of mathr's LaTeX *input* support
+18u. **Univariate expansion with opaque coefficients**: `poly::expand_in`/`to_uni_poly` expand in *one* variable, treating every other sub-expression as an opaque **exact** coefficient (an `Expr`, not an `f64`). The multivariate `expand` can only distribute when both sides are polynomials, so `(x + sin(y))^2` stayed unexpanded. This is the "termsOf" style the CASs use. The `expand-in <expr> for <var>` REPL command; the variable is required. The coefficients are simplified *and* expanded on the way out, so repeated factors fold into powers (`2*y*y` → `2*y^2`)
+18v. **Exact symbolic linear systems**: `linsolve::solve_system` solves 2–4 linear equations **exactly** by rational Gaussian elimination (partial pivoting + back-substitution over `Rational`). The equations are given as text — `2x + y = 5; x + 3y = 10` — either with an explicit `=` or with the right-hand side implicit (`2x + y - 5`). The `msolve <eq>; <eq>; …` REPL command; `linsolve` keeps its existing numeric augmented-matrix meaning. A singular system is reported as such, and a non-linear equation is rejected rather than mis-solved
 19. **Interpolate**: `interpolate::lagrange_interp/newton_interp/CubicSpline/chebyshev_*/legendre_*/gauss_legendre` — point-wise polynomial, smooth C²-continuous cubic, Chebyshev series, Legendre polynomials, Gauss–Legendre quadrature
 20. **Special**: `special::gamma/erf/sinc/bessel_j0/j1/jn` — Lanczos, continued-fraction, Maclaurin-series, and asymptotic-form approximations
 21. **Plot**: `plot::plot_function/multi/scatter` — evaluates `Expr` over a range, renders PNG via `plotters`

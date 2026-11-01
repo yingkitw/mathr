@@ -522,9 +522,19 @@ fn root_to_f64(e: &Expr) -> Option<f64> {
 fn solve_from_asc(asc: &[f64]) -> Result<Vec<Expr>> {
     let deg = poly_degree(asc);
     if deg == 0 {
-        return Err(MathError::InvalidArgument(
-            "equation has no variable dependence (constant = 0)".into(),
-        ));
+        // A constant equation: 0 = 0 holds for every value, a nonzero
+        // constant has no solution at all. Distinguishing the two is more
+        // useful than lumping them into one "no variable dependence" error.
+        let c = asc.first().copied().unwrap_or(0.0);
+        return if c == 0.0 {
+            Err(MathError::InvalidArgument(
+                "every value is a solution (the equation is an identity)".into(),
+            ))
+        } else {
+            Err(MathError::InvalidArgument(format!(
+                "no solution (the equation is the constant {c} ≠ 0)"
+            )))
+        };
     }
     if deg > MAX_QSOLVE_DEG {
         return Err(MathError::InvalidArgument(format!(
@@ -582,7 +592,8 @@ pub fn solve_symbolic(expr: &Expr, var: &str) -> Result<Vec<Expr>> {
             "degree > {MAX_QSOLVE_DEG} in {var} is not supported symbolically; use poly-roots for numeric roots"
         ))
     })?;
-    solve_from_asc(&asc)
+    let roots = solve_from_asc(&asc)?;
+    Ok(dedupe_roots(roots))
 }
 
 /// REPL-facing steps: `qsolve <expr> [= rhs]`. The variable is inferred;
@@ -630,9 +641,18 @@ pub fn qsolve_steps_str(input: &str) -> Result<Vec<String>> {
 
     let deg = poly_degree(&asc);
     if deg == 0 {
-        return Err(MathError::InvalidArgument(
-            "equation has no variable dependence (constant = 0)".into(),
-        ));
+        // A constant equation: an identity holds for every value, a nonzero
+        // constant has no solution.
+        let c = asc.first().copied().unwrap_or(0.0);
+        return if c == 0.0 {
+            Err(MathError::InvalidArgument(
+                "every value is a solution (the equation is an identity)".into(),
+            ))
+        } else {
+            Err(MathError::InvalidArgument(format!(
+                "no solution (the equation is the constant {c} ≠ 0)"
+            )))
+        };
     }
     let fmt_coeff = |v: f64| -> String { format!("{}", num(v)) };
     if deg == 1 {
@@ -675,9 +695,40 @@ pub fn qsolve_steps_str(input: &str) -> Result<Vec<String>> {
         steps.push(format!("degree {deg}: rational-root test (integer coefficients) + numeric roots if needed"));
     }
     let roots = solve_from_asc(&asc)?;
+    let roots = dedupe_roots(roots);
     let joined: Vec<String> = roots.iter().map(|r| format!("{var} = {}", fmt_root(r))).collect();
     steps.push(joined.join(", "));
     Ok(steps)
+}
+
+/// Remove duplicate roots, keeping the first of each cluster.
+///
+/// A polynomial with a repeated root (`(x−1)²`) yields the same root twice
+/// from the quadratic formula — the discriminant is zero, so both branches
+/// give the same value. Listing it twice reads as two *distinct* solutions,
+/// which is wrong.
+///
+/// Two roots are the same when their numeric values agree to within a small
+/// relative tolerance; roots that cannot be reduced to a number (exact
+/// radicals, complex expressions) are never merged.
+fn dedupe_roots(roots: Vec<Expr>) -> Vec<Expr> {
+    let mut out: Vec<Expr> = Vec::with_capacity(roots.len());
+    for r in roots {
+        let dup = out.iter().any(|kept| match (root_to_f64(kept), root_to_f64(&r)) {
+            (Some(a), Some(b)) => {
+                let scale = a.abs().max(b.abs()).max(1.0);
+                (a - b).abs() <= 1e-9 * scale
+            }
+            // A root that is not a plain number (a radical or a complex
+            // expression) is kept as-is — merging it would need symbolic
+            // comparison.
+            _ => false,
+        });
+        if !dup {
+            out.push(r);
+        }
+    }
+    out
 }
 
 /// Render a root expression with rational display where possible.
@@ -776,8 +827,40 @@ mod tests {
 
     #[test]
     fn double_root() {
-        assert_eq!(roots("(x - 3)^2"), vec!["x = 3", "x = 3"]);
-        assert_eq!(roots("x^2"), vec!["x = 0", "x = 0"]);
+        // A repeated root is listed once — listing it twice reads as two
+        // distinct solutions.
+        assert_eq!(roots("(x - 3)^2"), vec!["x = 3"]);
+        assert_eq!(roots("x^2"), vec!["x = 0"]);
+    }
+
+    // ---- degenerate equations ------------------------------------------------
+
+    #[test]
+    fn identity_equation_says_every_value_is_a_solution() {
+        // x − x = 0 holds for every x.
+        let err = solve_symbolic(&Parser::parse("x - x").unwrap(), "x").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("every value"), "got: {msg}");
+    }
+
+    #[test]
+    fn nonzero_constant_equation_says_no_solution() {
+        // A constant ≠ 0 has no solution at all.
+        let err = solve_symbolic(&Parser::parse("5").unwrap(), "x").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no solution"), "got: {msg}");
+    }
+
+    #[test]
+    fn degenerate_messages_differ() {
+        // The two degenerate cases must not share one message.
+        let id = solve_symbolic(&Parser::parse("x - x").unwrap(), "x")
+            .unwrap_err()
+            .to_string();
+        let c = solve_symbolic(&Parser::parse("5").unwrap(), "x")
+            .unwrap_err()
+            .to_string();
+        assert_ne!(id, c);
     }
 
     #[test]

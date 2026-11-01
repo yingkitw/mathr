@@ -529,9 +529,9 @@ mod tests {
 
     #[test]
     fn autodiff_exp_composition() {
-        // f(x) = exp(-(x^2)), f'(x) = -2x*exp(-x^2)
-        // Note: parser treats -x^2 as (-x)^2, so we use explicit parens.
-        let expr = Parser::parse("exp(-(x^2))").unwrap();
+        // f(x) = exp(-x^2), f'(x) = -2x*exp(-x^2)
+        // Prefix minus applies to the complete power: -x^2 == -(x^2).
+        let expr = Parser::parse("exp(-x^2)").unwrap();
         let ctx = Context::standard();
         for x in [0.0, 0.5, 1.0, 2.0] {
             let d = derivative(&expr, "x", x, &ctx).unwrap();

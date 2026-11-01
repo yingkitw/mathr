@@ -210,34 +210,35 @@ fn is_zero_num(v: f64) -> bool {
 /// the non-converged samples.
 fn probe_limit(expr: &Expr, var: &str, point: f64) -> Result<LimitValue> {
     let at_infinity = point.is_infinite();
-    let points: Vec<f64> = if at_infinity {
+    // Approach from both sides with relative step sizes. The two sides are
+    // collected **separately** — interleaving them (as `point-h, point+h`
+    // in one loop) would make the "left half / right half" split a
+    // coarse/fine split rather than a left/right one.
+    let scale = point.abs().max(1.0);
+    let mut left_points: Vec<f64> = Vec::new();
+    let mut right_points: Vec<f64> = Vec::new();
+    if at_infinity {
         // x → +∞: x = 10, 100, …, 10^15; x → −∞: the negatives.
         let sign = if point == f64::INFINITY { 1.0 } else { -1.0 };
-        (1..=15).map(|k| sign * 10f64.powi(k)).collect()
+        let pts: Vec<f64> = (1..=15).map(|k| sign * 10f64.powi(k)).collect();
+        left_points = pts.clone();
+        right_points = pts;
     } else {
-        // Approach from both sides with relative step sizes.
-        let scale = point.abs().max(1.0);
-        let mut pts = Vec::new();
         for k in 2..=10 {
             let h = 10f64.powi(-k) * scale;
-            pts.push(point - h);
-            pts.push(point + h);
+            left_points.push(point - h);
+            right_points.push(point + h);
         }
-        pts
-    };
+    }
 
-    let values: Vec<Option<f64>> = points
+    let left: Vec<Option<f64>> = left_points
         .iter()
         .map(|&x| try_substitute(expr, var, x).filter(|v| v.is_finite()))
         .collect();
-
-    let (left, right): (Vec<Option<f64>>, Vec<Option<f64>>) = if at_infinity {
-        // At ±∞ the whole sequence is one "side".
-        (values.clone(), values.clone())
-    } else {
-        let n = values.len();
-        (values[..n / 2].to_vec(), values[n / 2..].to_vec())
-    };
+    let right: Vec<Option<f64>> = right_points
+        .iter()
+        .map(|&x| try_substitute(expr, var, x).filter(|v| v.is_finite()))
+        .collect();
 
     let l_est = side_estimate(&left);
     let r_est = side_estimate(&right);
@@ -283,15 +284,42 @@ fn probe_limit(expr: &Expr, var: &str, point: f64) -> Result<LimitValue> {
     Ok(LimitValue::DoesNotExist)
 }
 
-/// Sign of the divergence if the samples closest to the target have grown
-/// beyond the pole threshold.
+/// Sign of the divergence, detected by a **growth trend** rather than a
+/// magnitude threshold.
+///
+/// A pole shows up as the samples *growing* as the target is approached:
+/// over the last three samples each must exceed the previous by a factor
+/// of five. A single `> 1e9` threshold (the previous rule) misses poles
+/// whose values stay small — `1/(x−1)` at `x = 1` reaches only ~100 at the
+/// closest sample — and misfires on a function that merely has a large
+/// finite value.
+///
+/// Returns `Some(1.0)` for divergence to `+∞`, `Some(-1.0)` for `−∞`, and
+/// `None` when the samples do not show a growth trend.
+///
+/// Cross-port pattern from unsolve `limit.ts:221-263` (`trendInf`).
 fn pole_sign(values: &[Option<f64>]) -> Option<f64> {
     let finite: Vec<f64> = values.iter().filter_map(|v| *v).collect();
-    let last = *finite.last()?;
-    if last.abs() <= 1e9 {
+    if finite.len() < 3 {
         return None;
     }
-    Some(if last > 0.0 { 1.0 } else { -1.0 })
+    // The last three samples, finest approach last.
+    let tail = &finite[finite.len() - 3..];
+    let growing = tail
+        .iter()
+        .enumerate()
+        .all(|(i, &y)| i == 0 || y.abs() > tail[i - 1].abs() * 5.0);
+    if !growing {
+        return None;
+    }
+    if tail.iter().all(|&y| y > 0.0) {
+        Some(1.0)
+    } else if tail.iter().all(|&y| y < 0.0) {
+        Some(-1.0)
+    } else {
+        // The magnitudes grow but the signs differ — not a clean ±∞.
+        None
+    }
 }
 
 /// Estimate the side limit from a sequence of samples ordered from coarsest
@@ -389,6 +417,37 @@ mod tests {
     fn opposite_sides_diverge() {
         // 1/x at 0: +∞ from the right, −∞ from the left
         assert_eq!(lim("1/x", 0.0), LimitValue::DoesNotExist);
+    }
+
+    #[test]
+    fn pole_growth_trend_detection() {
+        // A pole shows as the samples *growing*, not as a large magnitude.
+        // `1/(x-1)` never exceeds ~100 at the closest sample, so the old
+        // `> 1e9` threshold missed it; the growth trend catches it.
+        assert_eq!(lim("1/(x-1)", 1.0), LimitValue::DoesNotExist);
+        // Both sides to +∞.
+        assert_eq!(lim("1/(x-1)^2", 1.0), LimitValue::PosInfinity);
+        assert_eq!(lim("1/(x-1)^2", 1.0), LimitValue::PosInfinity);
+    }
+
+    #[test]
+    fn pole_sign_uses_growth_not_magnitude() {
+        // A growing sequence is a pole...
+        let growing = vec![Some(1.0), Some(10.0), Some(100.0)];
+        assert_eq!(pole_sign(&growing), Some(1.0));
+        let growing_neg = vec![Some(-1.0), Some(-10.0), Some(-100.0)];
+        assert_eq!(pole_sign(&growing_neg), Some(-1.0));
+        // ...a flat sequence is not, however large it is.
+        let flat = vec![Some(1e12), Some(1e12), Some(1e12)];
+        assert_eq!(pole_sign(&flat), None);
+        // A shrinking sequence is not either.
+        let shrinking = vec![Some(100.0), Some(10.0), Some(1.0)];
+        assert_eq!(pole_sign(&shrinking), None);
+        // Too few samples to tell.
+        assert_eq!(pole_sign(&[Some(1.0), Some(10.0)]), None);
+        // Growing but with mixed signs — not a clean ±∞.
+        let mixed = vec![Some(-1.0), Some(10.0), Some(100.0)];
+        assert_eq!(pole_sign(&mixed), None);
     }
 
     #[test]

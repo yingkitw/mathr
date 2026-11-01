@@ -29,10 +29,10 @@
 - **Algebraic simplification** — constant folding and algebraic identity simplification; `sqrt`/`cbrt`/`log2`/`log10`/`abs` fold **only when exact** (`sqrt(16)` → 4, `sqrt(2)` stays `sqrt(2)`)
 - **Taylor series** — symbolic expansion around any point
 - **Laurent series** — expansion around poles with negative powers
-- **Exact rational arithmetic** — `Rational` type with GCD reduction; expressions with integer fractions evaluate exactly (e.g. `\frac{1}{2} + \frac{3}{4}` → `5/4`)
+- **Exact rational arithmetic** — `Rational` type with GCD reduction; expressions with integer fractions evaluate exactly (e.g. `\frac{1}{2} + \frac{3}{4}` → `5/4`). Overflow is checked and saturated, never wrapped
 
 ### Numerical Computation
-- **Numerical calculus** — high-order finite-difference derivatives, trapezoidal / Simpson's / adaptive quadrature, **Romberg with Richardson extrapolation**
+- **Numerical calculus** — high-order finite-difference derivatives, trapezoidal / Simpson's / adaptive quadrature, **Romberg with Richardson extrapolation**; the integrators **probe the domain** and name the offending point instead of returning `NaN`
 - **FFT** — Cooley–Tukey radix-2: forward, inverse, 2D, real-input, magnitude / power spectra, convolution, cross-correlation, window functions (Hann, Hamming, Blackman, Rectangular)
 - **Equation solving** — bisection, Newton–Raphson, secant, Durand–Kerner polynomial roots, **Newton's method for nonlinear systems**, VAS root isolation, **all-roots sign scan** (`nsolve`, with pole rejection)
 - **ODE solvers** — Euler, RK4, RK4 systems, adaptive RKF45
@@ -40,7 +40,8 @@
 - **Fourier series** — numerical coefficient computation via Simpson's rule
 
 ### Linear Algebra
-- **Matrix operations** — arithmetic, determinant, inverse, linear-system solver, trace, transpose, rank
+- **Matrix operations** — arithmetic, determinant, inverse, linear-system solver, trace, transpose, rank (scale-relative pivoting: tiny-scaled matrices keep their determinant)
+- **Exact linear systems** — `msolve 2x + y = 5; x + 3y = 10` → `x = 1, y = 3`: solves 2–4 equations in exact rational arithmetic (never a decimal approximation)
 - **LU decomposition** with partial pivoting
 - **Cholesky decomposition** `A = L·Lᵀ` for SPD matrices
 - **SVD** `A = U · Σ · Vᵀ` via one-sided Jacobi rotations
@@ -53,18 +54,21 @@
 - Binomial coefficients, factorial, Fibonacci (fast doubling), Euler's totient
 - **Chinese Remainder Theorem**, modular exponentiation, modular inverse
 - **Jacobi symbol**, **continued fractions**, **linear Diophantine solver**, **discrete logarithm** (baby-step giant-step)
-- **Big integers** — arbitrary-precision primality, factorization (Pollard's rho), factorial, Fibonacci, binomial, modular exponentiation, totient via `num-bigint`. REPL commands `fact`, `fib`, `binom` auto-upgrade to BigInt on overflow (no separate "big" command needed for these)
+- **Big integers** — arbitrary-precision primality, factorization (Pollard's rho), factorial, Fibonacci, binomial, modular exponentiation, totient via `num-bigint`. REPL commands `fact`, `fib`, `binom`, `is-prime` and `factor` auto-upgrade to BigInt on overflow (no separate "big" command needed for these)
+- **Number bases** — exact conversion to binary/octal/decimal/hex or any base 2–36 via `base <n> <target>` (e.g. `base 255 hex` → `FF_16`), carried in arbitrary precision so large values convert losslessly
 - **Automatic differentiation** — dual numbers for exact forward-mode AD; derivatives, gradients, and Jacobians of arbitrary compositions
 - **MathML** — W3C Presentation MathML export and import for interchange with Word, web browsers, and other CAS systems. Notebook supports MathML cells (input is MathML, imported to Expr and evaluated). Web UI has a "Show MathML" toggle to display MathML output alongside KaTeX rendering.
+- **LaTeX output** — `latex <expr>` renders an expression as TeX (`latex x^2/2` → `\frac{x^{2}}{2}`); the output round-trips, so it can be fed straight back into mathr.
 - **Expression serialization** — convert `Expr` to and from three interchangeable textual formats: S-expressions (`(add (mul (num 2) (var x)) (num 1))`), JSON (`{"t":"add",...}`), and RPN (`2 x * 1 +`). All round-trip via `Expr::equals`. Useful for persistence, interop, and pipe-friendly shell workflows. `serialize <fmt> <expr>` and `serialize <fmt> import <text>` REPL commands.
 - **Lean 4 export** — render expressions as Lean 4 terms over `ℝ` for proof assistants (requires Mathlib): exact ascribed literals, monoid `^` for integral exponents, `Real.*` function mapping, and a `lean <expr>` REPL command that prints a self-contained file (`import Mathlib` + `noncomputable def` with variable binders). `to_lean` / `to_lean_doc` for library use.
 - **Interval arithmetic** — rigorous bounds on computations over the `Expr` AST. Assign variables to intervals `[lo, hi]` and get guaranteed bounds on the result. Tracks extrema for trig functions, handles zero-crossings for even powers, and supports the full elementary function set. `interval <expr> with <var>=[lo,hi],...` REPL command. Pure Rust, no deps.
 - **Arbitrary-precision decimals** — evaluate expressions to N significant digits (up to 1000) with correctly-rounded results: π (Machin), e, sqrt, exp, ln, log, trig, and powers, all with 10 guard digits and argument reduction. `dec <expr> [prec <n>] [with <var>=<val>,...]` REPL command; `bigdec` module for library use.
-- **Symbolic limits** — `lim x→a f(x)` for finite points and ±∞ via direct substitution, L'Hôpital's rule (recursive, for 0/0 and ∞/∞), and numeric probing with pole/divergence detection. `limit <expr> [<var>] <point>` REPL command with step-by-step output in the notebook.
+- **Symbolic limits** — `lim x→a f(x)` for finite points and ±∞ via direct substitution, L'Hôpital's rule (recursive, for 0/0 and ∞/∞), and numeric probing with pole/divergence detection (the two sides are probed separately; a pole is detected by the samples *growing* toward the target). `limit <expr> [<var>] <point>` REPL command with step-by-step output in the notebook.
 - **Complex-number evaluation** — evaluate any expression over `ℂ`: `i` as a literal (`1 + 2i`), principal-branch `ln`/`sqrt`/powers/trig, exact integer powers, `exp(i*pi) = -1`. `cval <expr> [with <var>=<val>,...]` REPL command; `ceval` module (`eval_complex`) for library use.
 - **Summation & product (Σ/∏)** — evaluate `sum <expr> [<var>] <a> <b>` / `prod <expr> [<var>] <a> <b>` over integer bounds with O(1) closed forms (arithmetic series, Faulhaber `k²`/`k³`, geometric), exact rational accumulation (`Σ 1/k = 7381/2520`), and f64 fallback; empty ranges give 0 / 1.
-- **Symbolic polynomial solving (deg ≤ 4)** — `qsolve` via `to_poly`: quadratics use the discriminant (exact rationals, **exact radicals** like `sqrt(2)`, complex `i`-literal roots, or numeric snap); cubics/quartics with integer coefficients use rational-root deflation in exact arithmetic, then numeric roots when needed. `qsolve <expr> [= rhs]` REPL command with step-by-step output.
+- **Symbolic polynomial solving (deg ≤ 4)** — `qsolve` via `to_poly`: quadratics use the discriminant (exact rationals, **exact radicals** like `sqrt(2)`, complex `i`-literal roots, or numeric snap); cubics/quartics with integer coefficients use rational-root deflation in exact arithmetic, then numeric roots when needed. Repeated roots are listed once, and degenerate equations are reported distinctly ("every value is a solution" vs "no solution"). `qsolve <expr> [= rhs]` REPL command with step-by-step output.
 - **Polynomial expansion** — `expand (x+1)^3 → x^3 + 3*x^2 + 3*x + 1`: distributes products and integer powers into collected multivariate polynomials; non-polynomial factors stay intact. `expand` REPL command; `poly::to_poly`/`poly_to_expr` for library use.
+- **Univariate expansion** — `expand-in (x + sin(y))^2 for x → x^2 + 2*sin(y)*x + sin(y)*sin(y)`: expands in one variable only, treating everything else as an opaque *exact* coefficient (never rounded to a float).
 - **Partial fractions** — SymPy-style `apart`: decomposes rational functions into a quotient plus fractions over linear and irreducible quadratic denominators. **Exact** cover-up rule when the denominator has distinct rational roots (`1/(x²−1)` → `1/2/(x−1) − 1/2/(x+1)`); numeric factorization + linear solve otherwise. `apart <expr> [<var>]` REPL command with step-by-step output in the notebook.
 - **Condition number & nullspace** — `cond <rows>` gives the 2-norm condition number from the SVD (singular matrices report `inf`); `null <rows>` returns an orthonormal basis of `{x : A·x = 0}` via the eigendecomposition of `AᵀA` (works for wide matrices). `Matrix::condition_number`/`Matrix::nullspace` for library use.
 - **Matrix REPL commands** — parity with the unsolve MCP `matrix` tool: `inv <rows>`, `transpose <rows>`, `trace <rows>`, `eigen <rows>` (symmetry checked), `linsolve [A|b]` (augmented matrix). Thin wrappers over the existing `Matrix` public API.
@@ -89,7 +93,7 @@
 - **Expression parser** — recursive-descent, implicit multiplication, scientific notation, 30+ built-in functions
 - **PNG plotting** — line, multi-series, scatter via `plotters`
 - **Web notebook** — Jupyter-like UI with KaTeX math rendering, step-by-step solving, exact fraction arithmetic, `.mnb` file format, cell-based evaluation
-- **MCP server** — Model Context Protocol over stdio (JSON-RPC 2.0); 14 tools let an AI agent drive the engine directly
+- **MCP server** — Model Context Protocol over stdio (JSON-RPC 2.0); 16 tools let an AI agent drive the engine directly
 
 ## Quick Start
 
@@ -111,6 +115,8 @@ Just pass a string — `mathr` figures out what to do:
 
 ```bash
 mathr "sin(pi/4) + 2^3"               # evaluate an expression
+mathr "-3^2"                          # → -9 (unary minus binds looser than ^)
+mathr "(-3)^2"                        # → 9  (parenthesized negative base)
 mathr "gamma(0.5)"                    # special functions
 mathr "diff x^3 + 2*x^2"              # symbolic derivative
 mathr "diff y*x^2 for y"              # name the variable explicitly → x^2
@@ -118,12 +124,13 @@ mathr "integrate sin(x)"              # symbolic integration → -cos(x)
 mathr "integrate a*x for x"           # free factor pulled out → a*x^2/2
 mathr "simplify 2*x + 3*x + 0"        # algebraic simplification
 mathr "solve x^2 - 4"                 # find roots (Newton–Raphson)
+mathr "x^2 - 4 = 0"                    # a bare equation routes to the solver → x = 2, x = -2
 mathr "nsolve sin(x) x -7 7"           # find ALL roots by scanning (0, ±π, ±2π)
 mathr "int sin(x) 0 pi"               # numerical integral over [0, π]
 mathr "int sin(x) from 0 to pi/2"     # bounds may be expressions
 mathr "romberg sin(x) 0 3.14159"      # Romberg-integral of sin on [0, π]
 mathr "taylor exp(x) 0 5"             # Taylor series (5 terms around 0)
-mathr "poly-roots 1 -5 6"             # polynomial roots (Durand–Kerner)
+mathr "poly-roots 1 -5 6"             # polished real roots (Durand–Kerner; repeated roots deduplicated)
 mathr "fft 1 0 -1 0 1 0 -1 0"         # FFT magnitude spectrum
 mathr "conv 1 2 3 x 1 1"              # convolution (x separates signals)
 mathr "stats 1 2 3 4 5 6 7 8"         # descriptive statistics
@@ -144,6 +151,7 @@ mathr "legendre 5 0.3"                 # Legendre P_5(0.3)
 mathr "gcd 48 36"                                         # GCD
 mathr "is-prime 97"                                       # primality test
 mathr "factor 360"                                        # prime factorization
+mathr "base 255 hex"                                      # → FF_16 (exact, any base 2–36)
 mathr "fib 50"                                            # Fibonacci
 mathr "mr-prime 2305843009213693951"                     # Miller–Rabin
 mathr "jacobi 5 7"                                        # Jacobi symbol
@@ -387,7 +395,7 @@ Point an MCP client at it:
 ```
 
 The server speaks JSON-RPC 2.0 (protocol version `2025-06-18`), one message
-per line, and exposes 14 tools:
+per line, and exposes 16 tools:
 
 | Tool | Arguments | Returns |
 |---|---|---|
@@ -406,6 +414,8 @@ per line, and exposes 14 tools:
 | `matrix` | `operation`, `matrix` | matrix result |
 | `minimize` | `expression`, `variable?`, `from`, `to` | argmin + minimum |
 | `apart` | `expression`, `variable?` | partial fractions |
+| `msolve` | `equations` | exact solution of a linear system (2–4 variables) |
+| `expand-in` | `expression`, `variable` | expanded in one variable (others become exact coefficients) |
 
 Each tool is a thin wrapper over the same dispatch the CLI uses, so results
 never drift from `mathr "<command>"`. Exact rational arithmetic is preserved
@@ -528,7 +538,7 @@ let sol = mathr::solver::newton_system(system, &[0.0, 0.0], SolveOptions::defaul
 | `rational` | Exact rational arithmetic (`Rational` type), `eval_rational` for exact AST evaluation |
 | `notebook` | `.mnb` notebook format, JSON cells with TeX/math input + output, **cell types** (math/text), **cell reordering**, **shared context** |
 | `server` | Minimal HTTP server for web notebook UI (KaTeX rendering, step-by-step solving) |
-| `mcp` | Model Context Protocol server over stdio (JSON-RPC 2.0) — 14 tools backed by the REPL dispatch |
+| `mcp` | Model Context Protocol server over stdio (JSON-RPC 2.0) — 16 tools backed by the REPL dispatch |
 | `plot` | PNG plotting via `plotters` |
 
 ## Dependencies
